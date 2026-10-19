@@ -41,6 +41,7 @@ class SlideEntry:
     file_layers_future: object = None
     windows: list | None = None
     closeable: bool = True  # sources passed in by the user are never auto-closed
+    open_lock: threading.Lock = field(default_factory=threading.Lock)
 
 
 class SlideRegistry:
@@ -164,16 +165,16 @@ class SlideRegistry:
     def get(self, sid: str) -> tuple[SlideEntry, PyramidSlide]:
         e = self._entry(sid)
         if e.pyramid is None:
-            with self._lock:
+            # per-slide lock: opening a remote slide (an API round-trip) never blocks other slides
+            with e.open_lock:
                 if e.pyramid is None:
-                    if e.source is None:
-                        if e.factory is not None:
-                            e.source = e.factory()
-                        else:
-                            e.source = open_slide(e.path, tile_size=self.tile_size)
-                    e.pyramid = PyramidSlide(e.source)
+                    src = e.source
+                    if src is None:
+                        src = e.factory() if e.factory is not None else open_slide(e.path, tile_size=self.tile_size)
+                    pyr = PyramidSlide(src)
+                    e.source, e.pyramid = src, pyr
                     if self.warm:
-                        self.tiles.warm(sid, e.pyramid, e.source.version)
+                        self.tiles.warm(sid, pyr, src.version)
         with self._lock:
             self._open[sid] = None
             self._open.move_to_end(sid)
@@ -249,6 +250,12 @@ class SlideRegistry:
         d['id'] = sid
         d['name'] = e.name
         d['version'] = e.source.version
+        # per level: virtual (synthesised by wsiviz) and the remote level id (for browser-direct tile_url)
+        src_ids = getattr(e.source.info, 'level_ids', None)
+        for i, lv in enumerate(d['levels']):
+            lv['virtual'] = bool(pyr.virtual[i])
+            ni = pyr.native_index[i]
+            lv['remote_level'] = (src_ids[ni] if src_ids and ni >= 0 else (None if ni < 0 else str(ni)))
         if info.mode == 'channels':
             if e.windows is None:
                 try:

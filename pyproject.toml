@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "wsiviz"
-version = "0.1.0"
+version = "0.2.0"
 description = "GPU-accelerated (WebGL2) whole-slide image viewer for SVS/CZI/API slides with annotations, for the browser and NiceGUI"
 readme = "README.md"
 requires-python = ">=3.10"

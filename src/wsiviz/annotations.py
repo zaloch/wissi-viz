@@ -74,6 +74,8 @@ class AnnotationLayer:
     visible: bool = True
     #: Below this on-screen size (px) a feature is drawn as a dot instead of its outline.
     detail_min_px: float = 6.0
+    #: draw order across layers (higher on top); default: layers of smaller objects first
+    z: float | None = None
 
     def __post_init__(self) -> None:
         self._lock = threading.RLock()
@@ -83,6 +85,9 @@ class AnnotationLayer:
         self._rings: list[np.ndarray] = []  # each (n, 2) float32, without closing vertex
         self._feat_nrings: list[int] = []
         self._props: list[dict | None] = []
+        #: columnar per-feature properties (bulk imports: object tables with 10^6 rows)
+        self._columns: dict[str, np.ndarray] = {}
+        self._col_offset = 0  # feature index where the columnar block starts
         self._dirty = True
         self._compiled: _Compiled | None = None
         self.version = 0
@@ -137,15 +142,35 @@ class AnnotationLayer:
 
     def clear(self) -> None:
         with self._lock:
+            v = self.version
             self.__post_init__()
-            self.version += 1
+            self.version = v + 1  # versions are cache keys: never reuse one
 
     def __len__(self) -> int:
         return len(self._kinds)
 
     def properties(self, index: int) -> dict:
         p = self._props[index] if 0 <= index < len(self._props) else None
-        return dict(p or {})
+        out = dict(p or {})
+        j = index - self._col_offset
+        if self._columns and 0 <= j < len(next(iter(self._columns.values()))):
+            for k, col in self._columns.items():
+                v = col[j]
+                out[k] = v.item() if hasattr(v, 'item') else v
+        return out
+
+    def transform(self, scale: float | tuple[float, float] = 1.0, offset: tuple[float, float] = (0.0, 0.0)) -> 'AnnotationLayer':
+        """In place: ``p' = p * scale + offset`` for every vertex (e.g. µm → px: ``scale=1/mpp``;
+        coordinates given at a pyramid level: ``scale=downsample``; ROI-relative: ``offset``)."""
+        sx, sy = (scale, scale) if isinstance(scale, (int, float)) else scale
+        ox, oy = offset
+        with self._lock:
+            m = np.array([sx, sy], np.float32)
+            o = np.array([ox, oy], np.float32)
+            self._rings = [r * m + o for r in self._rings]
+            self._radius = [r * (abs(sx) + abs(sy)) / 2 for r in self._radius]
+            self._dirty = True
+        return self
 
     def class_of(self, index: int) -> str:
         inv = {v: k for k, v in self._class_index.items()}
@@ -190,6 +215,73 @@ class AnnotationLayer:
         layer._bulk(POLYGON, list(pts), _broadcast(classes, len(pts)), None, props)
         return layer
 
+    @classmethod
+    def from_table(cls, table: Any, *, name: str = 'objects', shape: str = 'auto', radius: float = 0.0,
+                   x: str | None = None, y: str | None = None, xmin: str | None = None, ymin: str | None = None,
+                   xmax: str | None = None, ymax: str | None = None, class_column: str | None = None,
+                   columns: str | Sequence[str] | None = 'auto', max_columns: int = 24, **kw) -> 'AnnotationLayer':
+        """Object/cell tables (HALO object data, PathCore/QuPath measurements, model outputs).
+
+        ``table``: pandas DataFrame, dict of columns, or list of row dicts. Geometry columns are
+        found case-insensitively (``XMin/XMax/YMin/YMax``, ``x/y``, ``Centroid X µm`` …) unless named.
+        Remaining columns (up to ``max_columns``) are kept *columnar* as per-object properties, so
+        a click on any of 10^6 objects can show its measurements without 10^6 Python dicts.
+        """
+        cols = _columns_of(table)
+        n = len(next(iter(cols.values()))) if cols else 0
+        find = lambda given, *cands: given if given is not None else _find_col(cols, cands)  # noqa: E731
+        bx0, by0 = find(xmin, 'xmin', 'x_min', 'minx', 'bbox_x0', 'left'), find(ymin, 'ymin', 'y_min', 'miny', 'bbox_y0', 'top')
+        bx1, by1 = find(xmax, 'xmax', 'x_max', 'maxx', 'bbox_x1', 'right'), find(ymax, 'ymax', 'y_max', 'maxy', 'bbox_y1', 'bottom')
+        cx = find(x, 'x', 'cx', 'centroid_x', 'centroid x', 'x_centroid', 'xcenter', 'center_x', 'centroid x px', 'centroid x µm')
+        cy = find(y, 'y', 'cy', 'centroid_y', 'centroid y', 'y_centroid', 'ycenter', 'center_y', 'centroid y px', 'centroid y µm')
+        ccol = find(class_column, 'classification', 'class', 'label', 'phenotype', 'cell_type', 'celltype',
+                    'cell type', 'type', 'name')
+        classes = None if ccol is None else [None if v is None else str(v) for v in np.asarray(cols[ccol]).tolist()]
+        have_box = None not in (bx0, by0, bx1, by1)
+        if shape == 'auto':
+            shape = 'ellipse' if have_box else 'point'
+        if have_box and shape in ('ellipse', 'rect'):
+            layer = cls.from_boxes(cols[bx0], cols[by0], cols[bx1], cols[by1], classes=classes,
+                                   shape=shape, name=name, **kw)
+            geo = {bx0, by0, bx1, by1}
+        elif cx is not None and cy is not None:
+            xy = np.stack([np.asarray(cols[cx], np.float32), np.asarray(cols[cy], np.float32)], 1)
+            layer = cls.from_points(xy, classes=classes, radius=radius, name=name, **kw)
+            geo = {cx, cy}
+        elif have_box:
+            x0, y0, x1, y1 = (np.asarray(cols[k], np.float32) for k in (bx0, by0, bx1, by1))
+            layer = cls.from_points(np.stack([(x0 + x1) / 2, (y0 + y1) / 2], 1), classes=classes,
+                                    radius=np.maximum(x1 - x0, y1 - y0) / 2, name=name, **kw)
+            geo = {bx0, by0, bx1, by1}
+        else:
+            raise ValueError(f'no geometry columns found in {list(cols)[:20]}')
+        if columns:
+            keep = [c for c in cols if c not in geo] if columns == 'auto' else list(columns)
+            layer._columns = {c: np.asarray(cols[c]) for c in keep[:max_columns] if len(cols[c]) == n}
+            layer._col_offset = 0
+        return layer
+
+    @classmethod
+    def parse(cls, data: Any, fmt: str = 'auto', name: str | None = None, **kw) -> 'AnnotationLayer':
+        """Annotations as returned by an API: GeoJSON (dict/list/text), HALO XML text, Aperio XML text,
+        or an object table. ``fmt``: 'auto' | 'geojson' | 'halo_xml' | 'aperio_xml' | 'table'."""
+        if isinstance(data, AnnotationLayer):
+            return data
+        if fmt == 'table' or (fmt == 'auto' and _looks_tabular(data)):
+            return cls.from_table(data, name=name or 'objects', **kw)
+        if isinstance(data, (bytes, bytearray)):
+            data = bytes(data).decode('utf-8', 'replace')
+        if isinstance(data, str):
+            t = data.lstrip()
+            if fmt == 'auto':
+                fmt = 'geojson' if t[:1] in '{[' else ('halo_xml' if ('<V ' in t[:20000] or '<V>' in t[:20000])
+                                                       else 'aperio_xml')
+        if fmt == 'halo_xml':
+            return cls.from_halo_xml(data, name=name, **kw)
+        if fmt == 'aperio_xml':
+            return cls.from_aperio_xml(data, name=name, **kw)
+        return cls.from_geojson(data, name=name, **kw)
+
     def _bulk(self, kind, rings, classes, radius, props) -> None:
         with self._lock:
             n = len(rings)
@@ -231,9 +323,9 @@ class AnnotationLayer:
 
     @classmethod
     def from_aperio_xml(cls, path: str | Path, name: str | None = None, **kw) -> 'AnnotationLayer':
-        """Aperio ImageScope / eSlide Manager XML."""
-        root = ET.parse(path).getroot()
-        layer = cls(name=name or Path(path).stem, **kw)
+        """Aperio ImageScope / eSlide Manager XML (path, or XML text/bytes from an API)."""
+        root, stem = _xml_root(path)
+        layer = cls(name=name or stem, **kw)
         for ann in root.iter('Annotation'):
             aname = ann.get('Name') or ann.get('Id') or 'annotation'
             color = _colorref(ann.get('LineColor'))
@@ -258,9 +350,9 @@ class AnnotationLayer:
 
     @classmethod
     def from_halo_xml(cls, path: str | Path, name: str | None = None, **kw) -> 'AnnotationLayer':
-        """HALO ``.annotations`` XML (as exported by HALO / HALO Link)."""
-        root = ET.parse(path).getroot()
-        layer = cls(name=name or Path(path).stem, **kw)
+        """HALO ``.annotations`` XML (path, or XML text/bytes as returned by an API)."""
+        root, stem = _xml_root(path)
+        layer = cls(name=name or stem, **kw)
         for ann in root.iter('Annotation'):
             aname = ann.get('Name') or 'annotation'
             color = _colorref(ann.get('LineColor'))
@@ -340,7 +432,7 @@ class AnnotationLayer:
                 'classes': [{'name': k, 'color': self.classes.get(k, '#ffffff')} for k, _ in inv],
                 'style': {'line_width': self.line_width, 'fill_opacity': self.fill_opacity,
                           'point_size': self.point_size, 'visible': self.visible,
-                          'detail_min_px': self.detail_min_px}}
+                          'detail_min_px': self.detail_min_px, 'z': self.z}}
 
     def overview_bytes(self) -> bytes:
         return self.compiled().overview(self.meta())
@@ -503,6 +595,46 @@ class _Compiled:
         if not len(cand):
             return None
         return int(cand[np.argmin(self.size[cand])])
+
+
+def _columns_of(table: Any) -> dict[str, np.ndarray]:
+    if hasattr(table, 'columns') and hasattr(table, 'to_numpy'):  # pandas / polars-like
+        return {str(c): np.asarray(table[c]) for c in table.columns}
+    if isinstance(table, dict):
+        return {str(k): np.asarray(v) for k, v in table.items()}
+    rows = list(table)
+    if not rows:
+        return {}
+    keys = list(rows[0].keys())
+    return {str(k): np.asarray([r.get(k) for r in rows]) for k in keys}
+
+
+def _norm_col(c: str) -> str:
+    return ' '.join(str(c).lower().replace('_', ' ').replace('(', ' ').replace(')', ' ').split())
+
+
+def _find_col(cols: dict, cands: Sequence[str]) -> str | None:
+    norm = {_norm_col(c): c for c in cols}
+    for cand in cands:
+        k = _norm_col(cand)
+        if k in norm:
+            return norm[k]
+    return None
+
+
+def _looks_tabular(data: Any) -> bool:
+    if hasattr(data, 'columns') and hasattr(data, 'to_numpy'):
+        return True
+    if isinstance(data, dict) and 'type' not in data and data and all(
+            isinstance(v, (list, tuple, np.ndarray)) for v in data.values()):
+        return True
+    return False
+
+
+def _xml_root(src: Any) -> tuple[ET.Element, str]:
+    if isinstance(src, bytes) or (isinstance(src, str) and src.lstrip().startswith('<')):
+        return ET.fromstring(src), 'annotations'
+    return ET.parse(src).getroot(), Path(src).stem
 
 
 def _pack(meta: dict, arrays: list[np.ndarray]) -> bytes:

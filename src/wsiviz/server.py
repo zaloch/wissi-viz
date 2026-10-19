@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 from .annotations import AnnotationLayer
 from .registry import SlideRegistry
+from .sources.remote import RemoteError
 from .tiles import encode_rgb
 
 STATIC_DIR = Path(__file__).parent / 'static'
@@ -113,6 +114,8 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
         version = e.source.version
         try:
             data, mt = await asyncio.wrap_future(tiles.get(sid, pyr, version, level, tx, ty, c))
+        except RemoteError as ex:  # upstream API failed after retries; not cached, browser retries later
+            raise HTTPException(502, f'remote tile error: {ex}') from ex
         except Exception as ex:
             raise HTTPException(500, f'tile error: {ex}') from ex
         cache = IMMUTABLE if v == version else 'public, max-age=60'

@@ -97,10 +97,11 @@ class Fetcher {
 // ------------------------------------------------------------------ shaders
 const VS_TILE = `#version 300 es
 uniform vec4 u_rect; uniform vec3 u_view; uniform vec2 u_vp;
+uniform vec4 u_uv; // texture sub-rect: crops remote tile overlap (DeepZoom) and edge padding
 out vec2 v_uv;
 void main(){
   vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
-  v_uv = c;
+  v_uv = u_uv.xy + c * u_uv.zw;
   vec2 s = (u_rect.xy + c * u_rect.zw - u_view.xy) * u_view.z;
   gl_Position = vec4(s.x / (u_vp.x * 0.5), -s.y / (u_vp.y * 0.5), 0.0, 1.0);
 }`;
@@ -288,8 +289,14 @@ class Slide {
     this.grid._panelRefresh();
   }
   tileUrl(level, x, y, c) {
-    const i = this.info;
-    if (i.tile_url) return new URL(i.tile_url.replace('{level}', level).replace('{x}', x).replace('{y}', y).replace('{c}', c ?? 0), document.baseURI).href;
+    const i = this.info, lv = i.levels[level];
+    // browser-direct tiles (only for native RGB levels; virtual levels and raw channels come from wsiviz)
+    if (i.tile_url && i.mode === 'rgb' && !lv.virtual) {
+      const id = lv.remote_level ?? level;
+      const u = i.tile_url.replaceAll('{level}', id).replaceAll('{x}', x).replaceAll('{col}', x)
+        .replaceAll('{y}', y).replaceAll('{row}', y).replaceAll('{c}', c ?? 0);
+      return new URL(u, document.baseURI).href;
+    }
     return `${this.url}/tiles/${level}/${x}/${y}?v=${encodeURIComponent(i.version)}${c == null ? '' : '&c=' + c}`;
   }
   annUrl(path, layer, version) {
@@ -320,6 +327,11 @@ class AnnLayer {
     this.buckets = take(Float32Array, B * 8);
     this.n = n;
     this.nb = B;
+    // typical object size → draw order (cells under ROIs) unless style.z is given
+    const step = Math.max(1, Math.floor(n / 2000)), sample = [];
+    for (let i = 0; i < n; i += step) sample.push(this.size[i]);
+    sample.sort((a, b) => a - b);
+    this.medSize = sample.length ? sample[sample.length >> 1] : 0;
     this.classes = meta.classes || [];
     this.vao = gl.createVertexArray();
     gl.bindVertexArray(this.vao);
@@ -1364,12 +1376,20 @@ export class WsiGrid extends HTMLElement {
         for (let tx = rg.x0; tx <= rg.x1; tx++) {
           if (!this._ready(p, L, tx, ty, chans)) continue;
           const tw = Math.min(ts, lv.width - tx * ts), th = Math.min(ts, lv.height - ty * ts);
+          let t0 = null;
           chans.forEach((c, i) => {
             const t = this.tex.get(this._key(s, L, tx, ty, c));
             t.last = this.frame;
+            if (!t0) t0 = t;
             gl.activeTexture(gl.TEXTURE0 + i);
             gl.bindTexture(gl.TEXTURE_2D, t.tex);
           });
+          // A remote tile larger than its footprint carries overlap on interior edges and/or padding
+          // past the image edge: sample only the footprint.
+          const ov = info.overlap || 0;
+          const ox = t0.w > tw && tx > 0 ? Math.min(ov, t0.w - tw) : 0;
+          const oy = t0.h > th && ty > 0 ? Math.min(ov, t0.h - th) : 0;
+          gl.uniform4f(prog.u.u_uv, ox / t0.w, oy / t0.h, tw / t0.w, th / t0.h);
           gl.uniform4f(prog.u.u_rect, tx * ts * lv.sx, ty * ts * lv.sy, tw * lv.sx, th * lv.sy);
           gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
         }
@@ -1385,9 +1405,9 @@ export class WsiGrid extends HTMLElement {
     const vis = this._visRect(p, 2 / p.view.scale);
     gl.enable(gl.BLEND);
     gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-    for (const L of s.layers.values()) {
-      if (!p.layerVisible(L)) continue;
-      if (L.state !== 'ready') continue; // overview requested by the scheduler
+    const order = [...s.layers.values()].filter((L) => L.state === 'ready' && p.layerVisible(L))
+      .sort((a, b) => (a.style.z ?? 0) - (b.style.z ?? 0) || a.medSize - b.medSize);
+    for (const L of order) {
       const st = L.style;
       const B = L.buckets;
       const ptsRanges = [], kindRanges = [], detail = [];
@@ -1642,10 +1662,12 @@ export class WsiGrid extends HTMLElement {
       const w = Math.min(ts, lv.width - tx * ts), h = Math.min(ts, lv.height - ty * ts);
       const tex = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, tex);
-      let bytes;
+      let bytes, texW = w, texH = h;
       if (c == null) {
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, res.bmp);
-        bytes = res.bmp.width * res.bmp.height * 4;
+        texW = res.bmp.width;
+        texH = res.bmp.height;
+        bytes = texW * texH * 4;
         res.bmp.close();
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
@@ -1661,7 +1683,7 @@ export class WsiGrid extends HTMLElement {
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       const old = this.tex.get(key);
       if (old) { gl.deleteTexture(old.tex); this.texBytes -= old.bytes; }
-      this.tex.set(key, { tex, bytes, last: this.frame });
+      this.tex.set(key, { tex, bytes, last: this.frame, w: c == null ? texW : w, h: c == null ? texH : h });
       this.texBytes += bytes;
     }
     return this.uploads.length > 0;

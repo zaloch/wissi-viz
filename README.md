@@ -2,7 +2,7 @@
 
 wsiviz is a GPU-accelerated whole-slide image viewer for the browser.
 
-- **What it shows:** 1–16 slides at once, from SVS, CZI or OME-TIFF files, from anything OpenSlide reads, or from API-backed sources such as PathCore and HALOLink.
+- **What it shows:** 1–16 slides at once, from SVS, CZI or OME-TIFF files, from anything OpenSlide reads, or from PathCore / HALO Link through connector stubs your app fills in.
 - **Annotations:** ROIs, drawings and millions of detected objects, rendered on the GPU.
 - **Where it runs:** as a plain HTML element (`<wsi-grid>`), or as a native NiceGUI element (`wsiviz.nicegui.WsiGrid`) that you can drop straight into wissi.
 
@@ -79,20 +79,61 @@ Routes mount on NiceGUI's own FastAPI app, so there is no extra port or process.
 - Mount a volume for `cache_dir`, so cached tiles survive restarts.
 - Put an HTTP/2 reverse proxy in front: Caddy, Traefik, or nginx with `http2 on`. Browsers allow only 6 HTTP/1.1 connections per host, and uvicorn speaks HTTP/1.1. With HTTP/2 the viewer detects multiplexing and raises its parallel tile requests from 5 to 24, which matters a lot with 16 panes.
 
-## Slides from PathCore / HALOLink (or any API)
+## PathCore / HALO Link (or any tile API)
+
+wsiviz never opens a connection itself. `wsiviz.connectors` has two **stubs**, `HaloLinkConnection` and `PathCoreConnection`. You subclass one and call the client your app already has (auth and sessions stay in your app):
 
 ```python
-from wsiviz import CallbackSource, SlideInfo, Level
+from wsiviz.connectors import HaloLinkConnection, RemoteImageInfo, AnnotationPayload, TileNotFound
 
-info = SlideInfo(width=W, height=H, tile_size=256,                 # the service's tile size…
-                 levels=[Level(w, h, ds) for (w, h, ds) in remote_levels],   # …and its pyramid
-                 mpp=(0.25, 0.25), name='Case 12')
-src = CallbackSource(info, read_tile=lambda level, x, y, c: client.get_tile(img, level, x, y),
-                     annotations=lambda: [...], version=modified_ts)
-registry.add(src, slide_id='halo-12345')
+class WissiHaloLink(HaloLinkConnection):
+    def __init__(self, client):
+        super().__init__(); self.client = client
+
+    def image_info(self, image_id):                       # required
+        m = self.client.get_image(image_id)
+        return RemoteImageInfo(width=m['width'], height=m['height'], tile_size=m['tile_size'],
+                               levels=[(l['width'], l['height']) for l in m['levels']],
+                               level_ids=[l['id'] for l in m['levels']],
+                               mpp=(m['mpp_x'], m['mpp_y']), name=m['name'], version=str(m['modified']))
+
+    def tile(self, image_id, level, col, row, channel=None):   # required
+        return self.client.get_tile(image_id, level, col, row)  # bytes | ndarray | None
+
+    def annotations(self, image_id):                     # optional
+        return [AnnotationPayload('HALO annotations', self.client.get_annotations_xml(image_id), format='halo_xml')]
+
+    def objects(self, image_id):                         # optional: cell tables, loaded in the background
+        return [AnnotationPayload('HALO objects', self.client.get_object_data(image_id), format='table')]
+
+sid = WissiHaloLink(client).register(registry, 'image-123')   # lazy → 'halo-image-123'
+grid.set_slide(0, sid)
 ```
 
-`read_tile` can return JPEG, PNG or WebP bytes, which are passed straight to the browser with no decode or re-encode, or a numpy array. Each tile is fetched from the remote API once: requests in flight are merged, and the result is then served from the memory and disk caches. Bump `version` to invalidate.
+`examples/wissi_integration.py` has both stubs with the lines to fill in marked. What the connector layer handles:
+
+| Real-world API behaviour | Handling |
+|---|---|
+| Pyramid described as explicit levels (any order), a downsample list, or DeepZoom (`.dzi`) | `RemoteImageInfo(levels=…, level_ids=…)` / `downsamples=…` / `deepzoom=True`, or `RemotePyramid.from_dzi(xml)`. Your own level ids are passed back to `tile()`. |
+| DeepZoom tile overlap | JPEG/PNG bytes pass through untouched and the GPU crops the overlap with texture coordinates. Decoded arrays are cropped on the server. |
+| Fixed-size padded edge tiles | Cropped the same way. |
+| `async` clients | Coroutines run on a private loop, or on your app's loop via `conn.bind_loop()` (for clients bound to NiceGUI's loop). |
+| Flaky upstream | Retries with back-off (`retries`), a `timeout`, and HTTP 502 to the browser if it still fails. Failures are not cached, and the browser retries later. |
+| Not overloading the service | `max_concurrency` limits simultaneous calls per connection, shared across all its slides. Duplicate tile requests are merged. |
+| Empty regions | Return `None` or raise `TileNotFound`: the tile is drawn as background and cached. |
+| Slow metadata calls | `register()` is lazy, and opening one slide never blocks the others. |
+| Annotations in µm, at a pyramid level, or offset | `AnnotationPayload(units='um', downsample=…, offset=…)`. |
+| HALO XML, GeoJSON, Aperio XML, object tables (XMin/XMax/YMin/YMax, centroids, classes) | `AnnotationPayload(format='auto' \| 'halo_xml' \| 'geojson' \| 'aperio_xml' \| 'table')`. Table measurement columns are kept column-wise, so clicking one of 10⁶ cells shows its values. |
+| Cache invalidation | `RemoteImageInfo.version` (a modified time or ETag) goes into every cache key. |
+
+**Verification** (`tests/test_remote.py`, `examples/mock_remote_server.py`). The mock connectors reproduce these awkward cases, backed by a local SVS:
+- A HALO-style mock: DeepZoom with 1 px overlap, a sync client, flaky calls, HALO XML and a cell table.
+- A PathCore-style mock: an async client, coarsest-first string level ids, padded PNG tiles, and µm GeoJSON.
+
+What was checked:
+- Decoded tiles match the source pixel-for-pixel at every level, edges included.
+- In the browser, the remote panes render on exactly the same screen pixels as the local file. A ±2 px search finds the best match at offset 0 at every zoom. What remains is JPEG noise: 1.4/255 at 40–80×, and 0.0–0.2/255 for lossless tiles.
+- The annotations from both APIs line up with the local ones.
 
 ## Annotations
 
@@ -161,7 +202,7 @@ python tests/make_test_data.py /tmp/wsi --size 16000   # synthetic SVS + 3-chann
 
 ## Limits and next steps
 
-- **Test data.** Verified only on synthetic Aperio-style SVS, CZI (2- and 3-channel uint16) and tiled TIFF/OME-TIFF files. It has not yet been run against real scanner files, or against live PathCore/HALOLink endpoints.
+- **Test data.** Verified on synthetic Aperio-style SVS, CZI (2- and 3-channel uint16) and tiled TIFF/OME-TIFF files, and against mock PathCore/HALO Link connectors. It has not yet been run against real scanner files or live PathCore/HALO Link endpoints. The connectors are stubs, and their method bodies come from your app.
 - **Channels.** At most 8 channels are composited per pane at once. CZI Z and T planes are chosen when the source is created (`CziSource(path, z=, t=)`); there is no Z slider yet.
 - **Annotation editing.** Drawings are saved as new features. Editing or deleting existing vertices in the browser is not implemented.
 - **Possible additions:** a minimap/navigator, a WebGPU renderer, and a density heat-map LOD for more than 5 M objects.

@@ -60,6 +60,11 @@ class SlideInfo:
     #: external service (e.g. a tile endpoint that already accepts browser auth) can
     #: serve tiles laid out exactly like this pyramid.
     tile_url: str | None = None
+    #: Remote tiles that carry extra pixels on interior edges (DeepZoom overlap). Encoded tiles
+    #: are passed through and cropped on the GPU; decoded arrays are cropped on the server.
+    overlap: int = 0
+    #: Remote level identifiers (for ``tile_url`` templates); index-aligned with ``levels``.
+    level_ids: list[str] | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:

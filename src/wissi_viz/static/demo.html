@@ -13,7 +13,7 @@
   select, input, button { background: #1a1d22; color: inherit; border: 1px solid #333; border-radius: 6px; padding: 4px 6px; font: inherit; }
   button.on { background: #1f4f7a; border-color: #3ea6ff; }
   input.num { width: 90px; }
-  wsi-grid { flex: 1; min-height: 0; }
+  wissi-viz { flex: 1; min-height: 0; }
   #log { font: 11px ui-monospace, monospace; opacity: .75; padding: 4px 10px; height: 18px; overflow: hidden; white-space: nowrap; border-top: 1px solid #222; }
 </style>
 <script type="module" src="__API__/static/index.js"></script>
@@ -32,7 +32,7 @@
     <button id="go">Go</button></span>
   <button id="fit">Fit all</button>
 </header>
-<wsi-grid id="grid" api="__API__" draw-layer="Drawings"></wsi-grid>
+<wissi-viz id="grid" api="__API__" draw-layer="Drawings"></wissi-viz>
 <div id="log"></div>
 <script type="module">
   const grid = document.getElementById('grid');
@@ -43,7 +43,7 @@
   const setN = (n) => grid.setSlides(Array.from({ length: n }, (_, i) => slides[i % slides.length].id));
   sel.value = Math.min(4, Math.max(1, slides.length));
   sel.onchange = () => setN(+sel.value);
-  await customElements.whenDefined('wsi-grid');
+  await customElements.whenDefined("wissi-viz");
   setN(+sel.value);
   document.getElementById('sync').onchange = (e) => grid.setSync(e.target.value);
   const tools = ['pan', 'point', 'rect', 'ellipse', 'polygon', 'freehand', 'line'];

@@ -1,7 +1,7 @@
 // wissi-viz — GPU whole-slide image grid viewer (WebGL2, zero dependencies).
 //
 //   <script type="module" src="/wissi-viz/static/index.js"></script>
-//   <wsi-grid api="/wissi-viz" slides="slideA,slideB,slideC,slideD"></wsi-grid>
+//   <wissi-viz api="/wissi-viz" slides="slideA,slideB,slideC,slideD"></wissi-viz>
 //
 // One WebGL2 context renders 1–16 panes (browsers cap live contexts at ~16, so one
 // context per slide would not scale). All panes share a GPU texture LRU, a worker pool
@@ -323,6 +323,7 @@ class AnnLayer {
     this.size = take(Float32Array, n);
     this.orig = take(Uint32Array, n);
     this.cls = take(Uint16Array, n);
+    this.col = take(Uint16Array, n); // colour-texture index (class, or colormap bin)
     this.kind = take(Uint8Array, n);
     this.buckets = take(Float32Array, B * 8);
     this.n = n;
@@ -333,12 +334,13 @@ class AnnLayer {
     sample.sort((a, b) => a - b);
     this.medSize = sample.length ? sample[sample.length >> 1] : 0;
     this.classes = meta.classes || [];
+    this.colormap = meta.colormap || null;
     this.vao = gl.createVertexArray();
     gl.bindVertexArray(this.vao);
     this.bufs = [
       this._attr(0, this.cen, 2, gl.FLOAT, false),
       this._attr(1, this.size, 1, gl.FLOAT, false),
-      this._attr(2, this.cls, 1, gl.UNSIGNED_SHORT, true),
+      this._attr(2, this.col, 1, gl.UNSIGNED_SHORT, true),
       this._attr(3, this.kind, 1, gl.UNSIGNED_BYTE, true),
     ];
     gl.bindVertexArray(null);
@@ -359,13 +361,22 @@ class AnnLayer {
     return b;
   }
   _classTex() {
+    // texels: [class colours …][256-entry colormap LUT][NaN colour]
     const gl = this.grid.gl;
-    const n = Math.max(1, this.classes.length);
+    const nc = this.classes.length;
+    const cm = this.colormap;
+    const n = Math.max(1, nc + (cm ? 257 : 0));
     const px = new Uint8Array(n * 4);
     this.classes.forEach((c, i) => {
       const [r, g, b] = hexToRgb(c.color);
       px.set([r * 255, g * 255, b * 255, this.hidden.has(c.name) ? 0 : 255], i * 4);
     });
+    if (cm) {
+      const lo = this.valueRange?.[0] ?? 0, hi = this.valueRange?.[1] ?? 255; // optional on-the-fly range filter (bins)
+      cm.lut.forEach((h, i) => { const [r, g, b] = hexToRgb(h); px.set([r * 255, g * 255, b * 255, i >= lo && i <= hi ? 255 : 0], (nc + i) * 4); });
+      const [r, g, b] = hexToRgb(cm.nan);
+      px.set([r * 255, g * 255, b * 255, this.hideNaN ? 0 : 160], (nc + 256) * 4);
+    }
     gl.bindTexture(gl.TEXTURE_2D, this.ctex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, n, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, px);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
@@ -481,6 +492,13 @@ canvas.ov { pointer-events:none; }
   max-width:calc(100% - 60px); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; pointer-events:none; }
 .scale { position:absolute; left:6px; bottom:6px; pointer-events:none; padding:3px 6px 4px; border-radius:4px; background:rgba(0,0,0,.5); }
 .scale i { display:block; height:3px; background:#fff; box-shadow:0 0 2px #000; margin-top:2px; }
+.legend { position:absolute; right:6px; bottom:34px; max-width:min(240px, 45%); max-height:45%; overflow:hidden; pointer-events:none;
+  padding:5px 7px; border-radius:6px; background:rgba(0,0,0,.6); font-size:11px; line-height:1.35; }
+.legend:empty { display:none; }
+.legend b { display:block; font-weight:600; opacity:.85; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.legend .sw { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:5px; vertical-align:-1px; }
+.legend .grad { height:8px; border-radius:2px; margin:3px 0 1px; }
+.legend .ends { display:flex; justify-content:space-between; opacity:.85; font-variant-numeric:tabular-nums; gap:8px; }
 .coords { position:absolute; right:6px; bottom:6px; pointer-events:none; padding:2px 6px; border-radius:4px; background:rgba(0,0,0,.5); font-variant-numeric:tabular-nums; }
 .coords:empty { display:none; }
 .msg { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; opacity:.7; }
@@ -499,7 +517,7 @@ canvas.ov { pointer-events:none; }
 const SVG_GEAR = '⚙';
 
 export class WsiGrid extends HTMLElement {
-  static get observedAttributes() { return ['api', 'slides', 'layout', 'sync', 'controls', 'quality', 'tool', 'draw-layer']; }
+  static get observedAttributes() { return ['api', 'slides', 'layout', 'sync', 'controls', 'quality', 'tool', 'draw-layer', 'legend']; }
 
   constructor() {
     super();
@@ -525,6 +543,7 @@ export class WsiGrid extends HTMLElement {
     this.drawLayer = null;
     this.quality = 1.0;
     this.showControls = true;
+    this.showLegend = true;
     this.maxInflight = 5;
     this.budget = Math.min(1024, ((navigator.deviceMemory || 8) * 96)) * 2 ** 20; // GPU texture budget (bytes)
     this._raf = 0;
@@ -569,6 +588,7 @@ export class WsiGrid extends HTMLElement {
     else if (name === 'layout') this.setLayout(val || 'auto');
     else if (name === 'sync') this.setSync(val || 'none');
     else if (name === 'controls') { this.showControls = val !== 'false'; this._buildPanes(); }
+    else if (name === 'legend') { this.showLegend = val !== 'false'; this._legends(); }
     else if (name === 'quality') this.quality = clamp(parseFloat(val) || 1, 0.25, 4);
     else if (name === 'tool') this.setTool(val || 'pan');
     else if (name === 'draw-layer') this.drawLayer = val || null;
@@ -739,6 +759,7 @@ export class WsiGrid extends HTMLElement {
 
   setClassVisible(pane, layer, cls, visible) {
     for (const p of this._panes(pane)) p.slide?.layers.get(layer)?.setClassVisible(cls, visible);
+    this._legends();
     this.requestRender();
   }
 
@@ -789,12 +810,13 @@ export class WsiGrid extends HTMLElement {
     for (const p of this.panes) {
       const el = document.createElement('div');
       el.className = 'pane' + (p.index === this.active && this.panes.length > 1 ? ' active' : '') + (this.tool !== 'pan' ? ' tool' : '');
-      el.innerHTML = `<div class="label"></div><div class="scale" style="display:none"><span></span><i></i></div><div class="coords"></div><div class="msg"></div>`
+      el.innerHTML = `<div class="label"></div><div class="scale" style="display:none"><span></span><i></i></div><div class="coords"></div><div class="legend"></div><div class="msg"></div>`
         + (this.showControls ? `<button class="btn" title="Display settings">${SVG_GEAR}</button>` : '');
       p.el = el;
       p.$label = el.querySelector('.label');
       p.$scale = el.querySelector('.scale');
       p.$coords = el.querySelector('.coords');
+      p.$legend = el.querySelector('.legend');
       p.$msg = el.querySelector('.msg');
       const btn = el.querySelector('.btn');
       if (btn) {
@@ -1197,6 +1219,7 @@ export class WsiGrid extends HTMLElement {
     for (const p of this.panes) if (this._animate(p, dt)) again = true;
     if (this._processUploads()) again = true;
     this.frame++;
+    if (this._legendDirty) { this._legendDirty = false; this._legends(); }
     this._draw();
     this._schedule();
     this._evict();
@@ -1457,7 +1480,7 @@ export class WsiGrid extends HTMLElement {
         for (const d of detail) if (d.nTri) { gl.bindVertexArray(d.vaoTri); gl.drawArrays(gl.TRIANGLES, 0, d.nTri); }
       }
       // outlines
-      if (detail.length) {
+      if (detail.length && (st.line_width ?? 1.5) > 0) {
         const pr = this.prog.seg;
         gl.useProgram(pr.p);
         gl.uniform3f(pr.u.u_view, p.view.cx, p.view.cy, scaleDev);
@@ -1651,7 +1674,7 @@ export class WsiGrid extends HTMLElement {
         const L = meta.ann;
         if (L.state === 'dead') continue;
         try {
-          if (meta.bucket == null) L._ingest(res.buf);
+          if (meta.bucket == null) { L._ingest(res.buf); this._legendDirty = true; }
           else L.ingestBucket(meta.bucket, res.buf);
         } catch (e) { console.warn('wissi-viz annotation', e); L.state = 'error'; }
         continue;
@@ -1724,7 +1747,33 @@ export class WsiGrid extends HTMLElement {
     this._fillPanel(p, panel);
   }
 
+  _legends() {
+    const fmt = (v) => { const a = Math.abs(v); return a >= 1e4 || (a > 0 && a < 1e-2) ? v.toExponential(1) : a >= 100 ? v.toFixed(0) : a >= 10 ? v.toFixed(1) : v.toFixed(2); };
+    for (const p of this.panes) {
+      if (!p.$legend) continue;
+      if (!this.showLegend || !p.slide) { p.$legend.innerHTML = ''; continue; }
+      let html = '';
+      for (const L of p.slide.layers.values()) {
+        if (L.state !== 'ready' || !p.layerVisible(L) || L.style.legend === false) continue;
+        const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+        if (L.colormap) {
+          const cm = L.colormap, stops = cm.lut.filter((_, i) => i % 32 === 0 || i === 255).join(',');
+          const lo = cm.log ? 10 ** cm.vmin : cm.vmin, hi = cm.log ? 10 ** cm.vmax : cm.vmax;
+          html += `<b>${esc(cm.label || L.name)}</b><div class="grad" style="background:linear-gradient(90deg,${stops})"></div>`
+            + `<div class="ends"><span>${fmt(lo)}</span><span>${cm.log ? 'log' : ''}</span><span>${fmt(hi)}</span></div>`;
+        } else if (L.classes.length > 1 || L.style.legend === true) {
+          html += `<b>${esc(L.name)}</b>`;
+          const shown = L.classes.filter((c) => !L.hidden.has(c.name));
+          for (const c of shown.slice(0, 8)) html += `<div><span class="sw" style="background:${c.color}"></span>${esc(c.name)}</div>`;
+          if (shown.length > 8) html += `<div style="opacity:.7">+${shown.length - 8} more</div>`;
+        }
+      }
+      p.$legend.innerHTML = html;
+    }
+  }
+
   _panelRefresh() {
+    this._legends();
     for (const p of this.panes) { const el = p.el?.querySelector('.panel'); if (el) this._fillPanel(p, el); }
   }
 
@@ -1791,5 +1840,8 @@ export class WsiViewer extends WsiGrid {
   }
 }
 
-if (!customElements.get('wsi-grid')) customElements.define('wsi-grid', WsiGrid);
+/** Main element: <wissi-viz api="/wissi-viz" slides="a,b,c"></wissi-viz> (aliases: <wsi-grid>, <wsi-viewer> for one slide). */
+export class WissiViz extends WsiGrid {}
+if (!customElements.get('wissi-viz')) customElements.define('wissi-viz', WissiViz);
+if (!customElements.get('wsi-grid')) customElements.define('wsi-grid', class extends WsiGrid {});
 if (!customElements.get('wsi-viewer')) customElements.define('wsi-viewer', WsiViewer);

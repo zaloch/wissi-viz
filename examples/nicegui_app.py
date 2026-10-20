@@ -8,7 +8,7 @@ from pathlib import Path
 from nicegui import ui
 
 from wissi_viz import AnnotationLayer
-from wissi_viz.nicegui import WsiGrid, configure
+from wissi_viz.nicegui import WissiViz, configure
 
 ROOT = Path(sys.argv[1] if len(sys.argv) > 1 else '.')
 registry = configure(cache_dir=ROOT / '.wissi-viz-cache')   # persistent tile cache (mount as a Docker volume)
@@ -45,7 +45,7 @@ def index():
         mag = ui.select([None, 2.5, 5, 10, 20, 40], value=20, label='mag').classes('w-24')
         target = ui.select({'active': 'active pane', 'all': 'all panes'}, value='active').classes('w-32')
 
-    grid = WsiGrid([slide_ids[i % len(slide_ids)] for i in range(n.value)],
+    grid = WissiViz([slide_ids[i % len(slide_ids)] for i in range(n.value)],
                    on_object_click=show_object, on_draw=drawn).classes('w-full').style('height: calc(100vh - 140px)')
 
     n.on_value_change(lambda e: grid.set_slides([slide_ids[i % len(slide_ids)] for i in range(e.value)]))

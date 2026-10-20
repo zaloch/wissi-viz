@@ -1,5 +1,5 @@
-// NiceGUI (Vue) wrapper around the <wsi-grid> web component.
-import { WsiGrid } from "wissi-viz";
+// NiceGUI (Vue) wrapper around the <wissi-viz> web component.
+import { WissiViz } from "wissi-viz";
 
 const EVENTS = ["viewchange", "paneclick", "objectclick", "draw", "activepane", "slideload"];
 
@@ -15,16 +15,18 @@ export default {
     drawLayer: String,
     quality: Number,
     textureBudgetMb: Number,
+    legend: { type: Boolean, default: true },
   },
   mounted() {
-    void WsiGrid; // ensure the custom element is registered
-    const el = document.createElement("wsi-grid");
+    void WissiViz; // ensure the custom element is registered
+    const el = document.createElement("wissi-viz");
     el.style.cssText = "position:absolute;inset:0;width:100%;height:100%;";
     el.setAttribute("api", (window.path_prefix || "") + this.api);
     if (this.layout) el.setAttribute("layout", this.layout);
     if (this.controls === false) el.setAttribute("controls", "false");
     if (this.quality) el.setAttribute("quality", String(this.quality));
     if (this.drawLayer) el.setAttribute("draw-layer", this.drawLayer);
+    if (this.legend === false) el.setAttribute("legend", "false");
     for (const ev of EVENTS) el.addEventListener(ev, (e) => this.$emit(ev, e.detail));
     this.$el.appendChild(el);
     this.grid = el;
@@ -43,6 +45,7 @@ export default {
     tool(v) { this.grid.setTool(v); },
     drawLayer(v) { this.grid.drawLayer = v || null; },
     quality(v) { this.grid.quality = v || 1; this.grid.requestRender(); },
+    legend(v) { this.grid.setAttribute("legend", v === false ? "false" : "true"); },
   },
   methods: {
     call(name, ...args) {

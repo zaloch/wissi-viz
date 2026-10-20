@@ -25,11 +25,11 @@ from typing import Any, Iterable, Sequence
 
 import numpy as np
 
+from .colormaps import CATEGORICAL as _CAT, DIVERGING as _DIVERGING, lut as _lut
+
 POINT, POLYLINE, POLYGON = 0, 1, 2
 MAGIC = b'WSA1'
 
-_PALETTE = ['#00e5ff', '#ff3d71', '#ffd600', '#76ff03', '#d500f9', '#ff9100', '#2979ff', '#1de9b6',
-            '#f50057', '#c6ff00', '#651fff', '#ff6e40']
 
 
 def _color_hex(c: Any) -> str | None:
@@ -50,8 +50,8 @@ def _color_hex(c: Any) -> str | None:
 
 
 def _auto_color(i: int) -> str:
-    if i < len(_PALETTE):
-        return _PALETTE[i]
+    if i < len(_CAT):
+        return _CAT[i]
     h = (i * 0.61803398875) % 1.0
     r, g, b = colorsys.hsv_to_rgb(h, 0.75, 1.0)
     return '#%02x%02x%02x' % (int(r * 255), int(g * 255), int(b * 255))
@@ -88,6 +88,9 @@ class AnnotationLayer:
         #: columnar per-feature properties (bulk imports: object tables with 10^6 rows)
         self._columns: dict[str, np.ndarray] = {}
         self._col_offset = 0  # feature index where the columnar block starts
+        #: continuous colouring (``color_by``): per-feature values + colormap; None → colour by class
+        self._values: np.ndarray | None = None
+        self.colormap: dict | None = None
         self._dirty = True
         self._compiled: _Compiled | None = None
         self.version = 0
@@ -410,6 +413,69 @@ class AnnotationLayer:
             feats.append({'type': 'Feature', 'geometry': g, 'properties': props})
         return {'type': 'FeatureCollection', 'features': feats}
 
+    # ------------------------------------------------------------- continuous colouring
+    def color_by(self, values: Any, cmap: str = 'viridis', vmin: float | None = None, vmax: float | None = None,
+                 label: str | None = None, log: bool = False, nan_color: str = '#7f7f7f',
+                 percentiles: tuple[float, float] = (1.0, 99.0)) -> 'AnnotationLayer':
+        """Colour every feature by a number (distance, density, marker intensity, score …).
+
+        ``values``: one number per feature, or the name of a property column. Limits default to the
+        1st–99th percentile (diverging maps: symmetric around 0). ``values=None`` → back to class colours.
+        """
+        with self._lock:
+            if values is None:
+                self._values, self.colormap = None, None
+                self._dirty = True
+                return self
+            if isinstance(values, str):
+                label = label or values
+                col = values
+                if col in self._columns:
+                    v = np.full(len(self), np.nan, np.float64)
+                    c = np.asarray(self._columns[col], np.float64)
+                    v[self._col_offset:self._col_offset + len(c)] = c
+                    values = v
+                else:
+                    values = np.array([float(q) if isinstance(q := (p or {}).get(col), (int, float)) else np.nan
+                                       for p in self._props], np.float64)
+            v = np.asarray(values, np.float64).ravel()
+            if len(v) != len(self):
+                raise ValueError(f'color_by: {len(v)} values for {len(self)} features')
+            fin = v[np.isfinite(v)]
+            if log:
+                fin = np.log10(fin[fin > 0])
+            if vmin is None or vmax is None:
+                lo, hi = np.percentile(fin, percentiles) if fin.size else (0.0, 1.0)
+                if cmap.lower().removesuffix('_r') in _DIVERGING:
+                    m = max(abs(lo), abs(hi))
+                    lo, hi = -m, m
+                vmin = lo if vmin is None else (np.log10(vmin) if log else vmin)
+                vmax = hi if vmax is None else (np.log10(vmax) if log else vmax)
+            elif log:
+                vmin, vmax = np.log10(vmin), np.log10(vmax)
+            self._values = v
+            self.colormap = {'name': cmap, 'vmin': float(vmin), 'vmax': float(vmax if vmax > vmin else vmin + 1e-9),
+                             'label': label or '', 'log': bool(log), 'lut': _lut(cmap, 256), 'nan': nan_color}
+            self._dirty = True
+        return self
+
+    def _color_index(self) -> np.ndarray:
+        """Per-feature index into the colour texture: class id, or (#classes + LUT bin) when colour-by-value."""
+        cls = np.asarray(self._cls, np.uint16)
+        if self._values is None or self.colormap is None:
+            return cls
+        cm = self.colormap
+        v = self._values.copy()
+        if cm['log']:
+            with np.errstate(divide='ignore', invalid='ignore'):
+                v = np.where(v > 0, np.log10(v), np.nan)
+        t = (v - cm['vmin']) / (cm['vmax'] - cm['vmin'])
+        b = np.where(np.isfinite(t), np.clip(np.floor(np.nan_to_num(t) * 256), 0, 255), 256)  # 256 = NaN colour
+        return (len(self._class_index) + b).astype(np.uint16)
+
+    def values(self) -> np.ndarray | None:
+        return self._values
+
     # ------------------------------------------------------------- compile / encode
     def touch(self) -> None:
         """Call after mutating ``classes``/style so viewers refetch."""
@@ -430,6 +496,7 @@ class AnnotationLayer:
         return {'name': self.name, 'version': self.version, 'count': int(c.n),
                 'buckets': int(len(c.buckets)), 'bbox': c.bbox,
                 'classes': [{'name': k, 'color': self.classes.get(k, '#ffffff')} for k, _ in inv],
+                'colormap': self.colormap,
                 'style': {'line_width': self.line_width, 'fill_opacity': self.fill_opacity,
                           'point_size': self.point_size, 'visible': self.visible,
                           'detail_min_px': self.detail_min_px, 'z': self.z}}
@@ -452,6 +519,7 @@ class _Compiled:
         self.n = n
         self.kinds = np.asarray(layer._kinds, np.uint8)
         self.cls = np.asarray(layer._cls, np.uint16)
+        self.col = layer._color_index()  # colour-texture index per feature
         self.radius = np.asarray(layer._radius, np.float32)
         lens = np.fromiter((len(r) for r in layer._rings), np.int64, len(layer._rings))
         self.ring_off = np.zeros(len(lens) + 1, np.int64)
@@ -520,11 +588,12 @@ class _Compiled:
         cen = np.stack([self.cx[o], self.cy[o]], 1).astype('<f4') if n else np.zeros((0, 2), '<f4')
         size = (self.size[o] if n else np.zeros(0)).astype('<f4')
         cls = self.cls[o].astype('<u2')
+        col = self.col[o].astype('<u2')
         kinds = self.kinds[o].astype('u1')
         orig = o.astype('<u4')
         bt = np.asarray(self.buckets, '<f4').reshape(-1, 8)
         meta = dict(meta, buckets=len(self.buckets))
-        return _pack(meta, [cen, size, orig, cls, kinds, bt])
+        return _pack(meta, [cen, size, orig, cls, col, kinds, bt])
 
     def bucket(self, i: int) -> bytes:
         with self._lock:
@@ -560,7 +629,7 @@ class _Compiled:
         keep &= ncnt > 1
         sa, sb = (base + local)[keep], nxt[keep]
         seg = np.concatenate([self.coords[sa], self.coords[sb]], 1).astype('<f4')
-        seg_cls = self.cls[np.repeat(ring_feat, cnt)[keep]].astype('<u2')
+        seg_cls = self.col[np.repeat(ring_feat, cnt)[keep]].astype('<u2')
         # fills
         tris, tri_cls = [], []
         polys = feats[k == POLYGON]
@@ -580,7 +649,7 @@ class _Compiled:
                     idx = earcut.triangulate_float32(verts, ends)
                     if len(idx):
                         tris.append(verts[idx])
-                        tri_cls.append(np.full(len(idx), self.cls[f], '<u2'))
+                        tri_cls.append(np.full(len(idx), self.col[f], '<u2'))
         tv = np.concatenate(tris).astype('<f4') if tris else np.zeros((0, 2), '<f4')
         tc = np.concatenate(tri_cls) if tri_cls else np.zeros(0, '<u2')
         return _pack({'segments': int(len(seg)), 'tri_verts': int(len(tv))}, [seg, tv, seg_cls, tc])

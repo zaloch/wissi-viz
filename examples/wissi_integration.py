@@ -16,7 +16,7 @@ from nicegui import app, ui
 
 from wissi_viz.connectors import (AnnotationPayload, HaloLinkConnection, PathCoreConnection, RemoteImageInfo,
                                TileNotFound)
-from wissi_viz.nicegui import WsiGrid, configure
+from wissi_viz.nicegui import WissiViz, configure
 
 registry = configure(cache_dir='/cache/wissi-viz', memory_mb=2048, disk_gb=100)  # docker volume → survives restarts
 
@@ -95,7 +95,7 @@ def viewer_page(halo_ids: str = '', pathcore_ids: str = '', files: str = ''):
     slides = [f for f in files.split(',') if f]                                   # local SVS / CZI paths
     slides += [halo.register(registry, i) for i in halo_ids.split(',') if i]       # lazy: no call until shown
     slides += [pathcore.register(registry, i) for i in pathcore_ids.split(',') if i]
-    grid = WsiGrid(slides[:16], layout='auto').classes('w-full').style('height: 85vh')
+    grid = WissiViz(slides[:16], layout='auto').classes('w-full').style('height: 85vh')
 
     with ui.row():
         ui.button('All → (1200 µm, 800 µm) @20×', on_click=lambda: grid.go_to('all', 1200, 800, units='um', magnification=20))

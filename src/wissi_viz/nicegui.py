@@ -1,9 +1,9 @@
 """Native NiceGUI element.
 
     from nicegui import ui
-    from wissi_viz.nicegui import WsiGrid
+    from wissi_viz.nicegui import WissiViz
 
-    grid = WsiGrid(['/data/a.svs', '/data/b.czi'], layout='1x2').classes('w-full h-[80vh]')
+    grid = WissiViz(['/data/a.svs', '/data/b.czi'], layout='1x2').classes('w-full h-[80vh]')
     grid.go_to(0, 12000, 8000, magnification=20)
 
 The tile/annotation routes are mounted on NiceGUI's FastAPI app automatically
@@ -64,7 +64,7 @@ def mount(registry: SlideRegistry, prefix: str = '/wissi-viz', allow_edit: bool 
     _mounted[prefix] = registry
 
 
-class WsiGrid(Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'},
+class WissiViz(Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'},
               default_style='width:100%;height:600px;'):
     """1–16 whole-slide images in one GPU canvas.
 
@@ -73,7 +73,7 @@ class WsiGrid(Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'},
     """
 
     def __init__(self, slides: Sequence[Any] = (), *, layout: str = 'auto', sync: str = 'none',
-                 controls: bool = True, tool: str = 'pan', draw_layer: str | None = None, quality: float = 1.0,
+                 controls: bool = True, legend: bool = True, tool: str = 'pan', draw_layer: str | None = None, quality: float = 1.0,
                  texture_budget_mb: int | None = None, registry: SlideRegistry | None = None,
                  prefix: str = '/wissi-viz',
                  on_view_change: Callable | None = None, on_click: Callable | None = None,
@@ -91,6 +91,7 @@ class WsiGrid(Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'},
         self._props['layout'] = layout
         self._props['sync'] = sync
         self._props['controls'] = controls
+        self._props['legend'] = legend
         self._props['tool'] = tool
         self._props['drawLayer'] = draw_layer
         self._props['quality'] = quality
@@ -144,13 +145,13 @@ class WsiGrid(Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'},
     def slides(self) -> list:
         return list(self._props['slides'])
 
-    def set_slides(self, slides: Sequence[Any]) -> 'WsiGrid':
+    def set_slides(self, slides: Sequence[Any]) -> 'WissiViz':
         """Replace all panes (1–16)."""
         self._props['slides'] = [self._ref(s) for s in list(slides)[:16]]
         self.update()
         return self
 
-    def set_slide(self, pane: int, slide: Any) -> 'WsiGrid':
+    def set_slide(self, pane: int, slide: Any) -> 'WissiViz':
         lst = list(self._props['slides'])
         while len(lst) <= pane:
             lst.append(None)
@@ -159,19 +160,19 @@ class WsiGrid(Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'},
         self.update()
         return self
 
-    def set_layout(self, layout: str) -> 'WsiGrid':
+    def set_layout(self, layout: str) -> 'WissiViz':
         """'auto' or 'ROWSxCOLS', e.g. '4x4', '3x4', '1x2'."""
         self._props['layout'] = layout
         self.update()
         return self
 
-    def set_sync(self, mode: str) -> 'WsiGrid':
+    def set_sync(self, mode: str) -> 'WissiViz':
         """'none' | 'all' | 'pan' | 'zoom' — linked navigation across panes."""
         self._props['sync'] = mode
         self.update()
         return self
 
-    def set_tool(self, tool: str, draw_layer: str | None = None) -> 'WsiGrid':
+    def set_tool(self, tool: str, draw_layer: str | None = None) -> 'WissiViz':
         """'pan' | 'point' | 'rect' | 'ellipse' | 'polygon' | 'freehand' | 'line'."""
         self._props['tool'] = tool
         if draw_layer is not None:
@@ -258,4 +259,7 @@ class WsiGrid(Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'},
         super()._handle_delete()
 
 
-__all__ = ['WsiGrid', 'configure', 'mount', 'default_registry']
+#: backwards-compatible alias
+WsiGrid = WissiViz
+
+__all__ = ['WissiViz', 'WsiGrid', 'configure', 'mount', 'default_registry']

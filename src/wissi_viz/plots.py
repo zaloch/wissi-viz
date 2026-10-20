@@ -12,7 +12,7 @@ import numpy as np
 from .colormaps import categorical, lut
 
 _BASE = {'animation': False, 'textStyle': {'fontFamily': 'system-ui, sans-serif'},
-         'grid': {'left': 60, 'right': 20, 'top': 50, 'bottom': 50, 'containLabel': True},
+         'grid': {'left': 60, 'right': 20, 'top': 72, 'bottom': 50, 'containLabel': True},
          'tooltip': {'trigger': 'axis'}, 'toolbox': {'feature': {'saveAsImage': {}, 'dataZoom': {}}}}
 
 
@@ -32,7 +32,12 @@ def _py(v):
 
 
 def _opts(title: str, **kw) -> dict:
-    o = dict(_BASE, title={'text': title, 'left': 'center', 'textStyle': {'fontSize': 14}}, **kw)
+    o = dict(_BASE, title={'text': title, 'left': 'center', 'top': 2, 'textStyle': {'fontSize': 14}}, **kw)
+    if 'legend' in o:
+        o['legend'] = dict({'top': 30}, **{k: v for k, v in o['legend'].items() if k != 'top'})
+    y = o.get('yAxis')
+    if isinstance(y, dict) and y.get('name') and y.get('type') != 'category':  # rotated, beside the axis
+        o['yAxis'] = dict(y, nameLocation='middle', nameRotate=90, nameGap=48)
     return _py(o)
 
 
@@ -92,13 +97,13 @@ def heatmap(m: np.ndarray, rows: Sequence[str], cols: Sequence[str], title: str 
     fin = m[np.isfinite(m)]
     if diverging:
         a = float(np.abs(fin).max()) if fin.size else 1.0
-        lo, hi, colors = -a, a, lut('rdbu_r', 9)
+        lo, hi, colors = -a, a, lut('coolwarm', 11)  # blue = avoidance, red = enrichment
     else:
         lo, hi = (float(fin.min()), float(fin.max())) if fin.size else (0.0, 1.0)
         colors = lut('viridis', 9)
     return _opts(title, tooltip={'position': 'top'}, grid={'left': 110, 'right': 30, 'top': 50, 'bottom': 90, 'containLabel': True},
                  xAxis={'type': 'category', 'data': list(cols), 'axisLabel': {'rotate': 40}, 'splitArea': {'show': True}},
-                 yAxis={'type': 'category', 'data': list(rows), 'splitArea': {'show': True}},
+                 yAxis={'type': 'category', 'data': list(rows), 'splitArea': {'show': True}, 'inverse': True},
                  visualMap={'min': lo, 'max': hi, 'calculable': True, 'orient': 'horizontal', 'left': 'center', 'bottom': 0,
                             'inRange': {'color': colors}},
                  series=[{'type': 'heatmap', 'data': [[a, b, (round(c, 2) if np.isfinite(c) else None)] for a, b, c in data],
@@ -112,7 +117,7 @@ def stacked_bars(categories: Sequence[str], series: dict[str, Sequence[float]], 
     s = [{'type': 'bar', 'name': k, 'stack': 'total', 'data': list(v), 'itemStyle': {'color': categorical(i)},
           'emphasis': {'focus': 'series'}} for i, (k, v) in enumerate(series.items())]
     return _opts(title, legend={'top': 26, 'type': 'scroll'}, tooltip={'trigger': 'axis', 'axisPointer': {'type': 'shadow'}},
-                 grid={'left': 20, 'right': 30, 'top': 60, 'bottom': 30, 'containLabel': True},
+                 grid={'left': 20, 'right': 30, 'top': 72, 'bottom': 30, 'containLabel': True},
                  xAxis=val_axis if horizontal else cat_axis, yAxis=cat_axis if horizontal else val_axis, series=s)
 
 

@@ -18,6 +18,20 @@ function hexToRgb(h) {
   const n = parseInt(h.slice(0, 6), 16) || 0;
   return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
 }
+const STAIN_PRESETS = { // Ruifrok & Johnston OD vectors
+  HE: { hematoxylin: [0.650, 0.704, 0.286], second: [0.072, 0.990, 0.105] },
+  HDAB: { hematoxylin: [0.650, 0.704, 0.286], second: [0.268, 0.570, 0.776] },
+};
+const norm3 = (v) => { const n = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / n, v[1] / n, v[2] / n]; };
+const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+function inv3(m) {
+  const [a, b, c] = m[0], [d, e, f] = m[1], [g, h, i] = m[2];
+  const A = e * i - f * h, B = -(d * i - f * g), C = d * h - e * g;
+  const det = a * A + b * B + c * C || 1e-9;
+  return [[A / det, -(b * i - c * h) / det, (b * f - c * e) / det],
+    [B / det, (a * i - c * g) / det, -(a * f - c * d) / det],
+    [C / det, -(a * h - b * g) / det, (a * e - b * d) / det]];
+}
 const rgbToHex = (c) => '#' + c.map((v) => Math.round(clamp(v, 0, 1) * 255).toString(16).padStart(2, '0')).join('');
 
 // ------------------------------------------------------------------ fetch + decode (worker)
@@ -109,9 +123,25 @@ void main(){
 const FS_RGB = `#version 300 es
 precision highp float;
 uniform sampler2D u_tex; uniform vec4 u_adj; // brightness, contrast, gamma, invert
+// colour deconvolution (Ruifrok & Johnston): od = -ln(I); conc = od * M^-1 (rows of M = stain OD vectors)
+uniform int u_stain;          // 0 off, 1 single stain as brightfield, 2 pseudo-fluorescence composite
+uniform int u_stainSel;       // 0 hematoxylin, 1 second stain (eosin / DAB), 2 residual
+uniform mat3 u_minv; uniform mat3 u_m; uniform float u_stainScale;
+uniform vec3 u_col0; uniform vec3 u_col1;
 in vec2 v_uv; out vec4 o;
 void main(){
   vec3 c = texture(u_tex, v_uv).rgb;
+  if (u_stain > 0) {
+    vec3 od = -log(max(c, vec3(1.0 / 255.0)));
+    vec3 conc = max(od * u_minv, vec3(0.0));
+    if (u_stain == 1) {
+      float k = conc[u_stainSel];
+      c = exp(-k * u_m[u_stainSel]);         // that stain alone, as it would look in brightfield
+    } else {
+      vec2 t = clamp(conc.xy / u_stainScale, 0.0, 1.0);
+      c = min(t.x * u_col0 + t.y * u_col1, vec3(1.0));   // dark background, stains as "channels"
+    }
+  }
   c = (c - 0.5) * u_adj.y + 0.5 + u_adj.x;
   c = pow(clamp(c, 0.0, 1.0), vec3(1.0 / u_adj.z));
   if (u_adj.w > 0.5) c = 1.0 - c;
@@ -740,6 +770,32 @@ export class WsiGrid extends HTMLElement {
   /** Brightfield display: {brightness, contrast, gamma, invert}. */
   setAdjust(pane, opts) {
     for (const p of this._panes(pane)) Object.assign(p.adjust, opts);
+    this.requestRender();
+  }
+
+  /**
+   * Colour deconvolution view for brightfield panes.
+   * mode: 'off' | 'hematoxylin' | 'eosin' | 'dab' | 'second' | 'residual' | 'fluorescence'
+   * opts: { preset: 'HE' | 'HDAB', vectors: {hematoxylin: [r,g,b], second: [r,g,b]}, scale, colors: [hex, hex] }
+   */
+  setStain(pane, mode, opts = {}) {
+    for (const p of this._panes(pane)) {
+      if (!mode || mode === 'off') { p.stain = null; continue; }
+      const preset = (opts.preset || (mode === 'dab' ? 'HDAB' : 'HE')).toUpperCase();
+      const v = opts.vectors || STAIN_PRESETS[preset];
+      const M = [norm3(v.hematoxylin), norm3(v.second)];
+      M.push(norm3(cross3(M[0], M[1])));
+      const Minv = inv3(M);
+      const sel = { hematoxylin: 0, eosin: 1, dab: 1, second: 1, residual: 2 }[mode] ?? 0;
+      const cols = (opts.colors || (preset === 'HDAB' ? ['#3d7bff', '#ffb000'] : ['#3d7bff', '#ff4fa3'])).map(hexToRgb);
+      p.stain = {
+        mode: mode === 'fluorescence' ? 2 : 1, sel, scale: opts.scale ?? 1.6, col0: cols[0], col1: cols[1],
+        // GLSL: conc = od * u_minv  → upload Minv column-major; u_m[i] = row i of M → upload rows as columns
+        minvCols: new Float32Array([0, 1, 2].flatMap((j) => [0, 1, 2].map((i) => Minv[i][j]))),
+        mRowsAsCols: new Float32Array(M.flat()),
+        name: mode, preset,
+      };
+    }
     this.requestRender();
   }
 
@@ -1391,6 +1447,16 @@ export class WsiGrid extends HTMLElement {
       const a = p.adjust;
       gl.uniform4f(prog.u.u_adj, a.brightness, a.contrast, a.gamma, a.invert ? 1 : 0);
       gl.uniform1i(prog.u.u_tex, 0);
+      const st = p.stain;
+      gl.uniform1i(prog.u.u_stain, st ? st.mode : 0);
+      if (st) {
+        gl.uniform1i(prog.u.u_stainSel, st.sel);
+        gl.uniformMatrix3fv(prog.u.u_minv, false, st.minvCols);
+        gl.uniformMatrix3fv(prog.u.u_m, false, st.mRowsAsCols);
+        gl.uniform1f(prog.u.u_stainScale, st.scale);
+        gl.uniform3fv(prog.u.u_col0, st.col0);
+        gl.uniform3fv(prog.u.u_col1, st.col1);
+      }
     }
     for (let k = levels.length - 1; k >= 0; k--) {
       const [L, rg] = levels[k];
@@ -1465,7 +1531,7 @@ export class WsiGrid extends HTMLElement {
           }
           if (s0 >= 0) gl.drawArrays(gl.POINTS, s0, e0 - s0);
         };
-        run(ptsRanges, 0);
+        if (st.overview !== 'none') run(ptsRanges, 0);
         if (!detail.length) run(kindRanges, 1);
       }
       // fills
@@ -1753,8 +1819,10 @@ export class WsiGrid extends HTMLElement {
       if (!p.$legend) continue;
       if (!this.showLegend || !p.slide) { p.$legend.innerHTML = ''; continue; }
       let html = '';
-      for (const L of p.slide.layers.values()) {
-        if (L.state !== 'ready' || !p.layerVisible(L) || L.style.legend === false) continue;
+      const shownLayers = [...p.slide.layers.values()].reverse()
+        .filter((L) => L.state === 'ready' && p.layerVisible(L) && L.style.legend !== false
+          && (L.colormap || L.classes.length > 1 || L.style.legend === true));
+      for (const L of shownLayers.slice(0, 4)) {
         const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
         if (L.colormap) {
           const cm = L.colormap, stops = cm.lut.filter((_, i) => i % 32 === 0 || i === 255).join(',');
@@ -1768,6 +1836,7 @@ export class WsiGrid extends HTMLElement {
           if (shown.length > 8) html += `<div style="opacity:.7">+${shown.length - 8} more</div>`;
         }
       }
+      if (shownLayers.length > 4) html += `<div style="opacity:.7;margin-top:2px">+${shownLayers.length - 4} more layers</div>`;
       p.$legend.innerHTML = html;
     }
   }
@@ -1803,6 +1872,8 @@ export class WsiGrid extends HTMLElement {
         const r = row(`<label>${label}</label><input type="range" min="${min}" max="${max}" step="${step}" value="${a[key]}">`);
         r.children[1].oninput = (e) => this.setAdjust(p.index, { [key]: +e.target.value });
       };
+      const sr = row(`<label>Stain view</label><select>${['off', 'hematoxylin', 'eosin', 'dab', 'fluorescence'].map((m) => `<option ${p.stain?.name === m ? 'selected' : ''}>${m}</option>`).join('')}</select>`);
+      sr.children[1].onchange = (e) => this.setStain(p.index, e.target.value);
       mk('Brightness', 'brightness', -0.5, 0.5, 0.01);
       mk('Contrast', 'contrast', 0.3, 3, 0.01);
       mk('Gamma', 'gamma', 0.3, 3, 0.01);

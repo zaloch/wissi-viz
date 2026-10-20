@@ -1,22 +1,25 @@
 # wissi-viz
 
-wissi-viz is a GPU-accelerated whole-slide image viewer for the browser.
+wissi-viz is a GPU-accelerated whole-slide image viewer and spatial-analysis toolkit for brightfield and fluorescence histology. It runs in the browser.
 
-- **What it shows:** 1–16 slides at once, from SVS, CZI or OME-TIFF files, from anything OpenSlide reads, or from PathCore / HALO Link through connector stubs your app fills in.
-- **Annotations:** ROIs, drawings and millions of detected objects, rendered on the GPU.
-- **Where it runs:** as a plain HTML element (`<wsi-grid>`), or as a native NiceGUI element (`wissi_viz.nicegui.WsiGrid`) that you can drop straight into wissi.
+- **What it shows:** 1–16 slides at once, from SVS, CZI, OME-TIFF, NDPI, VSI, ZVI, DICOM, SCN or AFI files, or from PathCore / HALO Link through connector stubs your app fills in.
+- **Objects and annotations:** ROIs, drawings and millions of cells, imported from QuPath, HALO, CellProfiler, GeoJSON, label masks or AnnData, and rendered on the GPU. Layers can be coloured by class or by any measurement.
+- **Spatial analysis:** nearest neighbours, proximity, invasive margins, ROI composition (part of whole), density and hotspot maps, Ripley's K/L/g, co-location enrichment, cellular neighbourhoods, contact graphs, Moran's I, IHC H-score, tissue detection and GPU stain deconvolution. Each one produces a table, a slide overlay and a chart.
+- **Where it runs:** as a plain HTML element (`<wissi-viz>`), or as a native NiceGUI element (`wissi_viz.nicegui.WissiViz`) for wissi.
+- **Licences:** the default install is **permissive-only** (BSD / MIT / Apache-2.0 / ISC), and a test enforces it. LGPL components are an opt-in extra; see [Licences](#licences).
 
 ```
  Browser                                                     Python (NiceGUI / FastAPI process)
 ┌────────────────────────────────────────────────────┐      ┌──────────────────────────────────────────┐
-│ <wsi-grid>  one WebGL2 context, 1–16 panes          │      │ /wissi-viz router (mounted on NiceGUI's app) │
+│ <wissi-viz> one WebGL2 context, 1–16 panes          │      │ /wissi-viz router (mounted on NiceGUI's app) │
 │  ├ scheduler: coarse → centre-out → margin/predict  │ HTTP │  ├ memory LRU  (encoded tiles)            │
 │  ├ worker pool: fetch + decode off main thread      │◀────▶│  ├ disk cache  (survives restarts)        │
 │  ├ GPU texture LRU (shared by all panes, budgeted)  │      │  ├ in-flight coalescing                    │
-│  ├ shaders: RGB adjust / 8-channel uint16 composite │      │  ├ worker pool (per-thread file handles)   │
-│  └ annotations: bucket cull + LOD, instanced lines  │      │  └ PyramidSlide (fills pyramid gaps)       │
-└────────────────────────────────────────────────────┘      │       └ SlideSource: SVS │ CZI │ OpenSlide │
-                                                             │                     │ CallbackSource (APIs)│
+│  ├ shaders: RGB/stain unmixing / 8-ch uint16 compose│      │  ├ worker pool (per-thread file handles)   │
+│  └ annotations: bucket cull + LOD, colormaps        │      │  └ PyramidSlide (fills pyramid gaps)       │
+└────────────────────────────────────────────────────┘      │       └ SlideSource: tifffile │ czifile │      │
+                                                             │         SlideIO │ PathCore/HALO connectors │
+                                                             │ wissi_viz.objects / .spatial / .plots      │
                                                              └──────────────────────────────────────────┘
 ```
 
@@ -24,7 +27,7 @@ wissi-viz is a GPU-accelerated whole-slide image viewer for the browser.
 
 The slides sit next to the server, in Docker, and they are multi-GB files.
 
-- **Decoding belongs on the server.** Decoding has to happen where the bytes are: tifffile, libCZI and OpenSlide do it in native code, and the server's caches make each tile a one-time cost.
+- **Decoding belongs on the server.** Decoding has to happen where the bytes are: tifffile, czifile/imagecodecs and SlideIO do it in native code, and the server's caches make each tile a one-time cost.
 - **WASM would have to download the files.** A WASM decoder would need the whole file, or HTTP range reads, pulled into every browser.
 - **CZI's codecs are hard in WASM.** CZI uses JPEG-XR and zstd subblocks, which are painful to port.
 - **The GPU work is small.** It is texture upload, multi-channel compositing, contrast and gamma, and annotation geometry. WebGL2 shaders already do all of that, everywhere, including Safari and iPad.
@@ -34,8 +37,10 @@ The slides sit next to the server, in Docker, and they are multi-GB files.
 ## Install
 
 ```bash
-pip install -e ".[all]"      # czi + openslide + nicegui + uvicorn
-# or minimal: pip install -e .   (SVS/TIFF only)  and add extras: [czi] [openslide] [nicegui] [server]
+pip install -e ".[all]"      # viewer + analysis + extra formats + NiceGUI + server — all permissive
+pip install -e .             # minimal: SVS/TIFF/OME-TIFF/NDPI + CZI viewer
+# extras: [analysis] scipy/shapely/scikit-image/pandas · [io] pyarrow/anndata · [slideio] VSI/ZVI/DICOM/SCN/AFI
+#         [nicegui] · [server] uvicorn · [lgpl] OpenSlide + libCZI (opt-in, LGPL)
 ```
 
 ## Quick start (standalone server + demo page)
@@ -49,31 +54,39 @@ wissi-viz serve /data/slides --port 8010 --cache-dir /var/cache/wissi-viz
 
 ```html
 <script type="module" src="https://your-server/wissi-viz/static/index.js"></script>
-<wsi-grid api="https://your-server/wissi-viz" slides="slideA,slideB,slideC,slideD" layout="auto"></wsi-grid>
+<wissi-viz api="https://your-server/wissi-viz" slides="slideA,slideB,slideC,slideD" layout="auto"></wissi-viz>
 <script type="module">
-  const g = document.querySelector('wsi-grid');
+  const g = document.querySelector('wissi-viz');
   g.goTo(0, 15200, 9800, { magnification: 20 });            // level-0 px
   g.goTo('all', 1200, 800, { units: 'um', fovUm: 500 });    // microns, all panes
   g.setSync('all');                                         // linked navigation
+  g.setStain(1, 'hematoxylin');                             // GPU colour deconvolution (brightfield)
   g.addEventListener('objectclick', (e) => console.log(e.detail));
 </script>
 ```
+
+`<wsi-grid>` and `<wsi-viewer>` remain as aliases.
 
 ## NiceGUI / wissi
 
 ```python
 from nicegui import ui
-from wissi_viz.nicegui import WsiGrid, configure
+from wissi_viz.nicegui import WissiViz, configure
 
 registry = configure(cache_dir='/cache/wissi-viz')        # once at startup
 
 @ui.page('/viewer')
 def page():
-    grid = WsiGrid(['/data/a.svs', '/data/b.czi'], on_object_click=print).classes('w-full h-[85vh]')
+    grid = WissiViz(['/data/a.svs', '/data/b.czi'], on_object_click=print).classes('w-full h-[85vh]')
     ui.button('hotspot', on_click=lambda: grid.go_to(0, 15200, 9800, magnification=20))
 ```
 
-Routes mount on NiceGUI's own FastAPI app, so there is no extra port or process. The JavaScript is delivered through NiceGUI's ESM import map, and `window.path_prefix` (reverse-proxy subpaths) is respected. See `examples/nicegui_app.py` (a full UI) and `examples/wissi_integration.py` (Docker + HALOLink/PathCore adapters).
+Routes mount on NiceGUI's own FastAPI app, so there is no extra port or process. The JavaScript is delivered through NiceGUI's ESM import map, and `window.path_prefix` (reverse-proxy subpaths) is respected. `WsiGrid` remains as an alias.
+
+Examples:
+- `examples/analysis_app.py`: the analysis workbench (viewer plus every analysis).
+- `examples/nicegui_app.py`: a viewer UI.
+- `examples/wissi_integration.py`: Docker plus HALO Link/PathCore stubs.
 
 **Docker notes**
 - Mount a volume for `cache_dir`, so cached tiles survive restarts.
@@ -155,9 +168,70 @@ How it stays light with 16 slides × 10⁵–10⁶ objects:
 - Every drawing emits `draw` with GeoJSON in level-0 px.
 - With the `draw-layer` attribute set, drawings are also saved to that layer on the server.
 
+## Objects (cells, nuclei, detections)
+
+```python
+from wissi_viz import read_objects
+cells = read_objects('export.tsv', mpp=0.5)       # QuPath TSV/CSV, HALO object data, CellProfiler, Parquet,
+                                                  # QuPath GeoJSON, label mask (.tif), AnnData (.h5ad)
+cells.phenotype({'CD3': ('Cell: CD3 mean', 400), 'CD8': ('Cell: CD8 mean', 300), 'CK': ('Cell: PanCK mean', 600)},
+                rules={'CD8 T cell': {'CD3': True, 'CD8': True}, 'CD4 T cell': {'CD3': True, 'CD8': False},
+                       'Tumor': {'CK': True}})
+grid.show(slide_id, cells.to_layer(color_by='Nucleus: Ki67 mean', cmap='magma'))   # heat-coloured cells
+```
+
+- **Units:** coordinates in µm (detected from column names such as `Centroid X µm`) are converted to pixels with `mpp`. If the file is in µm and no `mpp` is given, it's an error, never a silent mix-up.
+- **HALO multiplex flags:** `<Marker> Positive Classification` columns become phenotypes such as `CD3+CD8+`.
+- **Measurements:** measurement columns travel with the layer, so clicking any cell shows them.
+
+## Spatial analysis
+
+`wissi_viz.spatial` (install the `[analysis]` extra). Every function works in µm and returns:
+- `.table`, a DataFrame;
+- `.layer()`, a slide overlay;
+- `.plot()`, an ECharts option dict (`ui.echart(r.plot())`).
+
+`grid.show(slide, result)` overlays a result. Results replace each other in a group (`replace=False` stacks them).
+
+| Function | What it measures | Overlay |
+|---|---|---|
+| `nearest_neighbors(objs, A, B)` | distance from each A to the nearest B | line to the nearest B, coloured by distance |
+| `proximity(objs, A, B, r)` | number of B within r µm of each A (infiltration, engagement) | A coloured by count |
+| `distance_to_roi`, `margin_bands`, `infiltration_profile` | signed distance to a boundary, invasive-margin bands, density against distance | bands coloured by distance |
+| `roi_composition(objs, rois, whole=tissue)` | per ROI: counts, % of ROI, density /mm², **% of whole** (part of whole), area share | ROI outlines or a choropleth; stacked-bar and sunburst charts |
+| `density_grid(objs, cls, cell_um, denominator=…, hotspots=True)` | hex/square density or ratio maps, Getis-Ord Gi* hot and cold spots | heat map, hotspot layer |
+| `ripley(objs, A, B=None, area=…)` | K, L, H, g(r), with border correction and a CSR simulation envelope | H(r) and g(r) charts |
+| `neighborhood_enrichment(objs, r)` | class co-location z-scores (label permutation) | heat map |
+| `cellular_neighborhoods(objs, k, n)` | kNN-composition niches (Schürch et al. 2020) | cells coloured by niche |
+| `delaunay_graph(objs, max_edge_um)` | cell–cell contact graph, contact matrix, degree | edges coloured by class pair |
+| `morans_i(objs, column)` | spatial autocorrelation of a measurement | — |
+| `h_score`, `positivity`, `ObjectTable.intensity_bins` | IHC 0/1+/2+/3+, H-score, % positive per ROI | cells by bin |
+| `tissue_mask(source)` | tissue detection, brightfield or fluorescence | tissue outline |
+| `estimate_stain_vectors(source)` | Macenko H&E or H-DAB vectors | used by `set_stain` |
+
+**Validation** (`tests/test_spatial.py`):
+- **Exact checks:**
+  - Nearest neighbours and proximity match brute force.
+  - Margin-band areas match the closed-form geometry.
+  - Composition shares add up to 100%.
+  - Moran's I matches the dense-matrix formula.
+  - Each object lands in exactly one grid cell.
+- **Planted patterns:**
+  - Ripley separates CSR, clustered and lattice patterns.
+  - Enrichment finds planted pairs, and nothing in a random null.
+  - Cellular neighbourhoods recover two planted regions (> 95% agreement).
+  - Tissue detection reaches IoU > 0.97.
+  - Macenko recovers H&E vectors within 6°.
+
+On 120k cells, each analysis takes 0.01–4 s.
+
+**GPU colour deconvolution.** `set_stain(pane, 'hematoxylin' | 'eosin' | 'dab' | 'residual' | 'fluorescence')` unmixes brightfield pixels in the fragment shader (Ruifrok & Johnston). It uses preset vectors or per-slide Macenko vectors (`await grid.auto_stain(pane)`). It needs no re-tiling and no extra server work. 'fluorescence' shows hematoxylin and the second stain as two pseudo-fluorescence channels.
+
+**Colour by value.** `layer.color_by(values | column, cmap, vmin, vmax, log=…)` works on any layer. The colormaps are viridis, magma, inferno, plasma, cividis, turbo, coolwarm, RdBu and others, embedded without matplotlib. Each pane shows a legend of the visible layers.
+
 ## Navigation API
 
-| JS (`<wsi-grid>`) | Python (`WsiGrid`) | |
+| JS (`<wissi-viz>`) | Python (`WissiViz`) | |
 |---|---|---|
 | `setSlides([...])`, `setSlide(i, ref)` | `set_slides`, `set_slide` | 1–16 panes; ref = id / URL / `{slide, view, channels, layers}` |
 | `setLayout('auto'\|'4x4'\|'3x4')` | `set_layout` | |
@@ -167,6 +241,8 @@ How it stays light with 16 slides × 10⁵–10⁶ objects:
 | `setSync('none'\|'all'\|'pan'\|'zoom')` | `set_sync` | linked in µm when calibrated |
 | `setChannel(pane, i, {visible,color,min,max,gamma})`, `setAdjust` | `set_channel`, `set_adjust` | |
 | `setLayerVisible`, `setLayerStyle`, `setClassVisible`, `select` | same, snake_case | |
+| `setStain(pane, mode, {preset, vectors})` | `set_stain`, `await auto_stain(pane)` | brightfield colour deconvolution |
+| — | `show(slide, result_or_layer, group=…, replace=…)` | overlay analysis results |
 
 **Events:** `viewchange` (throttled), `paneclick`, `objectclick`, `draw`, `activepane`, `slideload`.
 
@@ -177,7 +253,8 @@ How it stays light with 16 slides × 10⁵–10⁶ objects:
 **Server**
 - **Two cache tiers.** An in-memory LRU of encoded tiles (default 1 GB), plus a disk cache (default 20 GB, trimmed by age). Tile URLs carry the slide version, so they are sent with `Cache-Control: immutable` and the browser's HTTP cache holds them too.
 - **Coalescing.** If many panes or users ask for the same tile, it is decoded once.
-- **Parallel reads.** Each worker thread has its own reader (tifffile/zarr, libCZI, OpenSlide), so decoding uses every core.
+- **Parallel reads.** Each worker thread has its own reader (tifffile/zarr, czifile, SlideIO), so decoding uses every core.
+- **CZI.** The reader decodes only the subblocks that intersect a tile, straight from their raw bytes through imagecodecs (zstd, JPEG-XR, JPEG, LZW). The CZI's own pyramid subblocks become native levels. Decoded subblocks are kept in an LRU, so the ~16 tiles inside one 2048² subblock decode it once (cold tile ~15–30 ms, cached tile ~0.1 ms). It is pixel-identical to libCZI on every tile tested.
 - **Pyramid gaps.** `PyramidSlide` inserts virtual 2× levels wherever native levels are more than 4× apart, and below the coarsest level. Each virtual tile is a box-filtered 2×2 mosaic of the level beneath, memoised. A slide with *no* pyramid therefore zooms out by touching each pixel once.
 - **Warming.** The coarse levels are pre-rendered in the background, pausing whenever an interactive request is in flight.
 - **Fluorescence data.** Raw uint16 tiles (zlib) are sent, never 8-bit JPEGs, so contrast, gamma and colour are applied exactly on the GPU.
@@ -193,16 +270,37 @@ How it stays light with 16 slides × 10⁵–10⁶ objects:
 - Cold CZI tiles were produced at about 17 ms each with 6 requests in parallel.
 - With 16 linked panes being panned, a frame took 7 ms median of JavaScript and rasterisation.
 
+## Licences
+
+| Install | Licence | Contents |
+|---|---|---|
+| core | BSD-3 / MIT / ISC / HPND | numpy, fastapi (starlette, pydantic), tifffile, zarr, imagecodecs, czifile, pillow, mapbox-earcut |
+| `[analysis]` | BSD-3 | scipy, shapely, scikit-image, pandas |
+| `[io]` | Apache-2.0 / BSD-3 | pyarrow, anndata |
+| `[slideio]` | BSD-3 (bundles OpenCV Apache-2.0, DCMTK BSD-3, OpenJPEG BSD-2) | SlideIO |
+| `[nicegui]`, `[server]` | MIT / BSD-3 | NiceGUI (bundles ECharts, Apache-2.0), uvicorn |
+| **`[lgpl]` (opt-in)** | **LGPL-2.1 / LGPL-3** | OpenSlide (MRXS, BIF), pylibCZIrw (libCZI) |
+
+- **The audit test:** `tests/test_licenses.py` reads the installed metadata and fails if a core or permissive extra pulls in a GPL, LGPL, MPL or similar licence. It also checks that importing the core never loads an LGPL module.
+- **The colormaps** are CC0 (viridis family), Apache-2.0 (turbo) or public domain (coolwarm).
+- **Formats that need the LGPL extra:** only MRXS (3DHistech) and BIF (Ventana). Everything else has a permissive reader.
+
 ## Tests
 
 ```bash
-pip install -e ".[all,dev]" && pytest -q tests
-python tests/make_test_data.py /tmp/wsi --size 16000   # synthetic SVS + 3-channel CZI + 120k cell GeoJSON
+pip install -e ".[all,dev]" && pytest -q tests                      # 51 tests
+python tests/make_test_data.py /tmp/wsi --size 16000                # synthetic SVS + 3-channel CZI + 120k cell GeoJSON
+python tests/make_analysis_data.py /tmp/wsi                         # QuPath-style multiplex cell table + ROIs
+python examples/analysis_app.py /tmp/wsi/synthetic_he.svs /tmp/wsi/synthetic_he_cells.tsv /tmp/wsi/synthetic_he_rois.geojson
 ```
 
 ## Limits and next steps
 
-- **Test data.** Verified on synthetic Aperio-style SVS, CZI (2- and 3-channel uint16) and tiled TIFF/OME-TIFF files, and against mock PathCore/HALO Link connectors. It has not yet been run against real scanner files or live PathCore/HALO Link endpoints. The connectors are stubs, and their method bodies come from your app.
+- **Test data.**
+  - Verified on synthetic Aperio-style SVS, CZI (mosaic with overlap, pyramid subblocks, RGB and multichannel uint16), tiled TIFF/OME-TIFF, and mock PathCore/HALO Link connectors.
+  - The analyses were validated on synthetic cell tables with planted biology.
+  - It has not yet been run on real scanner files, real QuPath/HALO exports or live PathCore/HALO Link endpoints.
+- **Analysis scale.** Ripley simulations subsample to 20k points, and contact graphs and NN-line overlays cap the number of drawn edges. All the numbers in the tables use every object.
 - **Channels.** At most 8 channels are composited per pane at once. CZI Z and T planes are chosen when the source is created (`CziSource(path, z=, t=)`); there is no Z slider yet.
 - **Annotation editing.** Drawings are saved as new features. Editing or deleting existing vertices in the browser is not implemented.
 - **Possible additions:** a minimap/navigator, a WebGPU renderer, and a density heat-map LOD for more than 5 M objects.

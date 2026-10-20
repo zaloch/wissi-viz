@@ -153,7 +153,7 @@ class NNResult:
         if len(idx) > max_lines:
             idx = np.random.default_rng(0).choice(idx, max_lines, replace=False)
         L = AnnotationLayer(name=name or f'NN {self.source} → {self.target}', line_width=line_width, fill_opacity=0,
-                            detail_min_px=0)
+                            detail_min_px=4, overview='none')
         s, t = self.src_idx[idx], self.tgt_idx[idx]
         for a, b in zip(s, t):
             L.add_polyline([[o.x[a], o.y[a]], [o.x[b], o.y[b]]])
@@ -713,7 +713,20 @@ def cellular_neighborhoods(objs: ObjectTable, k: int = 10, n_neighborhoods: int 
     remap[order] = np.arange(n_neighborhoods)
     lab = remap[lab]
     cent = cent[order]
-    names = [f'CN{i + 1}: {cls[int(np.argmax(cent[i]))]}-rich' for i in range(n_neighborhoods)]
+    overall = comp.mean(0) + 1e-9
+    names = []
+    for i in range(n_neighborhoods):
+        dom = int(np.argmax(cent[i]))
+        enr = cent[i] / overall
+        enr[dom] = 0
+        top = int(np.argmax(enr))
+        tag = f'{cls[dom]}' + (f' + {cls[top]}↑' if enr[top] > 1.25 and cent[i, top] > 0.05 else '')
+        names.append(f'CN{i + 1}: {tag}')
+    seen: dict[str, int] = {}
+    for i, nm in enumerate(names):  # keep labels unique
+        seen[nm] = seen.get(nm, 0) + 1
+        if seen[nm] > 1:
+            names[i] = f'{nm} ({seen[nm]})'
     return NeighborhoodResult(lab, cent, cls, names, objs)
 
 
@@ -749,7 +762,8 @@ class GraphResult:
         if len(e) > max_edges:
             e = e[np.random.default_rng(0).choice(len(e), max_edges, replace=False)]
         style.setdefault('line_width', 1)
-        style.setdefault('detail_min_px', 0)
+        style.setdefault('detail_min_px', 3)
+        style.setdefault('overview', 'none')
         L = AnnotationLayer(name=name, fill_opacity=0, **style)
         if by == 'pair' and o.classes is not None:
             for i, j in e:

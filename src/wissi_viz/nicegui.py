@@ -85,6 +85,7 @@ class WissiViz(Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'},
         self.prefix = prefix
         #: latest view per pane (updated from the browser, throttled)
         self.views: dict[int, dict] = {}
+        self._groups: dict[str, list[str]] = {}
         self.active_pane = 0
         self._props['api'] = prefix
         self._props['slides'] = [self._ref(s) for s in slides]
@@ -223,6 +224,55 @@ class WissiViz(Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'},
         opts = {k: v for k, v in dict(brightness=brightness, contrast=contrast, gamma=gamma, invert=invert).items()
                 if v is not None}
         return self._call('setAdjust', pane, opts)
+
+    def set_stain(self, pane, mode: str = 'off', *, preset: str | None = None, vectors: dict | None = None,
+                  scale: float | None = None, colors: list[str] | None = None):
+        """Brightfield colour deconvolution on the GPU: ``mode`` = 'off' | 'hematoxylin' | 'eosin' | 'dab' |
+        'residual' | 'fluorescence' (pseudo-IF composite). ``preset`` 'HE' / 'HDAB', or ``vectors`` from
+        :func:`wissi_viz.spatial.estimate_stain_vectors` (Macenko) for this slide's staining."""
+        opts = {k: v for k, v in dict(preset=preset, vectors=vectors, scale=scale, colors=colors).items() if v is not None}
+        return self._call('setStain', pane, mode, opts)
+
+    async def auto_stain(self, pane: int, mode: str = 'hematoxylin', slide: str | None = None) -> dict:
+        """Estimate this slide's stain vectors (Macenko) and apply them to ``pane``."""
+        from nicegui import run
+
+        from .spatial import estimate_stain_vectors
+        sid = slide or self._slide_of(pane)
+        _, pyr = self.registry.get(sid)
+        vec = await run.io_bound(estimate_stain_vectors, pyr.source)
+        self.set_stain(pane, mode, vectors=vec)
+        return vec
+
+    def show(self, slide: str, item: Any, name: str | None = None, group: str | None = 'analysis',
+             replace: bool = True, **layer_kw) -> AnnotationLayer:
+        """Overlay an analysis result (anything with ``.layer()``), an ObjectTable, or a layer on ``slide``.
+        Every viewer showing that slide updates. Layers shown with the same ``group`` replace each other
+        in this viewer (previous ones are hidden, not deleted); ``replace=False`` joins the group without
+        hiding the others (e.g. hotspots on top of a density map); ``group=None`` just adds."""
+        if hasattr(item, 'to_layer') and not hasattr(item, 'layer'):
+            layer = item.to_layer(name=name, **layer_kw)
+        elif hasattr(item, 'layer') and callable(item.layer):
+            layer = item.layer(**({'name': name} if name else {}), **layer_kw)
+        else:
+            layer = item
+        if name:
+            layer.name = name
+        out = self.registry.add_annotations(self._ref(slide), layer)
+        if group is not None:
+            members = self._groups.setdefault(group, [])
+            for other in (members if replace else []):
+                if other != layer.name:
+                    self.set_layer_visible('all', other, False)
+            if layer.name in members:
+                members.remove(layer.name)
+            members.append(layer.name)
+            self.set_layer_visible('all', layer.name, True)
+        return out
+
+    def _slide_of(self, pane: int) -> str:
+        s = self._props['slides'][pane]
+        return s.get('slide') if isinstance(s, dict) else s
 
     def set_layer_visible(self, pane, layer: str, visible: bool = True):
         return self._call('setLayerVisible', pane, layer, visible)

@@ -1,17 +1,23 @@
-"""wissi-viz — GPU-accelerated whole-slide image viewer for the browser and NiceGUI.
+"""wissi-viz — GPU-accelerated whole-slide image viewer and spatial-analysis toolkit for
+brightfield and fluorescence histology, for the browser and NiceGUI.
 
-* Readers: SVS / pyramidal TIFF / OME-TIFF (tifffile), CZI (pylibCZIrw), anything OpenSlide reads,
-  and API-backed slides (PathCore, HALOLink, …) via :class:`CallbackSource`.
-* Annotations: GeoJSON, Aperio XML, HALO .annotations, CZI graphics, or built in Python.
-* Front end: a dependency-free WebGL2 web component (``<wsi-grid>``) that shows 1–16 slides in one
-  GPU context, and a NiceGUI element (:class:`wissi_viz.nicegui.WsiGrid`).
+* Readers (permissive): SVS / pyramidal TIFF / OME-TIFF / NDPI (tifffile), CZI (czifile), VSI / ZVI /
+  DICOM / SCN / AFI (SlideIO, optional), PathCore / HALO Link via connector stubs. Opt-in LGPL extras:
+  OpenSlide (MRXS, BIF) and libCZI.
+* Objects & annotations: QuPath, HALO, CellProfiler, GeoJSON, Aperio/HALO XML, label masks, AnnData.
+* Analysis (:mod:`wissi_viz.spatial`): nearest neighbours, proximity, margins, composition, density /
+  hotspots, Ripley, co-location, cellular neighbourhoods, contact graphs, Moran's I, IHC scoring,
+  tissue detection, stain vectors — each with a slide overlay and an ECharts plot.
+* Front end: a dependency-free WebGL2 web component (``<wissi-viz>``) showing 1–16 slides in one GPU
+  context, and a NiceGUI element (:class:`wissi_viz.nicegui.WissiViz`).
 """
 from .annotations import AnnotationLayer
+from .objects import ObjectTable, read_objects
 from .registry import SlideRegistry
 from .server import create_app, create_router
 from .sources import CallbackSource, Channel, Level, SlideInfo, SlideSource, open_slide
 from .tiles import TileService
 
-__version__ = '0.2.0'
-__all__ = ['AnnotationLayer', 'SlideRegistry', 'create_app', 'create_router', 'CallbackSource', 'Channel', 'Level',
-           'SlideInfo', 'SlideSource', 'open_slide', 'TileService']
+__version__ = '0.3.0'
+__all__ = ['AnnotationLayer', 'ObjectTable', 'read_objects', 'SlideRegistry', 'create_app', 'create_router',
+           'CallbackSource', 'Channel', 'Level', 'SlideInfo', 'SlideSource', 'open_slide', 'TileService']

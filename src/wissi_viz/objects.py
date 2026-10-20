@@ -25,7 +25,7 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from .annotations import AnnotationLayer, _columns_of, _find_col, _norm_col
+from .annotations import POINT, POLYGON, AnnotationLayer, _box_rings, _columns_of, _find_col, _norm_col, _ring
 
 _UM = re.compile(r'(µm|μm|\bum\b|micron)', re.I)
 
@@ -165,16 +165,19 @@ class ObjectTable:
         cls = list(self.classes) if self.classes is not None else None
         if shape == 'auto':
             shape = 'outline' if self.outlines is not None else ('ellipse' if self.bbox is not None else 'point')
+        # classes given here fix both colour and legend order (e.g. 0 / 1+ / 2+ / 3+)
+        L = AnnotationLayer(name=name, classes=dict(classes or {}), **{k: v for k, v in style.items() if k != 'radius'})
+        n = len(self)
+        labels = cls if cls is not None else [None] * n
         if shape == 'outline' and self.outlines is not None:
-            L = AnnotationLayer.from_polygons(self.outlines, classes=cls, name=name, **style)
+            L._bulk(POLYGON, [_ring(p, closed=True) for p in self.outlines], labels, None, None)
         elif shape in ('ellipse', 'rect') and self.bbox is not None:
             b = self.bbox
-            L = AnnotationLayer.from_boxes(b[:, 0], b[:, 1], b[:, 2], b[:, 3], classes=cls, shape=shape, name=name, **style)
+            L._bulk(POLYGON, _box_rings(b[:, 0], b[:, 1], b[:, 2], b[:, 3], shape), labels, None, None)
         else:
-            r = style.pop('radius', 0.0)
-            L = AnnotationLayer.from_points(self.xy, classes=cls, radius=r, name=name, **style)
-        if classes:
-            L.classes.update(classes)
+            xy = self.xy.astype(np.float32)
+            r = np.broadcast_to(np.asarray(style.get('radius', 0.0), np.float32), (n,))
+            L._bulk(POINT, [xy[i:i + 1] for i in range(n)], labels, r, None)
         L._columns = {k: v for k, v in list(self.columns.items())[:max_columns]}
         if color_by is not None:
             L.color_by(self.column(color_by) if isinstance(color_by, str) else color_by, cmap=cmap,

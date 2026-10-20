@@ -76,6 +76,9 @@ class AnnotationLayer:
     detail_min_px: float = 6.0
     #: draw order across layers (higher on top); default: layers of smaller objects first
     z: float | None = None
+    #: zoomed-out stand-in for features below ``detail_min_px``: 'points' (a dot each) or 'none' (hidden —
+    #: right for lines/edges, which mean nothing as dots)
+    overview: str = 'points'
 
     def __post_init__(self) -> None:
         self._lock = threading.RLock()
@@ -204,18 +207,9 @@ class AnnotationLayer:
                    shape: str = 'ellipse', name: str = 'objects', props: Sequence[dict] | None = None,
                    **kw) -> 'AnnotationLayer':
         """Cell/object bounding boxes, e.g. HALO object-data exports (XMin, XMax, YMin, YMax)."""
-        x0, y0, x1, y1 = (np.asarray(a, np.float32) for a in (xmin, ymin, xmax, ymax))
-        if shape == 'ellipse':
-            t = np.linspace(0, 2 * np.pi, 12, endpoint=False)
-            cx, cy, rx, ry = (x0 + x1) / 2, (y0 + y1) / 2, (x1 - x0) / 2, (y1 - y0) / 2
-            xs = cx[:, None] + rx[:, None] * np.cos(t)[None]
-            ys = cy[:, None] + ry[:, None] * np.sin(t)[None]
-        else:
-            xs = np.stack([x0, x1, x1, x0], 1)
-            ys = np.stack([y0, y0, y1, y1], 1)
-        pts = np.stack([xs, ys], 2).astype(np.float32)
         layer = cls(name=name, **kw)
-        layer._bulk(POLYGON, list(pts), _broadcast(classes, len(pts)), None, props)
+        layer._bulk(POLYGON, _box_rings(xmin, ymin, xmax, ymax, shape), _broadcast(classes, len(np.atleast_1d(xmin))),
+                    None, props)
         return layer
 
     @classmethod
@@ -499,7 +493,7 @@ class AnnotationLayer:
                 'colormap': self.colormap,
                 'style': {'line_width': self.line_width, 'fill_opacity': self.fill_opacity,
                           'point_size': self.point_size, 'visible': self.visible,
-                          'detail_min_px': self.detail_min_px, 'z': self.z}}
+                          'detail_min_px': self.detail_min_px, 'z': self.z, 'overview': self.overview}}
 
     def overview_bytes(self) -> bytes:
         return self.compiled().overview(self.meta())
@@ -698,6 +692,19 @@ def _looks_tabular(data: Any) -> bool:
             isinstance(v, (list, tuple, np.ndarray)) for v in data.values()):
         return True
     return False
+
+
+def _box_rings(xmin, ymin, xmax, ymax, shape: str = 'ellipse') -> list[np.ndarray]:
+    x0, y0, x1, y1 = (np.asarray(a, np.float32) for a in (xmin, ymin, xmax, ymax))
+    if shape == 'ellipse':
+        t = np.linspace(0, 2 * np.pi, 12, endpoint=False)
+        cx, cy, rx, ry = (x0 + x1) / 2, (y0 + y1) / 2, (x1 - x0) / 2, (y1 - y0) / 2
+        xs = cx[:, None] + rx[:, None] * np.cos(t)[None]
+        ys = cy[:, None] + ry[:, None] * np.sin(t)[None]
+    else:
+        xs = np.stack([x0, x1, x1, x0], 1)
+        ys = np.stack([y0, y0, y1, y1], 1)
+    return list(np.stack([xs, ys], 2).astype(np.float32))
 
 
 def _xml_root(src: Any) -> tuple[ET.Element, str]:

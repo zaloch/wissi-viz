@@ -5,7 +5,7 @@ behind PathCore / HALOLink / any other API — is a :class:`SlideSource`.
 
 A source only has to describe its pyramid (:class:`SlideInfo`) and return pixels
 for a region of one pyramid level. Everything else (tiling, caching, encoding,
-HTTP, GPU rendering) is handled by wsiviz.
+HTTP, GPU rendering) is handled by wissi-viz.
 """
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ class SlideInfo:
     tile_size: int = 512
     background: str = '#ffffff'
     #: Optional: the browser fetches tiles directly from this URL template instead of
-    #: from the wsiviz server. Placeholders: {level} {x} {y} {c} {z}. Use this when an
+    #: from the wissi-viz server. Placeholders: {level} {x} {y} {c} {z}. Use this when an
     #: external service (e.g. a tile endpoint that already accepts browser auth) can
     #: serve tiles laid out exactly like this pyramid.
     tile_url: str | None = None

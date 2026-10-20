@@ -1,4 +1,4 @@
-"""Zeiss CZI reader built on pylibCZIrw (libCZI).
+"""Zeiss CZI reader built on pylibCZIrw (libCZI) — **LGPL-3**, optional (``pip install wissi-viz[lgpl]``).
 
 libCZI composes any region at any zoom, using the file's own pyramid subblocks when
 present. We expose a power-of-two pyramid and keep one reader per worker thread.
@@ -8,14 +8,14 @@ from __future__ import annotations
 import os
 import threading
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 
-from .base import DEFAULT_CHANNEL_COLORS, Channel, SlideInfo, SlideSource, _fit
+from . import czi_meta
+from .base import Channel, SlideInfo, SlideSource, _fit
 
 
-class CziSource(SlideSource):
+class LibCziSource(SlideSource):
     extensions = ('.czi',)
 
     def __init__(self, path: str | os.PathLike, tile_size: int = 512, scene: int | None = None,
@@ -107,49 +107,9 @@ class CziSource(SlideSource):
             self._readers.clear()
 
 
-def _get(d: Any, *keys):
-    for k in keys:
-        if not isinstance(d, dict):
-            return None
-        d = d.get(k)
-    return d
-
-
-def _as_list(v):
-    return v if isinstance(v, list) else ([] if v is None else [v])
-
-
-def _argb_to_hex(s: str | None) -> str | None:
-    if not s or not s.startswith('#'):
-        return None
-    s = s[1:]
-    if len(s) == 8:
-        s = s[2:]
-    return '#' + s.lower() if len(s) == 6 else None
+def _mpp(meta):
+    return czi_meta.mpp(meta)
 
 
 def _channel_meta(meta, n):
-    md = _get(meta, 'ImageDocument', 'Metadata') or {}
-    disp = _as_list(_get(md, 'DisplaySetting', 'Channels', 'Channel'))
-    info = _as_list(_get(md, 'Information', 'Image', 'Dimensions', 'Channels', 'Channel'))
-    names, colors = [], []
-    for c in range(n):
-        d = disp[c] if c < len(disp) else {}
-        i = info[c] if c < len(info) else {}
-        names.append((d or {}).get('@Name') or (i or {}).get('@Name') or f'Channel {c + 1}')
-        colors.append(_argb_to_hex((d or {}).get('Color') or (i or {}).get('Color'))
-                      or DEFAULT_CHANNEL_COLORS[c % len(DEFAULT_CHANNEL_COLORS)])
-    return names, colors
-
-
-def _mpp(meta):
-    items = _as_list(_get(meta, 'ImageDocument', 'Metadata', 'Scaling', 'Items', 'Distance'))
-    vals = {}
-    for it in items:
-        try:
-            vals[it['@Id']] = float(it['Value']) * 1e6
-        except Exception:
-            pass
-    if vals.get('X'):
-        return (vals['X'], vals.get('Y') or vals['X'])
-    return None
+    return czi_meta.channel_meta(meta, n)

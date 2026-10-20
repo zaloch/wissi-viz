@@ -1,5 +1,5 @@
 // NiceGUI (Vue) wrapper around the <wsi-grid> web component.
-import { WsiGrid } from "wsiviz";
+import { WsiGrid } from "wissi-viz";
 
 const EVENTS = ["viewchange", "paneclick", "objectclick", "draw", "activepane", "slideload"];
 

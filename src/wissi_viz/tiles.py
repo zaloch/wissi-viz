@@ -56,7 +56,7 @@ def encode_rgb(arr: np.ndarray, fmt: str = 'jpeg', quality: int = 85) -> tuple[b
 def encode_channel(arr: np.ndarray, dtype: str) -> tuple[bytes, str]:
     """Raw little-endian samples, zlib-compressed. The browser inflates with DecompressionStream."""
     a = np.ascontiguousarray(arr, dtype='<u2' if dtype == 'uint16' else 'u1')
-    return zlib.compress(a.tobytes(), 1), 'application/x-wsiviz-raw'
+    return zlib.compress(a.tobytes(), 1), 'application/x-wissi-raw'
 
 
 # ---------------------------------------------------------------- pyramid normalisation
@@ -195,7 +195,7 @@ class MemoryCache:
                 'hits': self.hits, 'misses': self.misses}
 
 
-_EXT = {'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/png': 'png', 'application/x-wsiviz-raw': 'raw'}
+_EXT = {'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/png': 'png', 'application/x-wissi-raw': 'raw'}
 _MT = {v: k for k, v in _EXT.items()}
 
 
@@ -267,8 +267,8 @@ class TileService:
         self.memory = MemoryCache(memory_bytes)
         self.disk = DiskCache(disk_dir, disk_bytes) if disk_dir else None
         self.pool = ThreadPoolExecutor(max_workers=workers or min(32, (os.cpu_count() or 4) * 2),
-                                       thread_name_prefix='wsiviz-tile')
-        self.warm_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix='wsiviz-warm')
+                                       thread_name_prefix='wissi-viz-tile')
+        self.warm_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix='wissi-viz-warm')
         self._inflight: dict[str, Future] = {}
         self._lock = threading.Lock()
         self.jpeg_quality = jpeg_quality

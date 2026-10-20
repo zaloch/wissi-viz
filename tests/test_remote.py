@@ -15,9 +15,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from mock_remote import MockHaloLink, MockPathCore, _Backing  # noqa: E402
 
-from wsiviz import SlideRegistry, TileService  # noqa: E402
-from wsiviz.connectors import RemoteError, RemoteImageInfo, RemotePyramid, RemoteSlideSource, TileNotFound  # noqa: E402
-from wsiviz.sources.callback import _decode  # noqa: E402
+from wissi_viz import SlideRegistry, TileService  # noqa: E402
+from wissi_viz.connectors import RemoteError, RemoteImageInfo, RemotePyramid, RemoteSlideSource, TileNotFound  # noqa: E402
+from wissi_viz.sources.callback import _decode  # noqa: E402
 
 
 @pytest.fixture(scope='module')
@@ -168,7 +168,7 @@ def test_annotations_from_api(svs):
 def test_http_info_and_upstream_errors(svs):
     from fastapi.testclient import TestClient
 
-    from wsiviz import create_app
+    from wissi_viz import create_app
     reg = SlideRegistry(warm=False)
     sid = MockHaloLink(svs).register(reg, 'x')
 
@@ -179,12 +179,12 @@ def test_http_info_and_upstream_errors(svs):
             raise ConnectionError('upstream down')
     bad = Down(svs).register(reg, 'down')
     c = TestClient(create_app(reg))
-    info = c.get(f'/wsiviz/slides/{sid}/info.json').json()
+    info = c.get(f'/wissi-viz/slides/{sid}/info.json').json()
     assert info['overlap'] == 1 and info['levels'][0]['remote_level'] == '12'
     assert all(not lv['virtual'] for lv in info['levels'])
-    r = c.get(f'/wsiviz/slides/{sid}/tiles/0/1/1?v={info["version"]}')
+    r = c.get(f'/wissi-viz/slides/{sid}/tiles/0/1/1?v={info["version"]}')
     assert r.status_code == 200 and r.headers['content-type'] == 'image/jpeg'
-    assert c.get(f'/wsiviz/slides/{bad}/tiles/0/0/0').status_code == 502
+    assert c.get(f'/wissi-viz/slides/{bad}/tiles/0/0/0').status_code == 502
 
 
 def test_async_client_on_bound_loop(svs):

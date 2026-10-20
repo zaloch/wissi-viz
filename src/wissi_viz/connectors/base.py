@@ -1,4 +1,4 @@
-"""Connector base: the contract between wsiviz and *your* already-authenticated API client.
+"""Connector base: the contract between wissi-viz and *your* already-authenticated API client.
 
 Subclass :class:`RemoteConnection` (or the PathCore / HALOLink stubs, which only add
 naming and defaults), implement the methods marked **required**, and register slides:
@@ -8,7 +8,7 @@ naming and defaults), implement the methods marked **required**, and register sl
     grid.set_slide(0, sid)
 
 Methods may be plain functions or ``async def`` — both work. Raise
-:class:`~wsiviz.sources.remote.TileNotFound` (or return ``None``) for "no tile here".
+:class:`~wissi_viz.sources.remote.TileNotFound` (or return ``None``) for "no tile here".
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ import numpy as np
 from ..annotations import AnnotationLayer
 from ..sources.remote import RemoteImageInfo, RemotePyramid, RemoteSlideSource, TileNotFound, resolve
 
-log = logging.getLogger('wsiviz.connectors')
+log = logging.getLogger('wissi_viz.connectors')
 
 __all__ = ['RemoteConnection', 'RemoteImageInfo', 'RemotePyramid', 'AnnotationPayload', 'TileNotFound']
 
@@ -123,7 +123,7 @@ class RemoteConnection:
 
     def register(self, registry, image_id: str, name: str | None = None, slide_id: str | None = None,
                  lazy: bool = True) -> str:
-        """Add the image to a :class:`~wsiviz.SlideRegistry`. With ``lazy=True`` nothing is fetched
+        """Add the image to a :class:`~wissi_viz.SlideRegistry`. With ``lazy=True`` nothing is fetched
         until a viewer opens it. Returns the slide id to pass to ``WsiGrid``."""
         sid = slide_id or self.slide_id(image_id)
         if lazy:

@@ -1,4 +1,4 @@
-"""OpenSlide reader (MRXS, NDPI, VMS, SCN, BIF, …). Optional: ``pip install wsiviz[openslide]``."""
+"""OpenSlide reader (MRXS, NDPI, VMS, SCN, BIF, …). Optional: ``pip install wissi-viz[openslide]``."""
 from __future__ import annotations
 
 import os

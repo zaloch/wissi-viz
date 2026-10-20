@@ -21,8 +21,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from wsiviz.connectors import AnnotationPayload, HaloLinkConnection, PathCoreConnection, RemoteImageInfo
-from wsiviz.sources import open_slide
+from wissi_viz.connectors import AnnotationPayload, HaloLinkConnection, PathCoreConnection, RemoteImageInfo
+from wissi_viz.sources import open_slide
 
 
 class _Backing:
@@ -63,6 +63,7 @@ class MockHaloLink(HaloLinkConnection):
         self.b = _Backing(slide_path)
         self.geojson_path = geojson_path
         self.fail_rate = fail_rate
+        self._rng = random.Random(0)  # deterministic failures
         self.calls = 0
         self.active = 0
         self.max_active = 0
@@ -81,7 +82,7 @@ class MockHaloLink(HaloLinkConnection):
             self.active += 1
             self.max_active = max(self.max_active, self.active)
         try:
-            if self.fail_rate and random.random() < self.fail_rate:
+            if self.fail_rate and self._rng.random() < self.fail_rate:
                 raise ConnectionError('transient upstream error')
             ds = 2 ** (self.max_level - int(level))
             lw, lh = math.ceil(self.W / ds), math.ceil(self.H / ds)

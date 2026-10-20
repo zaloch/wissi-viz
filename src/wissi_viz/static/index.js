@@ -1,7 +1,7 @@
-// wsiviz — GPU whole-slide image grid viewer (WebGL2, zero dependencies).
+// wissi-viz — GPU whole-slide image grid viewer (WebGL2, zero dependencies).
 //
-//   <script type="module" src="/wsiviz/static/index.js"></script>
-//   <wsi-grid api="/wsiviz" slides="slideA,slideB,slideC,slideD"></wsi-grid>
+//   <script type="module" src="/wissi-viz/static/index.js"></script>
+//   <wsi-grid api="/wissi-viz" slides="slideA,slideB,slideC,slideD"></wsi-grid>
 //
 // One WebGL2 context renders 1–16 panes (browsers cap live contexts at ~16, so one
 // context per slide would not scale). All panes share a GPU texture LRU, a worker pool
@@ -21,7 +21,7 @@ function hexToRgb(h) {
 const rgbToHex = (c) => '#' + c.map((v) => Math.round(clamp(v, 0, 1) * 255).toString(16).padStart(2, '0')).join('');
 
 // ------------------------------------------------------------------ fetch + decode (worker)
-async function wsivizLoad(url, kind, signal) {
+async function wissiLoad(url, kind, signal) {
   const r = await fetch(url, { signal, credentials: 'same-origin' });
   if (!r.ok) throw new Error('HTTP ' + r.status);
   if (kind === 'image') {
@@ -32,7 +32,7 @@ async function wsivizLoad(url, kind, signal) {
   if (kind === 'raw') {
     const ct = r.headers.get('content-type') || '';
     let buf;
-    if (ct.includes('x-wsiviz-raw')) {
+    if (ct.includes('x-wissi-raw')) {
       buf = await new Response(r.body.pipeThrough(new DecompressionStream('deflate'))).arrayBuffer();
     } else buf = await r.arrayBuffer();
     return { buf, transfer: [buf] };
@@ -41,13 +41,13 @@ async function wsivizLoad(url, kind, signal) {
   return { buf, transfer: [buf] };
 }
 
-const WORKER_SRC = `const wsivizLoad = ${wsivizLoad.toString()};
+const WORKER_SRC = `const wissiLoad = ${wissiLoad.toString()};
 const ctrls = new Map();
 self.onmessage = async (e) => {
   const m = e.data;
   if (m.abort) { const c = ctrls.get(m.id); if (c) c.abort(); return; }
   const ac = new AbortController(); ctrls.set(m.id, ac);
-  try { const r = await wsivizLoad(m.url, m.kind, ac.signal); const t = r.transfer; delete r.transfer; r.id = m.id; self.postMessage(r, t); }
+  try { const r = await wissiLoad(m.url, m.kind, ac.signal); const t = r.transfer; delete r.transfer; r.id = m.id; self.postMessage(r, t); }
   catch (err) { self.postMessage({ id: m.id, error: err && err.name === 'AbortError' ? 'abort' : String(err && err.message || err) }); }
   finally { ctrls.delete(m.id); }
 };`;
@@ -85,7 +85,7 @@ class Fetcher {
       return { promise, abort: () => { w.postMessage({ abort: true, id }); } };
     }
     const ac = new AbortController();
-    wsivizLoad(url, kind, ac.signal).then(
+    wissiLoad(url, kind, ac.signal).then(
       (r) => { delete r.transfer; r.id = id; this._msg(r); },
       (err) => this._msg({ id, error: err.name === 'AbortError' ? 'abort' : String(err.message || err) }),
     );
@@ -290,7 +290,7 @@ class Slide {
   }
   tileUrl(level, x, y, c) {
     const i = this.info, lv = i.levels[level];
-    // browser-direct tiles (only for native RGB levels; virtual levels and raw channels come from wsiviz)
+    // browser-direct tiles (only for native RGB levels; virtual levels and raw channels come from wissi_viz)
     if (i.tile_url && i.mode === 'rgb' && !lv.virtual) {
       const id = lv.remote_level ?? level;
       const u = i.tile_url.replaceAll('{level}', id).replaceAll('{x}', x).replaceAll('{col}', x)
@@ -1653,7 +1653,7 @@ export class WsiGrid extends HTMLElement {
         try {
           if (meta.bucket == null) L._ingest(res.buf);
           else L.ingestBucket(meta.bucket, res.buf);
-        } catch (e) { console.warn('wsiviz annotation', e); L.state = 'error'; }
+        } catch (e) { console.warn('wissi-viz annotation', e); L.state = 'error'; }
         continue;
       }
       const { s, L, tx, ty, c } = meta;
@@ -1773,7 +1773,7 @@ export class WsiGrid extends HTMLElement {
   }
 }
 
-/** Single-slide convenience element: <wsi-viewer api="/wsiviz" slide="id"></wsi-viewer> */
+/** Single-slide convenience element: <wsi-viewer api="/wissi-viz" slide="id"></wsi-viewer> */
 export class WsiViewer extends WsiGrid {
   static get observedAttributes() { return [...super.observedAttributes, 'slide', 'src']; }
   attributeChangedCallback(name, old, val) {

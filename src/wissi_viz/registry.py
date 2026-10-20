@@ -19,7 +19,7 @@ from .sources import SlideSource, open_slide
 from .tiles import PyramidSlide, TileService
 
 SLIDE_EXTS = ('.svs', '.tif', '.tiff', '.ome.tif', '.ome.tiff', '.btf', '.czi', '.ndpi', '.mrxs', '.scn',
-              '.vms', '.bif', '.qptiff')
+              '.vms', '.bif', '.qptiff', '.vsi', '.zvi', '.dcm', '.afi')
 _ID_OK = re.compile(r'^[A-Za-z0-9_.\-~]{1,200}$')
 
 
@@ -56,7 +56,7 @@ class SlideRegistry:
         self._lock = threading.RLock()
         self._listeners: list[Callable[[str, str | None], None]] = []
         from concurrent.futures import ThreadPoolExecutor
-        self._ann_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix='wsiviz-ann')
+        self._ann_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix='wissi-viz-ann')
 
     # ------------------------------------------------------------- registration
     def add(self, src: str | os.PathLike | SlideSource | Callable[[], SlideSource], slide_id: str | None = None,
@@ -250,7 +250,7 @@ class SlideRegistry:
         d['id'] = sid
         d['name'] = e.name
         d['version'] = e.source.version
-        # per level: virtual (synthesised by wsiviz) and the remote level id (for browser-direct tile_url)
+        # per level: virtual (synthesised by wissi-viz) and the remote level id (for browser-direct tile_url)
         src_ids = getattr(e.source.info, 'level_ids', None)
         for i, lv in enumerate(d['levels']):
             lv['virtual'] = bool(pyr.virtual[i])

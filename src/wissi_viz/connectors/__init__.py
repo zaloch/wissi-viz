@@ -1,5 +1,5 @@
 """API connectors. These are *stubs*: subclass and fill in ``image_info`` / ``tile`` with calls to
-your own authenticated client; wsiviz handles pyramid mapping, tile overlap/padding, caching,
+your own authenticated client; wissi-viz handles pyramid mapping, tile overlap/padding, caching,
 retries, concurrency limits, async clients, annotation conversion and rendering."""
 from ..sources.remote import RemoteError, RemoteImageInfo, RemotePyramid, RemoteSlideSource, TileNotFound
 from .base import AnnotationPayload, RemoteConnection, to_layer

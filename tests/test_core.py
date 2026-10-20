@@ -10,8 +10,8 @@ import numpy as np
 import pytest
 import tifffile
 
-from wsiviz import AnnotationLayer, CallbackSource, Level, SlideInfo, SlideRegistry, TileService, open_slide
-from wsiviz.tiles import PyramidSlide
+from wissi_viz import AnnotationLayer, CallbackSource, Level, SlideInfo, SlideRegistry, TileService, open_slide
+from wissi_viz.tiles import PyramidSlide
 
 
 @pytest.fixture(scope='module')
@@ -133,28 +133,28 @@ def test_callback_source_passthrough():
 def test_http_api(data, tmp_path):
     from fastapi.testclient import TestClient
 
-    from wsiviz import create_app
+    from wissi_viz import create_app
     reg = SlideRegistry(TileService(disk_dir=tmp_path / 'cache'), warm=False)
     sid = reg.add(data / 'a.svs', slide_id='a')
     c = TestClient(create_app(reg))
-    info = c.get('/wsiviz/slides/a/info.json').json()
+    info = c.get('/wissi-viz/slides/a/info.json').json()
     assert info['width'] == 4000 and info['version']
-    r = c.get(f'/wsiviz/slides/a/tiles/0/0/0?v={info["version"]}')
+    r = c.get(f'/wissi-viz/slides/a/tiles/0/0/0?v={info["version"]}')
     assert r.status_code == 200 and r.headers['content-type'] == 'image/jpeg'
     assert 'immutable' in r.headers['cache-control']
-    assert c.get('/wsiviz/slides/a/tiles/0/99/0').status_code == 404
-    assert c.get('/wsiviz/slides/nope/info.json').status_code == 404
-    layers = c.get('/wsiviz/slides/a/annotations').json()
+    assert c.get('/wissi-viz/slides/a/tiles/0/99/0').status_code == 404
+    assert c.get('/wissi-viz/slides/nope/info.json').status_code == 404
+    layers = c.get('/wissi-viz/slides/a/annotations').json()
     assert layers and layers[0]['count'] == 3
-    ov = c.get('/wsiviz/slides/a/annotations/overview', params={'layer': layers[0]['name']})
+    ov = c.get('/wissi-viz/slides/a/annotations/overview', params={'layer': layers[0]['name']})
     assert ov.content[:4] == b'WSA1'  # TestClient transparently gunzips
-    feat = c.get('/wsiviz/slides/a/annotations/feature/0', params={'layer': layers[0]['name']}).json()
+    feat = c.get('/wissi-viz/slides/a/annotations/feature/0', params={'layer': layers[0]['name']}).json()
     assert feat['class'] == 'Tumor'
-    r = c.post('/wsiviz/slides/a/annotations/add', params={'layer': 'Drawings'},
+    r = c.post('/wissi-viz/slides/a/annotations/add', params={'layer': 'Drawings'},
                json={'type': 'Feature', 'geometry': {'type': 'Point', 'coordinates': [1, 2]}, 'properties': {}})
     assert r.json()['ok'] and 'Drawings' in reg.layers('a')
-    assert c.get('/wsiviz/static/index.js').status_code == 200
-    assert c.get('/wsiviz/static/../server.py').status_code == 404
+    assert c.get('/wissi-viz/static/index.js').status_code == 200
+    assert c.get('/wissi-viz/static/../server.py').status_code == 404
     assert list((tmp_path / 'cache').rglob('*.jpg'))  # persisted to the disk cache
 
 
@@ -164,14 +164,14 @@ def test_channel_tile_encoding(data):
     e, pyr = reg.get(sid)
     b, mt = reg.tiles.get(sid, pyr, e.source.version, 0, 0, 0, 0).result()
     raw = np.frombuffer(zlib.decompress(b), np.uint8).reshape(512, 512)
-    assert mt == 'application/x-wsiviz-raw'
+    assert mt == 'application/x-wissi-raw'
     assert np.array_equal(raw, tifffile.imread(data / 'flat.tif')[:512, :512])
     assert reg.info(sid)['channels'][0]['window'][1] > 0
     _ = gzip
 
 
 def test_czi_reader(tmp_path):
-    pyczi = pytest.importorskip('pylibCZIrw.czi')
+    pyczi = pytest.importorskip("pylibCZIrw.czi")  # LGPL: only used to *write* a test file
     p = tmp_path / 'x.czi'
     a = (np.arange(1500 * 2000, dtype=np.uint32).reshape(1500, 2000) % 4096).astype(np.uint16)
     with pyczi.create_czi(str(p), exist_ok=True) as w:
@@ -185,3 +185,45 @@ def test_czi_reader(tmp_path):
     assert np.array_equal(t, (a + 1)[512:1024, 512:1024])
     top = PyramidSlide(s).fetch_tile(len(s.info.levels) - 1, 0, 0, 0)
     assert top.dtype == np.uint16 and top.shape[1] <= 512
+
+
+def test_czifile_reader_mosaic_and_pyramid(tmp_path):
+    """Permissive CZI reader: overlapping mosaic + pyramid subblocks, exact at every level."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent))
+    from czi_writer import mosaic_with_pyramid
+
+    from wissi_viz.sources.czi import CziSource
+    rng = np.random.default_rng(0)
+    H, W = 1100, 1700
+    img = (rng.random((2, H, W)) * 4000).astype(np.uint16)
+    p = tmp_path / 'm.czi'
+    mosaic_with_pyramid(p, img, tile=300, overlap=20, levels=(1, 2, 4), channel_names=['DAPI', 'CD3'], mpp=0.5)
+    s = CziSource(p)
+    assert [lv.downsample for lv in s.info.levels] == [1.0, 2.0, 4.0]
+    assert [c.name for c in s.info.channels] == ['DAPI', 'CD3'] and s.info.mpp == (0.5, 0.5)
+    assert np.array_equal(s.read_region(0, 0, 0, W, H, 1), img[1])
+    for lv, ds in ((1, 2), (2, 4)):
+        ref = img[0][:H // ds * ds, :W // ds * ds].reshape(H // ds, ds, W // ds, ds).mean((1, 3)).astype(np.uint16)
+        assert np.array_equal(s.read_region(lv, 0, 0, W // ds, H // ds, 0), ref)
+    rgb = (rng.random((H, W, 3)) * 255).astype(np.uint8)
+    mosaic_with_pyramid(tmp_path / 'rgb.czi', rgb, levels=(1,))
+    r = CziSource(tmp_path / 'rgb.czi')
+    assert r.info.mode == 'rgb' and np.array_equal(r.read_region(0, 0, 0, W, H), rgb)
+
+
+def test_slideio_backend_matches(tmp_path):
+    pytest.importorskip('slideio')
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent))
+    from czi_writer import mosaic_with_pyramid
+    rng = np.random.default_rng(1)
+    img = (rng.random((1, 700, 900)) * 4000).astype(np.uint16)
+    p = tmp_path / 'x.czi'
+    mosaic_with_pyramid(p, img, levels=(1, 2), channel_names=['DAPI'])
+    a, b = open_slide(p), open_slide(p, backend='slideio')
+    assert type(b).__name__ == 'SlideioSource'
+    for lv in range(2):
+        assert np.array_equal(a.read_tile(lv, 0, 0, 0), b.read_tile(lv, 0, 0, 0))

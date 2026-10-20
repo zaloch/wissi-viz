@@ -7,11 +7,11 @@ from pathlib import Path
 
 from nicegui import ui
 
-from wsiviz import AnnotationLayer
-from wsiviz.nicegui import WsiGrid, configure
+from wissi_viz import AnnotationLayer
+from wissi_viz.nicegui import WsiGrid, configure
 
 ROOT = Path(sys.argv[1] if len(sys.argv) > 1 else '.')
-registry = configure(cache_dir=ROOT / '.wsiviz-cache')   # persistent tile cache (mount as a Docker volume)
+registry = configure(cache_dir=ROOT / '.wissi-viz-cache')   # persistent tile cache (mount as a Docker volume)
 slide_ids = registry.add_directory(ROOT)                  # sidecar .geojson/.annotations/.xml load automatically
 
 
@@ -64,4 +64,4 @@ def index():
     info.move()
 
 
-ui.run(title='wsiviz + NiceGUI', port=8080, reload=False, show=False)
+ui.run(title='wissi-viz + NiceGUI', port=8080, reload=False, show=False)

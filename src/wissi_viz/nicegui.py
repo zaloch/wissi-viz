@@ -1,13 +1,13 @@
 """Native NiceGUI element.
 
     from nicegui import ui
-    from wsiviz.nicegui import WsiGrid
+    from wissi_viz.nicegui import WsiGrid
 
     grid = WsiGrid(['/data/a.svs', '/data/b.czi'], layout='1x2').classes('w-full h-[80vh]')
     grid.go_to(0, 12000, 8000, magnification=20)
 
 The tile/annotation routes are mounted on NiceGUI's FastAPI app automatically
-(under ``/wsiviz`` by default). Everything runs in the NiceGUI process — no extra
+(under ``/wissi-viz`` by default). Everything runs in the NiceGUI process — no extra
 server or port, which is what you want inside a Docker container.
 """
 from __future__ import annotations
@@ -32,7 +32,7 @@ SlideRef = 'str | os.PathLike | SlideSource | dict'
 
 
 def configure(*, cache_dir: str | os.PathLike | None = None, memory_mb: int = 1024, disk_gb: float = 20,
-              workers: int | None = None, registry: SlideRegistry | None = None, prefix: str = '/wsiviz',
+              workers: int | None = None, registry: SlideRegistry | None = None, prefix: str = '/wissi-viz',
               allow_edit: bool = True) -> SlideRegistry:
     """Set up the shared registry (call once at startup, before creating viewers).
 
@@ -55,7 +55,7 @@ def default_registry() -> SlideRegistry:
     return _default
 
 
-def mount(registry: SlideRegistry, prefix: str = '/wsiviz', allow_edit: bool = True) -> None:
+def mount(registry: SlideRegistry, prefix: str = '/wissi-viz', allow_edit: bool = True) -> None:
     if prefix in _mounted:
         if _mounted[prefix] is not registry:
             raise RuntimeError(f'another registry is already mounted at {prefix}')
@@ -64,7 +64,7 @@ def mount(registry: SlideRegistry, prefix: str = '/wsiviz', allow_edit: bool = T
     _mounted[prefix] = registry
 
 
-class WsiGrid(Element, component='nicegui_wsi.js', esm={'wsiviz': 'static'},
+class WsiGrid(Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'},
               default_style='width:100%;height:600px;'):
     """1–16 whole-slide images in one GPU canvas.
 
@@ -75,7 +75,7 @@ class WsiGrid(Element, component='nicegui_wsi.js', esm={'wsiviz': 'static'},
     def __init__(self, slides: Sequence[Any] = (), *, layout: str = 'auto', sync: str = 'none',
                  controls: bool = True, tool: str = 'pan', draw_layer: str | None = None, quality: float = 1.0,
                  texture_budget_mb: int | None = None, registry: SlideRegistry | None = None,
-                 prefix: str = '/wsiviz',
+                 prefix: str = '/wissi-viz',
                  on_view_change: Callable | None = None, on_click: Callable | None = None,
                  on_object_click: Callable | None = None, on_draw: Callable | None = None,
                  on_slide_load: Callable | None = None) -> None:

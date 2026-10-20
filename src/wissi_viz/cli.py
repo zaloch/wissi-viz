@@ -1,7 +1,7 @@
-"""``wsiviz serve`` — standalone tile + annotation server with a demo page.
+"""``wissi-viz serve`` — standalone tile + annotation server with a demo page.
 
-    wsiviz serve /data/slides --port 8010 --cache-dir /var/cache/wsiviz
-    wsiviz info slide.svs
+    wissi-viz serve /data/slides --port 8010 --cache-dir /var/cache/wissi-viz
+    wissi-viz info slide.svs
 """
 from __future__ import annotations
 
@@ -12,13 +12,13 @@ from pathlib import Path
 
 
 def main(argv: list[str] | None = None) -> None:
-    ap = argparse.ArgumentParser(prog='wsiviz')
+    ap = argparse.ArgumentParser(prog='wissi-viz')
     sub = ap.add_subparsers(dest='cmd', required=True)
     s = sub.add_parser('serve', help='serve slides from files/directories')
     s.add_argument('paths', nargs='+', help='slide files or directories (searched recursively)')
     s.add_argument('--host', default='127.0.0.1')
     s.add_argument('--port', type=int, default=8010)
-    s.add_argument('--prefix', default='/wsiviz')
+    s.add_argument('--prefix', default='/wissi-viz')
     s.add_argument('--cache-dir', default=None, help='persistent tile cache directory')
     s.add_argument('--cache-gb', type=float, default=20, help='disk cache size (GB)')
     s.add_argument('--memory-mb', type=int, default=1024, help='in-memory tile cache (MB)')
@@ -51,7 +51,7 @@ def main(argv: list[str] | None = None) -> None:
             reg.add(p)
     if not reg.ids():
         sys.exit('no slides found')
-    print(f'wsiviz: {len(reg.ids())} slide(s) → http://{a.host}:{a.port}/')
+    print(f'wissi-viz: {len(reg.ids())} slide(s) → http://{a.host}:{a.port}/')
     uvicorn.run(create_app(reg, prefix=a.prefix, cors=a.cors or None), host=a.host, port=a.port, log_level='warning')
 
 

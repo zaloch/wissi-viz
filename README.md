@@ -1,15 +1,15 @@
-# wsiviz
+# wissi-viz
 
-wsiviz is a GPU-accelerated whole-slide image viewer for the browser.
+wissi-viz is a GPU-accelerated whole-slide image viewer for the browser.
 
 - **What it shows:** 1–16 slides at once, from SVS, CZI or OME-TIFF files, from anything OpenSlide reads, or from PathCore / HALO Link through connector stubs your app fills in.
 - **Annotations:** ROIs, drawings and millions of detected objects, rendered on the GPU.
-- **Where it runs:** as a plain HTML element (`<wsi-grid>`), or as a native NiceGUI element (`wsiviz.nicegui.WsiGrid`) that you can drop straight into wissi.
+- **Where it runs:** as a plain HTML element (`<wsi-grid>`), or as a native NiceGUI element (`wissi_viz.nicegui.WsiGrid`) that you can drop straight into wissi.
 
 ```
  Browser                                                     Python (NiceGUI / FastAPI process)
 ┌────────────────────────────────────────────────────┐      ┌──────────────────────────────────────────┐
-│ <wsi-grid>  one WebGL2 context, 1–16 panes          │      │ /wsiviz router (mounted on NiceGUI's app) │
+│ <wsi-grid>  one WebGL2 context, 1–16 panes          │      │ /wissi-viz router (mounted on NiceGUI's app) │
 │  ├ scheduler: coarse → centre-out → margin/predict  │ HTTP │  ├ memory LRU  (encoded tiles)            │
 │  ├ worker pool: fetch + decode off main thread      │◀────▶│  ├ disk cache  (survives restarts)        │
 │  ├ GPU texture LRU (shared by all panes, budgeted)  │      │  ├ in-flight coalescing                    │
@@ -41,15 +41,15 @@ pip install -e ".[all]"      # czi + openslide + nicegui + uvicorn
 ## Quick start (standalone server + demo page)
 
 ```bash
-wsiviz serve /data/slides --port 8010 --cache-dir /var/cache/wsiviz
+wissi-viz serve /data/slides --port 8010 --cache-dir /var/cache/wissi-viz
 # open http://127.0.0.1:8010/
 ```
 
 ## Embed as an HTML element (any page, any framework)
 
 ```html
-<script type="module" src="https://your-server/wsiviz/static/index.js"></script>
-<wsi-grid api="https://your-server/wsiviz" slides="slideA,slideB,slideC,slideD" layout="auto"></wsi-grid>
+<script type="module" src="https://your-server/wissi-viz/static/index.js"></script>
+<wsi-grid api="https://your-server/wissi-viz" slides="slideA,slideB,slideC,slideD" layout="auto"></wsi-grid>
 <script type="module">
   const g = document.querySelector('wsi-grid');
   g.goTo(0, 15200, 9800, { magnification: 20 });            // level-0 px
@@ -63,9 +63,9 @@ wsiviz serve /data/slides --port 8010 --cache-dir /var/cache/wsiviz
 
 ```python
 from nicegui import ui
-from wsiviz.nicegui import WsiGrid, configure
+from wissi_viz.nicegui import WsiGrid, configure
 
-registry = configure(cache_dir='/cache/wsiviz')        # once at startup
+registry = configure(cache_dir='/cache/wissi-viz')        # once at startup
 
 @ui.page('/viewer')
 def page():
@@ -81,10 +81,10 @@ Routes mount on NiceGUI's own FastAPI app, so there is no extra port or process.
 
 ## PathCore / HALO Link (or any tile API)
 
-wsiviz never opens a connection itself. `wsiviz.connectors` has two **stubs**, `HaloLinkConnection` and `PathCoreConnection`. You subclass one and call the client your app already has (auth and sessions stay in your app):
+wissi-viz never opens a connection itself. `wissi_viz.connectors` has two **stubs**, `HaloLinkConnection` and `PathCoreConnection`. You subclass one and call the client your app already has (auth and sessions stay in your app):
 
 ```python
-from wsiviz.connectors import HaloLinkConnection, RemoteImageInfo, AnnotationPayload, TileNotFound
+from wissi_viz.connectors import HaloLinkConnection, RemoteImageInfo, AnnotationPayload, TileNotFound
 
 class WissiHaloLink(HaloLinkConnection):
     def __init__(self, client):

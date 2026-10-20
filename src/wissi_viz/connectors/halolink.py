@@ -1,10 +1,10 @@
 """HALO Link connector — **stub**: your app supplies the actual connection.
 
-wsiviz never talks to HALO Link itself. Subclass :class:`HaloLinkConnection` in wissi,
-call your existing authenticated client inside the methods, and wsiviz does the
+wissi-viz never talks to HALO Link itself. Subclass :class:`HaloLinkConnection` in wissi,
+call your existing authenticated client inside the methods, and wissi-viz does the
 rest (pyramid mapping, overlap/padding, caching, GPU rendering, annotations)::
 
-    from wsiviz.connectors import HaloLinkConnection, RemoteImageInfo, AnnotationPayload
+    from wissi_viz.connectors import HaloLinkConnection, RemoteImageInfo, AnnotationPayload
 
     class WissiHaloLink(HaloLinkConnection):
         def __init__(self, client):

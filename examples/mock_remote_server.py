@@ -13,7 +13,7 @@ import uvicorn
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'tests'))
 from mock_remote import MockHaloLink, MockPathCore  # noqa: E402
 
-from wsiviz import SlideRegistry, TileService, create_app  # noqa: E402
+from wissi_viz import SlideRegistry, TileService, create_app  # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument('slide')

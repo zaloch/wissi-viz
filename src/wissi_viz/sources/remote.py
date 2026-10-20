@@ -1,7 +1,7 @@
 """Remote (API-backed) slides: PathCore, HALOLink, OMERO, DeepZoom servers, …
 
 Real tile APIs differ from local files in ways that break naive viewers. This module
-handles them so the rest of wsiviz never has to know a slide is remote:
+handles them so the rest of wissi-viz never has to know a slide is remote:
 
 * **Pyramid layout** — explicit level lists (finest- or coarsest-first), DeepZoom
   (level 0 = 1×1 px, ``maxLevel`` = full resolution), arbitrary downsample lists, and
@@ -47,7 +47,7 @@ class RemoteError(Exception):
 class RemotePyramid:
     """How the remote service lays out its pyramid. Levels are stored finest-first.
 
-    ``level_ids[i]`` is what gets passed back to *your* fetch function for wsiviz level ``i``.
+    ``level_ids[i]`` is what gets passed back to *your* fetch function for wissi-viz level ``i``.
     """
     width: int
     height: int
@@ -111,7 +111,7 @@ class _LoopThread:
 
     def __init__(self) -> None:
         self.loop = asyncio.new_event_loop()
-        threading.Thread(target=self.loop.run_forever, daemon=True, name='wsiviz-remote-loop').start()
+        threading.Thread(target=self.loop.run_forever, daemon=True, name='wissi-viz-remote-loop').start()
 
     @classmethod
     def get(cls) -> asyncio.AbstractEventLoop:
@@ -131,7 +131,7 @@ def resolve(value: Any, loop: asyncio.AbstractEventLoop | None, timeout: float |
     except RuntimeError:
         running = None
     if running is target:
-        raise RuntimeError('remote fetch called on its own event loop; wsiviz calls it from worker threads')
+        raise RuntimeError('remote fetch called on its own event loop; wissi-viz calls it from worker threads')
 
     async def _run():
         return await asyncio.wait_for(value, timeout) if timeout else await value
@@ -327,7 +327,7 @@ class RemoteImageInfo:
     channels: Sequence[Channel | str] = field(default_factory=list)
     background: str | None = None
     #: optional browser-direct tile URL template ({level} {col} {row} {c}); only if the browser can
-    #: authenticate to the service itself. Otherwise tiles are proxied (and cached) by wsiviz.
+    #: authenticate to the service itself. Otherwise tiles are proxied (and cached) by wissi-viz.
     browser_tile_url: str | None = None
 
     def build_pyramid(self) -> RemotePyramid:

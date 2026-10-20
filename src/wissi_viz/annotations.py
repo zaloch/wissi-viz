@@ -713,11 +713,7 @@ def _add_geometry(layer: AnnotationLayer, g: dict, cname, color, props) -> None:
 
 
 def _load_json(p: Path):
-    try:
-        import orjson
-        return orjson.loads(p.read_bytes())
-    except ImportError:
-        return json.loads(p.read_text())
+    return json.loads(p.read_bytes())
 
 
 def discover_sidecars(slide_path: Path) -> list[AnnotationLayer]:
@@ -759,7 +755,7 @@ def from_czi_metadata(meta: dict, offset=(0, 0)) -> AnnotationLayer | None:
         return a + [ox, oy] if len(a) else a
 
     for L in lay:
-        lname = L.get('@Name', 'layer') if isinstance(L, dict) else 'layer'
+        lname = (L.get('@Name') or L.get('Name') or 'layer') if isinstance(L, dict) else 'layer'
         el = (L or {}).get('Elements') or {}
         for kind, items in el.items():
             for it in (items if isinstance(items, list) else [items]):

@@ -2,7 +2,7 @@
 
 The two connector classes below are the ONLY wissi-specific code. Fill the marked
 lines with calls to the clients wissi already has (auth, sessions, base URLs stay
-in wissi). wsiviz never opens a connection itself.
+in wissi). wissi-viz never opens a connection itself.
 
 Everything else is handled for you and covered by tests (tests/test_remote.py):
 pyramid mapping (explicit / downsample list / DeepZoom, any level order, your own
@@ -14,11 +14,11 @@ from __future__ import annotations
 
 from nicegui import app, ui
 
-from wsiviz.connectors import (AnnotationPayload, HaloLinkConnection, PathCoreConnection, RemoteImageInfo,
+from wissi_viz.connectors import (AnnotationPayload, HaloLinkConnection, PathCoreConnection, RemoteImageInfo,
                                TileNotFound)
-from wsiviz.nicegui import WsiGrid, configure
+from wissi_viz.nicegui import WsiGrid, configure
 
-registry = configure(cache_dir='/cache/wsiviz', memory_mb=2048, disk_gb=100)  # docker volume → survives restarts
+registry = configure(cache_dir='/cache/wissi-viz', memory_mb=2048, disk_gb=100)  # docker volume → survives restarts
 
 
 # ============================================================================ HALO Link  (stub → fill in)
@@ -86,7 +86,7 @@ halo = WissiHaloLink(client=None)        # ← pass wissi's client objects
 pathcore = WissiPathCore(client=None)
 
 # If an async client is bound to NiceGUI's event loop (e.g. one httpx.AsyncClient created at
-# startup), run its coroutines there; otherwise wsiviz uses its own background loop.
+# startup), run its coroutines there; otherwise wissi-viz uses its own background loop.
 app.on_startup(lambda: pathcore.bind_loop())
 
 

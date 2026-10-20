@@ -2,9 +2,9 @@
 
 Mount it on any FastAPI app (NiceGUI's ``app`` is a FastAPI app)::
 
-    from wsiviz import SlideRegistry, create_router
+    from wissi_viz import SlideRegistry, create_router
     registry = SlideRegistry()
-    app.include_router(create_router(registry), prefix='/wsiviz')
+    app.include_router(create_router(registry), prefix='/wissi-viz')
 """
 from __future__ import annotations
 
@@ -236,13 +236,13 @@ def _jsonable(o):
         return json.loads(json.dumps(o, default=lambda x: x.item() if hasattr(x, 'item') else str(x)))
 
 
-def create_app(registry: SlideRegistry, prefix: str = '/wsiviz', cors: str | None = '*'):
-    """Standalone FastAPI app (used by ``wsiviz serve``)."""
+def create_app(registry: SlideRegistry, prefix: str = '/wissi-viz', cors: str | None = '*'):
+    """Standalone FastAPI app (used by ``wissi-viz serve``)."""
     from fastapi import FastAPI
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import HTMLResponse
 
-    app = FastAPI(title='wsiviz')
+    app = FastAPI(title='wissi-viz')
     if cors:
         app.add_middleware(CORSMiddleware, allow_origins=[cors] if cors != '*' else ['*'],
                            allow_methods=['*'], allow_headers=['*'])

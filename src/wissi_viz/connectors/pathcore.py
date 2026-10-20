@@ -1,8 +1,8 @@
 """PathCore connector — **stub**: your app supplies the actual connection.
 
-Same contract as :mod:`wsiviz.connectors.halolink`. Async clients work as-is::
+Same contract as :mod:`wissi_viz.connectors.halolink`. Async clients work as-is::
 
-    from wsiviz.connectors import PathCoreConnection, RemoteImageInfo, AnnotationPayload
+    from wissi_viz.connectors import PathCoreConnection, RemoteImageInfo, AnnotationPayload
 
     class WissiPathCore(PathCoreConnection):
         def __init__(self, client):

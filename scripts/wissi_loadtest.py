@@ -47,7 +47,7 @@ import random
 import sys
 import time
 from dataclasses import dataclass, field
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 MAX_REQUESTS_PER_USER = 999
 SCREEN = (1600, 1000)
@@ -115,6 +115,34 @@ def visible_tiles(s: Slide, L: int, cx: float, cy: float, scale: float, pw: int,
             for c in range(int(x0 // t), min(nx - 1, int((x1 - 1e-9) // t)) + 1)]
 
 
+def parse_index(buf: bytes, meta: dict) -> dict:
+    """A layer's overview payload: bucket table (+ which pyramid tiles exist), as the viewer reads it."""
+    import struct
+
+    import numpy as np
+    jl = struct.unpack_from('<I', buf, 4)[0]
+    m = json.loads(buf[8:8 + jl])
+    off = 8 + jl
+    def take(dtype, n):
+        nonlocal off
+        a = np.frombuffer(buf, dtype, n, off)
+        off += -(-(n * np.dtype(dtype).itemsize) // 4) * 4
+        return a
+    n, B = m['count'], m['buckets']
+    pyr = m.get('pyramid') if m.get('index_only') else None
+    if not pyr:     # full overview (small layers / older servers): skip the per-feature arrays
+        for dt, k in (('<f4', 2 * n), ('<f4', n), ('<u4', n), ('<u2', n), ('<u2', n), ('u1', n)):
+            take(dt, k)
+    buckets = take('<f4', B * 8).reshape(-1, 8)
+    tiles = []
+    if pyr:
+        for lv in range(pyr['levels']):
+            t = take('<i4', pyr['tiles'][lv] * 2).reshape(-1, 2)
+            tiles.append({(int(a), int(b)) for a, b in t})
+    return {'name': meta['name'], 'version': meta['version'], 'pyr': pyr, 'tiles': tiles, 'buckets': buckets.tolist(),
+            'min_px': (meta.get('style') or {}).get('detail_min_px') or 6}
+
+
 @dataclass
 class UserResult:
     req: list = field(default_factory=list)      # (t_start, latency_s, status, bytes, kind)  status: int | 'timeout' | 'conn'
@@ -137,22 +165,72 @@ async def run_user(uid: int, slides: list, args, t_end: float, seed: int, header
     async with httpx.AsyncClient(http2=args.http2, limits=limits, timeout=args.timeout, headers=headers,
                                  verify=not args.insecure, follow_redirects=True) as cli:
 
-        async def get(url: str, kind: str):
+        async def get(url: str, kind: str, body: bool = False):
             if len(res.req) >= budget:
-                return
+                return None
             async with sem:
                 if len(res.req) >= budget:
-                    return
+                    return None
                 t0 = time.perf_counter()
                 res.req.append(None)            # reserve the slot (keeps the budget exact under concurrency)
                 i = len(res.req) - 1
                 try:
                     r = await cli.get(url)
                     res.req[i] = (t0, time.perf_counter() - t0, r.status_code, len(r.content), kind)
+                    return r.content if body and r.status_code == 200 else None
                 except httpx.TimeoutException:
                     res.req[i] = (t0, time.perf_counter() - t0, 'timeout', 0, kind)
                 except httpx.HTTPError:
                     res.req[i] = (t0, time.perf_counter() - t0, 'conn', 0, kind)
+                return None
+
+        overlays: dict = {}   # slide id → [layer state] (wissi mode, --overlays)
+
+        async def open_overlays(s: Slide):
+            raw = await get(f"{args.base}/slides/{s.id}/annotations", 'ann_meta', body=True)
+            if not raw:
+                return
+            layers = []
+            for m in json.loads(raw):
+                if not m.get('style', {}).get('visible', True):
+                    continue
+                if args.overlay_mode == 'client' and m.get('client_ok'):
+                    # client mode: the whole layer once (the browser builds its own pyramid), then nothing per move
+                    await get(f"{args.base}/slides/{s.id}/annotations/columns?layer={quote(m['name'])}&v={m['version']}", 'ann_columns')
+                    continue
+                b = await get(f"{args.base}/slides/{s.id}/annotations/overview?layer={quote(m['name'])}&v={m['version']}", 'ann_index', body=True)
+                if b:
+                    layers.append(parse_index(b, m))
+            overlays[s.id] = layers
+
+        def overlay_urls(s: Slide, v):
+            out = []
+            for L in overlays.get(s.id, ()):
+                hw, hh = pw / 2 / v[2], ph / 2 / v[2]
+                r = (v[0] - hw, v[1] - hh, v[0] + hw, v[1] + hh)
+                q = f"layer={quote(L['name'])}&v={L['version']}"
+                P = L['pyr']
+                if P:   # object pyramid: the viewer's level choice
+                    k_need = math.ceil(math.log2(4 / v[2]))
+                    lvl = 0 if k_need <= P['k0'] else min(P['levels'] - 1, k_need - P['k0'])
+                    for lv in {P['levels'] - 1, lvl}:
+                        span = 2 ** (P['k0'] + lv) * P['tile_bins']
+                        for tx in range(max(0, int(r[0] // span)), int(r[2] // span) + 1):
+                            for ty in range(max(0, int(r[1] // span)), int(r[3] // span) + 1):
+                                key = (s.id, L['name'], 'pt', lv, tx, ty)
+                                if (tx, ty) in L['tiles'][lv] and key not in seen:
+                                    seen.add(key)
+                                    out.append((f"{args.base}/slides/{s.id}/annotations/ptile/{lv}/{tx}/{ty}?{q}", 'ann_ptile'))
+                B = L['buckets']
+                for i in range(len(B)):
+                    x0, y0, x1, y1, _, _, med, _ = B[i]
+                    if x0 > r[2] or x1 < r[0] or y0 > r[3] or y1 < r[1] or med * v[2] < L['min_px']:
+                        continue
+                    key = (s.id, L['name'], 'b', i)
+                    if key not in seen:
+                        seen.add(key)
+                        out.append((f"{args.base}/slides/{s.id}/annotations/bucket/{i}?{q}", 'ann_bucket'))
+            return out
 
         def urls(s: Slide, tiles):
             out = []
@@ -165,20 +243,24 @@ async def run_user(uid: int, slides: list, args, t_end: float, seed: int, header
                 out += [base.replace('{c}', str(k)) for k in range(s.channels)] if s.channels else [base]
             return out
 
-        async def view(moves):
+        async def view(moves, views=None):
             t0 = time.perf_counter()
-            todo = [u for (s, tiles) in moves for u in urls(s, tiles)]
+            todo = [(u, 'tile') for (s, tiles) in moves for u in urls(s, tiles)]
+            if views is not None and overlays:
+                todo += [x for s, v in views for x in overlay_urls(s, v)]
             if todo:
-                await asyncio.gather(*(get(u, 'tile') for u in todo))
+                await asyncio.gather(*(get(u, k) for u, k in todo))
                 res.views.append((t0, time.perf_counter() - t0))
 
         # open: metadata (wissi mode) + whole coarsest level, then the fit view
         if args.mode == 'wissi':
             await asyncio.gather(*(get(f"{args.base}/slides/{s.id}/info.json", 'info') for s in mine))
+            if args.overlays:
+                await asyncio.gather(*(open_overlays(s) for s in {s.id: s for s in mine}.values()))
         fit = [min(pw / s.width, ph / s.height) * 0.96 for s in mine]
         st = [[s.width / 2, s.height / 2, f] for s, f in zip(mine, fit)]
         await view([(s, visible_tiles(s, len(s.levels) - 1, s.width / 2, s.height / 2, 1e-9, 10**9, 10**9)) for s in mine])
-        await view([(s, visible_tiles(s, level_for(s, v[2]), *v, pw, ph)) for s, v in zip(mine, st)])
+        await view([(s, visible_tiles(s, level_for(s, v[2]), *v, pw, ph)) for s, v in zip(mine, st)], list(zip(mine, st)))
         # navigate (linked panes: the same relative move in every pane)
         while len(res.req) < budget and time.perf_counter() < t_end:
             await asyncio.sleep(rnd.uniform(*args.think))
@@ -197,7 +279,7 @@ async def run_user(uid: int, slides: list, args, t_end: float, seed: int, header
                     v[0], v[1] = rnd.uniform(0.1, 0.9) * s.width, rnd.uniform(0.1, 0.9) * s.height
                     v[2] = max(f, min(mx, f * 2 ** rnd.uniform(1, math.log2(max(2.0, mx / f)))))
                 v[0], v[1] = min(max(v[0], 0), s.width), min(max(v[1], 0), s.height)
-            await view([(s, visible_tiles(s, level_for(s, v[2]), *v, pw, ph)) for s, v in zip(mine, st)])
+            await view([(s, visible_tiles(s, level_for(s, v[2]), *v, pw, ph)) for s, v in zip(mine, st)], list(zip(mine, st)))
         res.stopped = 'budget' if len(res.req) >= budget else 'time'
     res.req = [x for x in res.req if x is not None]
     return res
@@ -312,6 +394,12 @@ def summarise(n_users, req, views, lag, wall, args) -> dict:
         'error_rate_pct': round(100 * (1 - ok.mean()), 3),
         'rate_pct': {k: round(100 * c / len(req), 3) for k, c in errs.items()},
         'client_loop_lag_ms_p95': round(1000 * _pct(lag, 95), 1) if lag else None,
+        'by_kind': {k: {'requests': int(sum(1 for r in req if r[4] == k)),
+                        'MB': round(sum(r[3] for r in req if r[4] == k) / 2**20, 2),
+                        'p50_ms': round(1000 * _pct([r[1] for r in req if r[4] == k and good(r[2])], 50), 1) if any(r[4] == k and good(r[2]) for r in req) else None,
+                        'p95_ms': round(1000 * _pct([r[1] for r in req if r[4] == k and good(r[2])], 95), 1) if any(r[4] == k and good(r[2]) for r in req) else None,
+                        'errors': int(sum(1 for r in req if r[4] == k and not good(r[2])))}
+                    for k in sorted({r[4] for r in req})},
     }
 
 
@@ -400,6 +488,7 @@ def report(stages: list, mdl: dict, args) -> str:
     L = [f"# Load test: {args.target}", '',
          f"- {args.panes} pane(s) per user; ≤ {min(args.requests, MAX_REQUESTS_PER_USER)} requests per user; "
          f"{args.conn} connections per user ({'HTTP/2' if args.http2 else 'HTTP/1.1'}); think {args.think[0]}–{args.think[1]} s; "
+         f"{'overlays on; ' if getattr(args, 'overlays', False) else ''}"
          f"ramp {args.ramp} s", '',
          '| users | requests | req/s | MB | latency p50 / p95 / p99 ms | view p50 / p95 ms | error % | statuses ≠ 2xx | client lag p95 ms |',
          '|---|---|---|---|---|---|---|---|---|']
@@ -414,6 +503,11 @@ def report(stages: list, mdl: dict, args) -> str:
     if any((s.get('client_loop_lag_ms_p95') or 0) > 50 for s in stages):
         L += ['', '> **Client saturated:** event-loop lag > 50 ms, so the load generator itself was a bottleneck in some '
                   'stages. Use `--procs N` or run from a larger machine.']
+    big = max((st for st in stages if st.get('by_kind')), key=lambda st: st['users'], default=None)
+    if big and len(big['by_kind']) > 1:
+        L += ['', f"Per request type at {big['users']} users:", '', '| type | requests | MB | p50 ms | p95 ms | errors |', '|---|---|---|---|---|---|']
+        for k, v in big['by_kind'].items():
+            L.append(f"| {k} | {v['requests']} | {v['MB']} | {v['p50_ms']} | {v['p95_ms']} | {v['errors']} |")
     m = mdl.get('usl') if mdl else None
     if m:
         L += ['', '## Scalability model (Universal Scalability Law)', '',
@@ -480,6 +574,10 @@ def main(argv=None):
     ap.add_argument('--images', default=None, help='template mode: image ids')
     ap.add_argument('--pyramid', default='100000x80000:256:2', help='template mode: WIDTHxHEIGHT:TILE:STEP')
     ap.add_argument('--mpp', type=float, default=0.25, help='template mode: µm per px (sets the 40× zoom limit)')
+    ap.add_argument('--overlays', action='store_true',
+                    help='wissi mode: also fetch annotation/object overlays like the viewer (layer index, pyramid tiles, outline buckets)')
+    ap.add_argument('--overlay-mode', choices=['server', 'client'], default='server',
+                    help='--overlays: server = pyramid tiles per move (default); client = download each layer once')
     ap.add_argument('--ok-404', action='store_true', help='count HTTP 404 as success (APIs that answer 404 for empty tiles)')
     ap.add_argument('--stats-url', action='append', default=[],
                     help='JSON endpoint to snapshot before/after each stage, e.g. …/wissi-viz/stats (repeatable)')

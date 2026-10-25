@@ -1,0 +1,256 @@
+{
+ "settings": {
+  "target": "http://127.0.0.1:59077/wissi-viz",
+  "users": "10,25",
+  "requests": 300,
+  "panes": 4,
+  "conn": 6,
+  "think": [
+   0.3,
+   1.5
+  ],
+  "ramp": 5,
+  "max_seconds": 180,
+  "timeout": 30,
+  "http2": false,
+  "slides": null,
+  "max_slides": 64,
+  "images": null,
+  "pyramid": "100000x80000:256:2",
+  "mpp": 0.25,
+  "overlays": true,
+  "ok_404": false,
+  "stats_url": [
+   "http://127.0.0.1:59077/_sim/stats"
+  ],
+  "procs": 1,
+  "predict": "",
+  "seed": 0,
+  "insecure": false,
+  "yes": false,
+  "out": "bench/load_overlays_legacy.json",
+  "from_json": null,
+  "mode": "wissi",
+  "base": "http://127.0.0.1:59077/wissi-viz"
+ },
+ "stages": [
+  {
+   "users": 10,
+   "requests": 3000,
+   "wall_s": 45.5,
+   "throughput_rps": 77.3,
+   "MB": 869.5,
+   "latency_ms": {
+    "p50": 9.4,
+    "p90": 57.0,
+    "p95": 195.0,
+    "p99": 7315.9,
+    "max": 11512.1
+   },
+   "latency_mean_ms": 153.4,
+   "view_mean_ms": 76,
+   "view_ms": {
+    "p50": 31,
+    "p95": 303,
+    "p99": 614
+   },
+   "status": {
+    "200": 3000
+   },
+   "errors": {},
+   "error_rate_pct": 0.0,
+   "rate_pct": {},
+   "client_loop_lag_ms_p95": 83.5,
+   "by_kind": {
+    "ann_bucket": {
+     "requests": 59,
+     "MB": 76.07,
+     "p50_ms": 146.5,
+     "p95_ms": 300.3,
+     "errors": 0
+    },
+    "ann_index": {
+     "requests": 39,
+     "MB": 781.64,
+     "p50_ms": 8928.5,
+     "p95_ms": 10672.4,
+     "errors": 0
+    },
+    "ann_meta": {
+     "requests": 39,
+     "MB": 0.02,
+     "p50_ms": 434.7,
+     "p95_ms": 1447.0,
+     "errors": 0
+    },
+    "info": {
+     "requests": 40,
+     "MB": 0.06,
+     "p50_ms": 636.0,
+     "p95_ms": 1581.2,
+     "errors": 0
+    },
+    "tile": {
+     "requests": 2823,
+     "MB": 11.74,
+     "p50_ms": 9.1,
+     "p95_ms": 57.4,
+     "errors": 0
+    }
+   },
+   "server": {
+    "http://127.0.0.1:59077/_sim/stats": {
+     "tiles": {
+      "memory": {
+       "entries": 2352,
+       "bytes": 10527608,
+       "max_bytes": 1073741824,
+       "hits": 471,
+       "misses": 2352
+      },
+      "produced": 2352,
+      "avg_produce_ms": 1.14,
+      "inflight": 0,
+      "decoded": {
+       "entries": 0,
+       "bytes": 0,
+       "max_bytes": 1073741824,
+       "hits": 0,
+       "misses": 0,
+       "evictions": 0
+      }
+     },
+     "connector": {}
+    }
+   }
+  },
+  {
+   "users": 25,
+   "requests": 7500,
+   "wall_s": 58.3,
+   "throughput_rps": 156.4,
+   "MB": 2028.0,
+   "latency_ms": {
+    "p50": 15.1,
+    "p90": 263.1,
+    "p95": 576.4,
+    "p99": 8840.9,
+    "max": 13326.2
+   },
+   "latency_mean_ms": 211.1,
+   "view_mean_ms": 211,
+   "view_ms": {
+    "p50": 44,
+    "p95": 1072,
+    "p99": 2556
+   },
+   "status": {
+    "200": 7500
+   },
+   "errors": {},
+   "error_rate_pct": 0.0,
+   "rate_pct": {},
+   "client_loop_lag_ms_p95": 148.3,
+   "by_kind": {
+    "ann_bucket": {
+     "requests": 123,
+     "MB": 154.43,
+     "p50_ms": 136.3,
+     "p95_ms": 659.2,
+     "errors": 0
+    },
+    "ann_index": {
+     "requests": 92,
+     "MB": 1843.87,
+     "p50_ms": 12442.4,
+     "p95_ms": 12887.9,
+     "errors": 0
+    },
+    "ann_meta": {
+     "requests": 92,
+     "MB": 0.05,
+     "p50_ms": 360.5,
+     "p95_ms": 890.6,
+     "errors": 0
+    },
+    "info": {
+     "requests": 100,
+     "MB": 0.16,
+     "p50_ms": 392.6,
+     "p95_ms": 806.5,
+     "errors": 0
+    },
+    "tile": {
+     "requests": 7093,
+     "MB": 29.5,
+     "p50_ms": 14.1,
+     "p95_ms": 396.6,
+     "errors": 0
+    }
+   },
+   "server": {
+    "http://127.0.0.1:59077/_sim/stats": {
+     "tiles": {
+      "memory": {
+       "entries": 7147,
+       "bytes": 32609145,
+       "max_bytes": 1073741824,
+       "hits": 2298,
+       "misses": 4795
+      },
+      "produced": 4795,
+      "avg_produce_ms": 1.36,
+      "inflight": 0,
+      "decoded": {
+       "entries": 0,
+       "bytes": 0,
+       "max_bytes": 1073741824,
+       "hits": 0,
+       "misses": 0,
+       "evictions": 0
+      }
+     },
+     "connector": {}
+    }
+   }
+  }
+ ],
+ "model": {
+  "usl": null,
+  "tiles_per_move": 4.4,
+  "think_s": 0.497,
+  "tested_users": [
+   10,
+   25
+  ],
+  "predictions": [
+   {
+    "users": 17,
+    "mode": "interpolated",
+    "throughput_rps": 114.2,
+    "latency_mean_ms": 180.3,
+    "latency_p95_ms": 373.0,
+    "view_p95_ms": 662,
+    "error_rate_pct": 0.0
+   },
+   {
+    "users": 37,
+    "mode": "EXTRAPOLATED (pessimistic: no more throughput)",
+    "throughput_rps": 156.4,
+    "latency_mean_ms": 551.1,
+    "latency_p95_ms": 1504.7,
+    "view_p95_ms": 2799,
+    "error_rate_pct": 0.0
+   },
+   {
+    "users": 50,
+    "mode": "EXTRAPOLATED (pessimistic: no more throughput)",
+    "throughput_rps": 156.4,
+    "latency_mean_ms": 919.4,
+    "latency_p95_ms": 2510.4,
+    "view_p95_ms": 4669,
+    "error_rate_pct": 0.0
+   }
+  ]
+ }
+}

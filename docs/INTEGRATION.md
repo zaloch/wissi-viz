@@ -66,6 +66,11 @@ def viewer():
 - **Shared state:** the registry and its caches are per process and shared by all users. Use per-user slide ids if users must not see each other's annotation edits.
 - **Paths:** routes mount on NiceGUI's own FastAPI app, so there is no extra port. Reverse-proxy subpaths (`window.path_prefix`) work.
 - **Analysis:** results go into plain NiceGUI widgets, for example `ui.echart(result.plot())` and `ui.table(rows=plots.table_rows(result.table))`. See `examples/analysis_app.py`.
+- **Large object tables (10⁵–10⁷ cells):** load them with `cached_object_layer(path, '/cache/layers', mpp=…)` and pass the result to `grid.show(slide, layer)`.
+  - The compiled layer (buckets plus object pyramid) is written once, then memory-mapped in ~35 ms on every later start and by every worker.
+  - Browsers download aggregated dots sized to their screen, not the whole table.
+  - Mount the cache folder as a Docker volume, next to the tile cache.
+  - Storage formats compared: see `benchmarks/results-overlays.md`.
 
 ### Path B: the raw component inside NiceGUI
 

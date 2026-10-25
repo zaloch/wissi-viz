@@ -24,8 +24,11 @@ const now = () => performance.now();
 //              land first; the in-between views only get spare capacity
 //  decoupled   start the next request as soon as one finishes, and size GPU uploads to the real frame time,
 //              so slow frames (weak/software GPUs, many panes) don't throttle the network
-const LOD_DEFAULT = { motionBias: 2, minify: 0.5, quadtree: true, background: true, prefetch: false, decoupled: true, destination: true };
+const LOD_DEFAULT = { motionBias: 2, minify: 0.5, quadtree: true, background: true, prefetch: false, decoupled: true, destination: true,
+  overlays: 'server' };  // overlays: 'server' (pyramid tiles on demand) | 'client' (download columns once, build in a worker) | 'auto'
 const BG_PRIO = 4;
+const CLIENT_OVERLAY_MAX = 300_000;    // overlays: 'auto' → client mode for layers up to this many objects …
+const CLIENT_OVERLAY_TOTAL = 1_000_000; // … while the viewer's client-side total stays below this
 const LOD_LEGACY = { motionBias: 1, minify: 1, quadtree: false, background: false, prefetch: false, decoupled: false, destination: false };
 
 function hexToRgb(h) {
@@ -218,6 +221,80 @@ in vec4 v_col; out vec4 o;
 void main(){ vec2 c = gl_PointCoord - 0.5; float d = dot(c, c); if (d > 0.25 || v_col.a <= 0.0) discard;
   o = vec4(v_col.rgb, v_col.a * smoothstep(0.25, 0.16, d)); }`;
 
+// object-pyramid dots: positions are u16 within a tile (normalised), drawn per tile.
+// mode 0 = raw features (a_size = size px, a_kind), 1 = aggregated with per-class histogram (pick the most
+// common *visible* class), 2 = aggregated colour-by-value (a_col = mean colour bin)
+const VS_PPTS = `#version 300 es
+layout(location=0) in vec2 a_pos; layout(location=1) in float a_size;
+layout(location=2) in uint a_col; layout(location=3) in uint a_kind;
+layout(location=4) in uvec4 a_h0; layout(location=5) in uvec4 a_h1;
+uniform vec3 u_view; uniform vec2 u_vp; uniform vec2 u_ps; uniform int u_onlyPoints;
+uniform sampler2D u_ctex; uniform float u_alpha; uniform vec3 u_tile; uniform int u_mode; uniform float u_bin;
+uniform int u_slots[8]; uniform int u_vis;
+out vec4 v_col; flat out int v_sq;
+void main(){
+  vec2 w = u_tile.xy + a_pos * u_tile.z;
+  vec2 s = (w - u_view.xy) * u_view.z;
+  gl_Position = vec4(s.x / (u_vp.x * 0.5), -s.y / (u_vp.y * 0.5), 0.0, 1.0);
+  int col = int(a_col);
+  float sz;
+  v_sq = 0;
+  if (u_mode == 0) {
+    sz = a_kind == 0u && a_size <= 0.0 ? u_ps.y : clamp(a_size * u_view.z, u_ps.x, u_ps.y);
+    if (u_onlyPoints == 1 && a_kind != 0u) sz = 0.0;
+  } else {
+    sz = clamp(u_bin * u_view.z * 0.9, 1.0, 48.0);
+    v_sq = 1;
+    if (u_mode == 1) {
+      uint h[8] = uint[8](a_h0.x, a_h0.y, a_h0.z, a_h0.w, a_h1.x, a_h1.y, a_h1.z, a_h1.w);
+      uint best = 0u; int bi = -1;
+      for (int j = 0; j < 8; j++) if (((u_vis >> j) & 1) == 1 && h[j] > best) { best = h[j]; bi = j; }
+      if (bi < 0) sz = 0.0; else col = u_slots[bi];
+    }
+  }
+  if (sz <= 0.0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+  gl_PointSize = sz;
+  v_col = texelFetch(u_ctex, ivec2(col, 0), 0);
+  v_col.a *= u_alpha;
+}`;
+const FS_PPTS = `#version 300 es
+precision mediump float;
+in vec4 v_col; flat in int v_sq; out vec4 o;
+void main(){ if (v_col.a <= 0.0) discard;
+  if (v_sq == 1) { o = v_col; return; }
+  vec2 c = gl_PointCoord - 0.5; float d = dot(c, c); if (d > 0.25) discard;
+  o = vec4(v_col.rgb, v_col.a * smoothstep(0.25, 0.16, d)); }`;
+
+// parametric cells (ellipse / rect from the bounding box): one instanced quad each, outline + fill by SDF
+const VS_SHP = `#version 300 es
+layout(location=0) in vec4 a_shp; layout(location=1) in uint a_col; layout(location=2) in uint a_kind;
+uniform vec3 u_view; uniform vec2 u_vp; uniform float u_w;
+out vec2 v_p; flat out vec2 v_r; flat out int v_kind; flat out uint v_ci;
+void main(){
+  vec2 c = (a_shp.xy - u_view.xy) * u_view.z;
+  vec2 r = max(a_shp.zw * u_view.z, vec2(0.5));
+  vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
+  vec2 ext = r + u_w + 1.0;
+  vec2 p = c + corner * ext;
+  gl_Position = vec4(p.x / (u_vp.x * 0.5), -p.y / (u_vp.y * 0.5), 0.0, 1.0);
+  v_p = corner * ext; v_r = r; v_kind = int(a_kind); v_ci = a_col;
+}`;
+const FS_SHP = `#version 300 es
+precision highp float;
+in vec2 v_p; flat in vec2 v_r; flat in int v_kind; flat in uint v_ci; out vec4 o;
+uniform sampler2D u_ctex; uniform float u_w; uniform float u_fill; uniform float u_alpha;
+void main(){
+  float d;
+  if (v_kind == 3) { vec2 q = v_p / v_r; float k = length(q); d = (k - 1.0) * k / max(length(q / v_r), 1e-6); }
+  else { vec2 q = abs(v_p) - v_r; d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0); }
+  vec4 col = texelFetch(u_ctex, ivec2(int(v_ci), 0), 0);
+  float line = 1.0 - smoothstep(u_w * 0.5 - 0.5, u_w * 0.5 + 0.5, abs(d));
+  float fill = d < 0.0 ? u_fill : 0.0;
+  float a = max(line, fill) * col.a * u_alpha;
+  if (a <= 0.003) discard;
+  o = vec4(col.rgb, a);
+}`;
+
 const VS_SEG = `#version 300 es
 layout(location=0) in vec4 a_seg; layout(location=1) in uint a_cls;
 uniform vec3 u_view; uniform vec2 u_vp; uniform float u_w; uniform sampler2D u_ctex; uniform float u_alpha;
@@ -351,6 +428,134 @@ class Slide {
   }
 }
 
+
+// ------------------------------------------------------------------ client-side object pyramid (worker)
+// The same pyramid the server builds (annotations.py _build_pyramid), built in the browser from the layer's columns.
+const PYR_WORKER_SRC = `
+const SLOTS = 8;
+function csort(keys, K, idx) {             // stable counting sort of idx by integer keys[idx] in [0, K)
+  const cnt = new Uint32Array(K + 1);
+  for (let i = 0; i < idx.length; i++) cnt[keys[idx[i]] + 1]++;
+  for (let k = 0; k < K; k++) cnt[k + 1] += cnt[k];
+  const out = new Uint32Array(idx.length);
+  for (let i = 0; i < idx.length; i++) out[cnt[keys[idx[i]]]++] = idx[i];
+  return out;
+}
+function tiles(x, y, span, make, transfer) {   // group points by tile; make(sel, x0, y0) → tile arrays
+  const m = x.length;
+  let ntx = 1, nty = 1;
+  const tx = new Uint32Array(m), ty = new Uint32Array(m);
+  for (let i = 0; i < m; i++) { tx[i] = Math.max(0, Math.floor(x[i] / span)); ty[i] = Math.max(0, Math.floor(y[i] / span));
+    if (tx[i] + 1 > ntx) ntx = tx[i] + 1; if (ty[i] + 1 > nty) nty = ty[i] + 1; }
+  let idx = new Uint32Array(m); for (let i = 0; i < m; i++) idx[i] = i;
+  idx = csort(tx, ntx, idx); idx = csort(ty, nty, idx);
+  const out = [];
+  let a = 0;
+  while (a < m) {
+    let b = a + 1;
+    const X = tx[idx[a]], Y = ty[idx[a]];
+    while (b < m && tx[idx[b]] === X && ty[idx[b]] === Y) b++;
+    const sel = idx.subarray(a, b), x0 = X * span, y0 = Y * span;
+    const pos = new Uint16Array(sel.length * 2);
+    for (let i = 0; i < sel.length; i++) {
+      pos[2 * i] = Math.min(65535, Math.max(0, Math.round((x[sel[i]] - x0) / span * 65535)));
+      pos[2 * i + 1] = Math.min(65535, Math.max(0, Math.round((y[sel[i]] - y0) / span * 65535)));
+    }
+    const t = { tx: X, ty: Y, n: sel.length, x0, y0, span, pos, ...make(sel) };
+    for (const v of Object.values(t)) if (v && v.buffer) transfer.push(v.buffer);
+    out.push(t);
+    a = b;
+  }
+  return out;
+}
+self.onmessage = (e) => {
+  const { id, buf } = e.data;
+  try {
+    const dv = new DataView(buf), jl = dv.getUint32(4, true);
+    const M = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 8, jl)));
+    let off = 8 + jl;
+    const take = (C, n) => { const a = new C(buf.slice(off, off + n * C.BYTES_PER_ELEMENT)); off += Math.ceil(n * C.BYTES_PER_ELEMENT / 4) * 4; return a; };
+    const n = M.n, cx = take(Float32Array, n), cy = take(Float32Array, n), rx = take(Uint16Array, n), ry = take(Uint16Array, n);
+    const col = take(Uint16Array, n), cls = take(Uint16Array, n), kind = take(Uint8Array, n);
+    const transfer = [];
+    const k0 = Math.min(24, Math.max(0, Math.ceil(Math.log2(Math.max(M.median_size, 1)))));
+    const extent = Math.max(M.bbox[2], M.bbox[3], 1), kmax = Math.max(k0 + 1, Math.ceil(Math.log2(extent / 64)));
+    const TB = M.tile_bins, value = M.mode === 'value';
+    // top classes → histogram slots ('other' folded into the last slot when there are more than 8 classes)
+    const cc = new Uint32Array(Math.max(M.nclasses, 1)); for (let i = 0; i < n; i++) cc[cls[i]]++;
+    let top = [...cc.keys()].filter((c) => cc[c] > 0).sort((a, b) => cc[b] - cc[a]).slice(0, SLOTS);
+    const other = M.nclasses > SLOTS;
+    const slotOf = new Uint8Array(Math.max(M.nclasses, 1)).fill(other ? SLOTS - 1 : 0);
+    if (other) top = top.slice(0, SLOTS - 1);
+    top.forEach((c, j) => { slotOf[c] = j; });
+    let otherClass = null;
+    if (other) { let best = -1; for (let c = 0; c < M.nclasses; c++) if (!top.includes(c) && cc[c] > best) { best = cc[c]; otherClass = c; } }
+    const slots = top.concat(other ? [-1] : []);
+    const tc = top.concat(new Array(SLOTS - top.length).fill(otherClass ?? top[top.length - 1] ?? 0));
+    const levels = [];
+    // level 0: every object (raw), with its radii for GPU outlines
+    const size = new Uint16Array(n);
+    for (let i = 0; i < n; i++) size[i] = Math.min(65535, Math.max(rx[i], ry[i]) / 2);
+    levels.push({ k: k0, raw: true, tiles: tiles(cx, cy, 2 ** k0 * TB, (sel) => {
+      const m = sel.length, o = { size: new Uint16Array(m), col: new Uint16Array(m), cls: new Uint16Array(m), orig: new Uint32Array(m),
+        kind: new Uint8Array(m), shp: new Float32Array(m * 4) };
+      for (let i = 0; i < m; i++) { const f = sel[i]; o.size[i] = size[f]; o.col[i] = col[f]; o.cls[i] = cls[f]; o.orig[i] = f; o.kind[i] = kind[f];
+        o.shp[4 * i] = cx[f]; o.shp[4 * i + 1] = cy[f]; o.shp[4 * i + 2] = rx[f] / 4; o.shp[4 * i + 3] = ry[f] / 4; }
+      return o; }, transfer) });
+    // aggregated levels, each from the one below
+    let X = Float64Array.from(cx), Y = Float64Array.from(cy), W = new Float64Array(n).fill(1);
+    let REP = new Uint32Array(n); for (let i = 0; i < n; i++) REP[i] = i;
+    let H = null, VS = null, VC = null;
+    if (value) { VS = new Float64Array(n); VC = new Float64Array(n); for (let i = 0; i < n; i++) if (col[i] !== M.nan) { VS[i] = col[i]; VC[i] = 1; } }
+    else { H = new Float64Array(n * SLOTS); for (let i = 0; i < n; i++) H[i * SLOTS + slotOf[cls[i]]] = 1; }
+    for (let k = k0 + 1; k <= kmax; k++) {
+      const s = 2 ** k, m = X.length;
+      const bx = new Uint32Array(m), by = new Uint32Array(m);
+      let nbx = 1, nby = 1;
+      for (let i = 0; i < m; i++) { bx[i] = Math.max(0, Math.floor(X[i] / s)); by[i] = Math.max(0, Math.floor(Y[i] / s));
+        if (bx[i] + 1 > nbx) nbx = bx[i] + 1; if (by[i] + 1 > nby) nby = by[i] + 1; }
+      let idx = new Uint32Array(m); for (let i = 0; i < m; i++) idx[i] = i;
+      idx = csort(bx, nbx, idx); idx = csort(by, nby, idx);
+      // count groups
+      let g = 0; for (let i = 0; i < m; i++) if (i === 0 || bx[idx[i]] !== bx[idx[i - 1]] || by[idx[i]] !== by[idx[i - 1]]) g++;
+      const nX = new Float64Array(g), nY = new Float64Array(g), nW = new Float64Array(g), nR = new Uint32Array(g);
+      const nH = value ? null : new Float64Array(g * SLOTS), nVS = value ? new Float64Array(g) : null, nVC = value ? new Float64Array(g) : null;
+      let j = -1;
+      for (let ii = 0; ii < m; ii++) {
+        const i = idx[ii];
+        if (ii === 0 || bx[i] !== bx[idx[ii - 1]] || by[i] !== by[idx[ii - 1]]) { j++; nR[j] = REP[i]; }
+        nW[j] += W[i]; nX[j] += X[i] * W[i]; nY[j] += Y[i] * W[i];
+        if (value) { nVS[j] += VS[i]; nVC[j] += VC[i]; } else for (let q = 0; q < SLOTS; q++) nH[j * SLOTS + q] += H[i * SLOTS + q];
+      }
+      for (let q = 0; q < g; q++) { nX[q] /= nW[q]; nY[q] /= nW[q]; }
+      X = nX; Y = nY; W = nW; REP = nR; H = nH; VS = nVS; VC = nVC;
+      levels.push({ k, raw: false, hist: !value, tiles: tiles(X, Y, 2 ** k * TB, (sel) => {
+        const m2 = sel.length, o = { count: new Uint16Array(m2), col: new Uint16Array(m2), orig: new Uint32Array(m2) };
+        if (!value) o.hist = new Uint8Array(m2 * SLOTS);
+        for (let i = 0; i < m2; i++) {
+          const f = sel[i]; o.count[i] = Math.min(65535, W[f]); o.orig[i] = REP[f];
+          if (value) o.col[i] = VC[f] > 0 ? Math.round(VS[f] / VC[f]) : M.nan;   // (rounding matches the server)
+          else { let mx = 0, am = 0; for (let q = 0; q < SLOTS; q++) if (H[f * SLOTS + q] > mx) { mx = H[f * SLOTS + q]; am = q; }
+            o.col[i] = tc[am]; for (let q = 0; q < SLOTS; q++) { const h = H[f * SLOTS + q]; o.hist[i * SLOTS + q] = h > 0 ? Math.max(1, Math.round(255 * h / mx)) : 0; } }
+        }
+        return o; }, transfer) });
+    }
+    const pyr = { k0, kmax, levels: levels.length, tile_bins: TB, mode: value ? 'value' : 'class', slots, other_class: otherClass,
+      tiles: levels.map((L) => L.tiles.length), points: levels.map((L) => L.tiles.reduce((a, t) => a + t.n, 0)) };
+    self.postMessage({ id, pyr, levels }, transfer);
+  } catch (err) { self.postMessage({ id, error: String(err && err.stack || err) }); }
+};`;
+let _pyrWorker = null, _pyrSeq = 0;
+const _pyrCbs = new Map();
+function buildPyramidInWorker(buf) {
+  if (!_pyrWorker) {
+    _pyrWorker = new Worker(URL.createObjectURL(new Blob([PYR_WORKER_SRC], { type: 'text/javascript' })));
+    _pyrWorker.onmessage = (e) => { const cb = _pyrCbs.get(e.data.id); _pyrCbs.delete(e.data.id); if (cb) (e.data.error ? cb.reject(new Error(e.data.error)) : cb.resolve(e.data)); };
+  }
+  const id = ++_pyrSeq;
+  return new Promise((resolve, reject) => { _pyrCbs.set(id, { resolve, reject }); _pyrWorker.postMessage({ id, buf }, [buf]); });
+}
+
 class AnnLayer {
   constructor(grid, slide, meta) {
     this.grid = grid;
@@ -366,6 +571,36 @@ class AnnLayer {
     const gl = this.grid.gl;
     const { meta, take } = unpack(buf);
     const n = meta.count, B = meta.buckets;
+    if (meta.index_only) {
+      // object pyramid: only the bucket table + which pyramid tiles exist; dots arrive tile by tile
+      this.pyr = meta.pyramid;
+      this.buckets = take(Float32Array, B * 8);
+      this.tileSets = [];
+      for (let l = 0; l < this.pyr.levels; l++) {
+        const t = take(Int32Array, this.pyr.tiles[l] * 2), set = new Set();
+        for (let i = 0; i < t.length; i += 2) set.add(t[i] * 65536 + t[i + 1]);
+        this.tileSets.push(set);
+      }
+      this.ptiles = new Map();
+      this.n = n;
+      this.nb = B;
+      this.medSize = meta.median_size || 0;
+      const om = this.grid.lod.overlays;
+      // client mode: fetch the layer's columns once, build the pyramid in a worker, then never ask again
+      // 'auto': small layers only, and only while this viewer holds < CLIENT_OVERLAY_TOTAL objects client-side
+      // (measured: 1M objects ≈ 70 MB of browser memory + a ~2 s worker build; 16 × 1M = 1.1 GB, 32 s)
+      const g = this.grid;
+      const auto = om === 'auto' && n <= CLIENT_OVERLAY_MAX && (g.clientObjects || 0) + n <= CLIENT_OVERLAY_TOTAL;
+      this.client = meta.client_ok && (om === 'client' || auto) ? 'pending' : null;
+      if (this.client) { g.clientObjects = (g.clientObjects || 0) + n; this.clientCounted = n; }
+      this.classes = meta.classes || [];
+      this.colormap = meta.colormap || null;
+      this.ctex = gl.createTexture();
+      this._classTex();
+      this.grid.gpuBytes += buf.byteLength;
+      this.state = 'ready';
+      return;
+    }
     this.cen = take(Float32Array, n * 2);
     this.size = take(Float32Array, n);
     this.orig = take(Uint32Array, n);
@@ -429,6 +664,138 @@ class AnnLayer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
   }
+  // pyramid level for a zoom: aggregated bins ≥ ~4 device px, or raw features once bins would be finer than a cell
+  pyrLevel(scaleDev) {
+    const P = this.pyr, kNeed = Math.ceil(Math.log2(4 / scaleDev));
+    return kNeed <= P.k0 ? 0 : Math.min(P.levels - 1, kNeed - P.k0);
+  }
+  pyrSpan(level) { return 2 ** (this.pyr.k0 + level) * this.pyr.tile_bins; }
+  pyrTiles(level, r) {
+    const span = this.pyrSpan(level), set = this.tileSets[level], out = [];
+    const x0 = Math.max(0, Math.floor(r[0] / span)), x1 = Math.floor(r[2] / span);
+    const y0 = Math.max(0, Math.floor(r[1] / span)), y1 = Math.floor(r[3] / span);
+    for (let ty = y0; ty <= y1; ty++) for (let tx = x0; tx <= x1; tx++) if (set.has(tx * 65536 + ty)) out.push([tx, ty]);
+    return out;
+  }
+  pkey(level, tx, ty) { return `${level}|${tx}|${ty}`; }
+  async ingestColumns(buf) {
+    this.client = 'building';
+    try {
+      const t0 = now();
+      const r = await buildPyramidInWorker(buf);
+      if (this.state === 'dead') return;
+      this.pyr = r.pyr;
+      this.tileSets = r.levels.map((L) => new Set(L.tiles.map((t) => t.tx * 65536 + t.ty)));
+      this.local = r.levels.map((L) => new Map(L.tiles.map((t) => [this.pkey(r.levels.indexOf(L), t.tx, t.ty), { ...t, k: L.k, raw: L.raw, hasHist: !!L.hist }])));
+      for (const k of [...this.ptiles.keys()]) this.dropPTile(k);   // (server tiles of another mode)
+      this.buildMs = now() - t0;
+      this.client = 'ready';
+    } catch (e) { console.warn('wissi-viz client pyramid', e); this.client = null; }
+    this.grid.requestRender();
+  }
+  // a locally built tile → GPU (same layout as server tiles; raw tiles also get an outline VAO)
+  localPTile(key) {
+    const lvl = +key.split('|')[0], t = this.local[lvl].get(key);
+    if (!t) return null;
+    const gl = this.grid.gl;
+    const d = { n: t.n, raw: t.raw, hist: t.hasHist, x0: t.x0, y0: t.y0, span: t.span, k: t.k, bytes: 0, last: this.grid.frame, bufs: [] };
+    const attr = (vao, loc, data, size, type, int, norm = false, div = 0) => {
+      const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(loc);
+      if (int) gl.vertexAttribIPointer(loc, size, type, 0, 0); else gl.vertexAttribPointer(loc, size, type, norm, 0, 0);
+      if (div) gl.vertexAttribDivisor(loc, div);
+      d.bufs.push(b); d.bytes += data.byteLength;
+    };
+    d.vao = gl.createVertexArray(); gl.bindVertexArray(d.vao);
+    attr(d.vao, 0, t.pos, 2, gl.UNSIGNED_SHORT, false, true);
+    if (t.raw) {
+      attr(d.vao, 1, t.size, 1, gl.UNSIGNED_SHORT, false); attr(d.vao, 2, t.col, 1, gl.UNSIGNED_SHORT, true); attr(d.vao, 3, t.kind, 1, gl.UNSIGNED_BYTE, true);
+      d.cpu = { pos: t.pos, size: t.size, cls: t.cls, orig: t.orig, kind: t.kind };
+      d.vaoShp = gl.createVertexArray(); gl.bindVertexArray(d.vaoShp);
+      attr(d.vaoShp, 0, t.shp, 4, gl.FLOAT, false, false, 1); attr(d.vaoShp, 1, t.col, 1, gl.UNSIGNED_SHORT, true, false, 1);
+      attr(d.vaoShp, 2, t.kind, 1, gl.UNSIGNED_BYTE, true, false, 1);
+    } else {
+      attr(d.vao, 1, t.count, 1, gl.UNSIGNED_SHORT, false); attr(d.vao, 2, t.col, 1, gl.UNSIGNED_SHORT, true);
+      if (t.hasHist) {
+        const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, t.hist, gl.STATIC_DRAW);
+        gl.enableVertexAttribArray(4); gl.vertexAttribIPointer(4, 4, gl.UNSIGNED_BYTE, 8, 0);
+        gl.enableVertexAttribArray(5); gl.vertexAttribIPointer(5, 4, gl.UNSIGNED_BYTE, 8, 4);
+        d.bufs.push(b); d.bytes += t.hist.byteLength;
+      }
+      d.cpu = { orig: t.orig };
+    }
+    gl.bindVertexArray(null);
+    this.ptiles.set(key, d);
+    this.grid.gpuBytes += d.bytes;
+    return d;
+  }
+  ingestPTile(key, buf) {
+    const gl = this.grid.gl;
+    const { meta, take } = unpack(buf);
+    const n = meta.n;
+    const pos = take(Uint16Array, n * 2);
+    const t = { n, raw: meta.raw, hist: !!meta.hist, x0: meta.x0, y0: meta.y0, span: meta.span, k: meta.k,
+      bytes: buf.byteLength, last: this.grid.frame, bufs: [] };
+    t.vao = gl.createVertexArray();
+    gl.bindVertexArray(t.vao);
+    const attr = (loc, data, size, type, int, norm = false) => {
+      const b = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, b);
+      gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(loc);
+      if (int) gl.vertexAttribIPointer(loc, size, type, 0, 0); else gl.vertexAttribPointer(loc, size, type, norm, 0, 0);
+      t.bufs.push(b);
+      return b;
+    };
+    attr(0, pos, 2, gl.UNSIGNED_SHORT, false, true);
+    if (meta.raw) {
+      const size = take(Uint16Array, n), col = take(Uint16Array, n), cls = take(Uint16Array, n);
+      const orig = take(Uint32Array, n), kind = take(Uint8Array, n);
+      attr(1, size, 1, gl.UNSIGNED_SHORT, false);
+      attr(2, col, 1, gl.UNSIGNED_SHORT, true);
+      attr(3, kind, 1, gl.UNSIGNED_BYTE, true);
+      t.cpu = { pos, size, cls, orig, kind };        // for click hit-testing in the browser
+    } else {
+      const cnt = take(Uint16Array, n), col = take(Uint16Array, n), orig = take(Uint32Array, n);
+      attr(1, cnt, 1, gl.UNSIGNED_SHORT, false);
+      attr(2, col, 1, gl.UNSIGNED_SHORT, true);
+      if (meta.hist) {
+        const h = take(Uint8Array, n * 8);
+        const b = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, b);
+        gl.bufferData(gl.ARRAY_BUFFER, h, gl.STATIC_DRAW);
+        gl.enableVertexAttribArray(4);
+        gl.vertexAttribIPointer(4, 4, gl.UNSIGNED_BYTE, 8, 0);
+        gl.enableVertexAttribArray(5);
+        gl.vertexAttribIPointer(5, 4, gl.UNSIGNED_BYTE, 8, 4);
+        t.bufs.push(b);
+      }
+      t.cpu = { orig };
+    }
+    gl.bindVertexArray(null);
+    this.ptiles.set(key, t);
+    this.grid.gpuBytes += t.bytes;
+  }
+  dropPTile(key) {
+    const t = this.ptiles?.get(key);
+    if (!t) return;
+    const gl = this.grid.gl;
+    t.bufs.forEach((b) => gl.deleteBuffer(b));
+    gl.deleteVertexArray(t.vao);
+    if (t.vaoShp) gl.deleteVertexArray(t.vaoShp);
+    this.grid.gpuBytes -= t.bytes;
+    this.ptiles.delete(key);
+  }
+  // slot visibility bitmask for aggregated dots (a slot is visible when its class is; 'other' when any rarer class is)
+  slotMask() {
+    const S = this.pyr.slots;
+    let m = 0;
+    S.forEach((c, j) => {
+      if (c >= 0) { if (!this.hidden.has(this.classes[c]?.name)) m |= 1 << j; }
+      else if (this.classes.some((k, i) => !S.includes(i) && !this.hidden.has(k.name))) m |= 1 << j;
+    });
+    return m;
+  }
   setClassVisible(name, vis) {
     if (vis) this.hidden.delete(name); else this.hidden.add(name);
     if (this.state === 'ready') this._classTex();
@@ -440,10 +807,17 @@ class AnnLayer {
   ingestBucket(i, buf) {
     const gl = this.grid.gl;
     const { meta, take } = unpack(buf);
-    const S = meta.segments, T = meta.tri_verts;
+    const S = meta.segments, T = meta.tri_verts, P = meta.shapes || 0;
     const seg = take(Float32Array, S * 4), tv = take(Float32Array, T * 2);
     const sc = take(Uint16Array, S), tc = take(Uint16Array, T);
-    const d = { nSeg: S, nTri: T, bytes: buf.byteLength, last: this.grid.frame, bufs: [] };
+    const d = { nSeg: S, nTri: T, nShp: P, bytes: buf.byteLength, last: this.grid.frame, bufs: [] };
+    if (P) {
+      const shp = take(Float32Array, P * 4), scol = take(Uint16Array, P), skind = take(Uint8Array, P);
+      d.vaoShp = gl.createVertexArray();
+      gl.bindVertexArray(d.vaoShp);
+      d.bufs.push(this._attr(0, shp, 4, gl.FLOAT, false, 1), this._attr(1, scol, 1, gl.UNSIGNED_SHORT, true, 1),
+        this._attr(2, skind, 1, gl.UNSIGNED_BYTE, true, 1));
+    }
     if (S) {
       d.vaoSeg = gl.createVertexArray();
       gl.bindVertexArray(d.vaoSeg);
@@ -465,18 +839,55 @@ class AnnLayer {
     d.bufs.forEach((b) => gl.deleteBuffer(b));
     if (d.vaoSeg) gl.deleteVertexArray(d.vaoSeg);
     if (d.vaoTri) gl.deleteVertexArray(d.vaoTri);
+    if (d.vaoShp) gl.deleteVertexArray(d.vaoShp);
     this.grid.gpuBytes -= d.bytes;
     this.detail.delete(i);
   }
   destroy() {
     const gl = this.grid.gl;
     for (const i of [...this.detail.keys()]) this.dropBucket(i);
+    for (const k of [...(this.ptiles?.keys() || [])]) this.dropPTile(k);
+    if (this.clientCounted) { this.grid.clientObjects -= this.clientCounted; this.clientCounted = 0; }
+    this.local = null;
     if (this.state === 'ready') {
-      this.bufs.forEach((b) => gl.deleteBuffer(b));
-      gl.deleteVertexArray(this.vao);
+      if (this.bufs) this.bufs.forEach((b) => gl.deleteBuffer(b));
+      if (this.vao) gl.deleteVertexArray(this.vao);
       gl.deleteTexture(this.ctex);
     }
     this.state = 'dead';
+  }
+  // Click → {f (feature index), cx, cy, size, cls} | null; undefined = "ask the server" (pyramid layer whose
+  // raw tiles around the point are not loaded, i.e. the pane shows aggregated dots there)
+  hitInfo(x, y, tol, level) {
+    if (this.state !== 'ready') return null;
+    if (!this.pyr) {
+      const f = this.hit(x, y, tol);
+      return f < 0 ? null : { f: this.orig[f], cx: this.cen[2 * f], cy: this.cen[2 * f + 1], size: this.size[f], cls: this.cls[f] };
+    }
+    if (level !== 0 && this.client !== 'ready') return undefined;
+    let best = null;
+    const tiles = this.pyrTiles(0, [x - tol, y - tol, x + tol, y + tol]);
+    for (const [tx, ty] of tiles) {
+      const t = this.ptiles.get(this.pkey(0, tx, ty)) || (this.client === 'ready' ? this.localPTile(this.pkey(0, tx, ty)) : null);
+      if (!t) return undefined;
+      const c = t.cpu;
+      for (let i = 0; i < t.n; i++) {
+        const px = t.x0 + c.pos[2 * i] / 65535 * t.span, py = t.y0 + c.pos[2 * i + 1] / 65535 * t.span;
+        const r = c.size[i] / 2 + tol, dx = x - px, dy = y - py;
+        if (dx * dx + dy * dy <= r * r && (!best || c.size[i] < best.size) && !this.hidden.has(this.classes[c.cls[i]]?.name))
+          best = { f: c.orig[i], cx: px, cy: py, size: c.size[i], cls: c.cls[i] };
+      }
+    }
+    return best;
+  }
+  async serverHit(x, y, tol) {
+    const hidden = this.classes.map((c, i) => (this.hidden.has(c.name) ? i : -1)).filter((i) => i >= 0).join(',');
+    try {
+      const r = await fetch(`${this.slide.url}/annotations/hit?layer=${encodeURIComponent(this.name)}&x=${x}&y=${y}&tol=${tol}` +
+        (hidden ? `&hidden=${hidden}` : ''), { credentials: 'same-origin' });
+      const j = r.ok ? await r.json() : null;
+      return j && j.index != null ? { f: j.index, cx: j.cx, cy: j.cy, size: j.size, cls: j.cls } : null;
+    } catch (_) { return null; }
   }
   // CPU hit test on the overview (only buckets around the point are scanned)
   hit(x, y, tol) {
@@ -657,6 +1068,8 @@ export class WsiGrid extends HTMLElement {
       pts: compile(gl, VS_PTS, FS_PTS),
       seg: compile(gl, VS_SEG, FS_FLAT),
       tri: compile(gl, VS_TRI, FS_FLAT),
+      ppts: compile(gl, VS_PPTS, FS_PPTS),
+      shp: compile(gl, VS_SHP, FS_SHP),
     };
     this.emptyVao = gl.createVertexArray();
   }
@@ -858,10 +1271,23 @@ export class WsiGrid extends HTMLElement {
     this._drawOverlay();
   }
 
-  select(pane, layer, index) {
+  async select(pane, layer, index) {
     const p = this._pane(pane);
     if (!p) return;
-    p.selection = index == null ? null : { layer, f: index };
+    if (index == null) { p.selection = null; this.requestRender(); return; }
+    const L = p.slide?.layers.get(layer);
+    let sel = { layer, f: index };
+    if (L?.state === 'ready' && !L.pyr) {
+      const f = Array.prototype.indexOf.call(L.orig, index);
+      if (f >= 0) sel = { layer, f: index, cx: L.cen[2 * f], cy: L.cen[2 * f + 1], size: L.size[f] };
+    } else if (p.slide) {
+      try {
+        const r = await fetch(`${p.slide.url}/annotations/feature/${index}?layer=${encodeURIComponent(layer)}`, { credentials: 'same-origin' });
+        const j = r.ok ? await r.json() : null;
+        if (j?.centroid) sel = { layer, f: index, cx: j.centroid[0], cy: j.centroid[1], size: j.size };
+      } catch (_) { /* no outline then */ }
+    }
+    p.selection = sel;
     this.requestRender();
   }
 
@@ -1273,18 +1699,19 @@ export class WsiGrid extends HTMLElement {
     this._emit('paneclick', detail);
     const tol = 5 / p.view.scale;
     let found = null;
+    const scaleDev = p.view.scale * this.dpr;
     for (const L of p.slide.layers.values()) {
-      if (!p.layerVisible(L)) continue;
-      const f = L.hit(x, y, tol);
-      if (f >= 0 && (!found || L.size[f] < found.L.size[found.f])) found = { L, f };
+      if (!p.layerVisible(L) || L.state !== 'ready') continue;
+      let h = L.hitInfo(x, y, tol, L.pyr ? L.pyrLevel(scaleDev) : 0);
+      if (h === undefined) h = await L.serverHit(x, y, tol);
+      if (h && (!found || h.size < found.size)) found = { ...h, L };
     }
-    p.selection = found ? { layer: found.L.name, f: found.f } : null;
+    p.selection = found ? { layer: found.L.name, f: found.f, cx: found.cx, cy: found.cy, size: found.size } : null;
     this.requestRender();
     if (!found) return;
-    const { L, f } = found;
-    const idx = L.orig[f];
-    const d = { ...detail, layer: L.name, index: idx, class: L.classes[L.cls[f]]?.name,
-      centroid: [L.cen[2 * f], L.cen[2 * f + 1]], size: L.size[f] };
+    const L = found.L, idx = found.f;
+    const d = { ...detail, layer: L.name, index: idx, class: L.classes[found.cls]?.name,
+      centroid: [found.cx, found.cy], size: found.size };
     try {
       const r = await fetch(`${p.slide.url}/annotations/feature/${idx}?layer=${encodeURIComponent(L.name)}`, { credentials: 'same-origin' });
       if (r.ok) d.properties = (await r.json()).properties;
@@ -1725,8 +2152,16 @@ export class WsiGrid extends HTMLElement {
         else ptsRanges.push([B[o + 4], B[o + 5]]);
       }
       const alpha = st.opacity ?? 1;
+      if (L.client === 'ready') {
+        const outlines = L.pyrLevel(scaleDev) === 0 && L.medSize * p.view.scale >= minPx;
+        this._drawPyramid(p, L, vis, scaleDev, alpha, outlines);
+        if (outlines) this._drawLocalShapes(p, L, vis, scaleDev, alpha);
+        continue;
+      }
+      if (L.client) continue;   // client mode still downloading / building
+      if (L.pyr) this._drawPyramid(p, L, vis, scaleDev, alpha, ptsRanges.length === 0 && detail.length > 0);
       // dots (zoomed-out objects, and point features everywhere)
-      if (ptsRanges.length || kindRanges.length) {
+      if (!L.pyr && (ptsRanges.length || kindRanges.length)) {
         const pr = this.prog.pts;
         gl.useProgram(pr.p);
         gl.bindVertexArray(L.vao);
@@ -1771,8 +2206,20 @@ export class WsiGrid extends HTMLElement {
         gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, L.ctex); gl.uniform1i(pr.u.u_ctex, 0);
         for (const d of detail) if (d.nSeg) { gl.bindVertexArray(d.vaoSeg); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, d.nSeg); }
       }
+      // parametric cells (bbox ellipses / rects): outline + fill in one instanced pass
+      if (detail.some((d) => d.nShp)) {
+        const pr = this.prog.shp;
+        gl.useProgram(pr.p);
+        gl.uniform3f(pr.u.u_view, p.view.cx, p.view.cy, scaleDev);
+        gl.uniform2f(pr.u.u_vp, p.dev.w, p.dev.h);
+        gl.uniform1f(pr.u.u_w, Math.max(1, (st.line_width ?? 1.5) * this.dpr));
+        gl.uniform1f(pr.u.u_fill, fo);
+        gl.uniform1f(pr.u.u_alpha, alpha);
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, L.ctex); gl.uniform1i(pr.u.u_ctex, 0);
+        for (const d of detail) if (d.nShp) { gl.bindVertexArray(d.vaoShp); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, d.nShp); }
+      }
       // point features on top of detailed buckets
-      if (kindRanges.length && detail.length) {
+      if (!L.pyr && kindRanges.length && detail.length) {
         const pr = this.prog.pts;
         gl.useProgram(pr.p);
         gl.bindVertexArray(L.vao);
@@ -1783,6 +2230,56 @@ export class WsiGrid extends HTMLElement {
     }
     gl.bindVertexArray(null);
     gl.disable(gl.BLEND);
+  }
+
+  // Object pyramid: the level for this zoom where loaded, the coarsest level underneath where not.
+  // allDetailed → every visible bucket shows outlines, so raw dots are only drawn for point features.
+  _drawPyramid(p, L, vis, scaleDev, alpha, allDetailed) {
+    const gl = this.gl, st = L.style, lvl = L.pyrLevel(scaleDev), top = L.pyr.levels - 1;
+    const tiles = (lv) => L.pyrTiles(lv, vis).map(([tx, ty]) => L.ptiles.get(L.pkey(lv, tx, ty)));
+    const target = tiles(lvl);
+    const list = target.every(Boolean) ? target : [...(lvl !== top ? tiles(top) : []), ...target];
+    if (st.overview === 'none' && lvl !== 0) return;
+    const pr = this.prog.ppts;
+    gl.useProgram(pr.p);
+    // integer inputs a tile leaves unbound (raw: no histogram; aggregated: no kind) need integer defaults
+    gl.vertexAttribI4ui(3, 0, 0, 0, 0); gl.vertexAttribI4ui(4, 0, 0, 0, 0); gl.vertexAttribI4ui(5, 0, 0, 0, 0);
+    gl.uniform3f(pr.u.u_view, p.view.cx, p.view.cy, scaleDev);
+    gl.uniform2f(pr.u.u_vp, p.dev.w, p.dev.h);
+    gl.uniform2f(pr.u.u_ps, 1.5 * this.dpr, (st.point_size ?? 4) * this.dpr);
+    gl.uniform1f(pr.u.u_alpha, alpha * 0.9);
+    gl.uniform1i(pr.u.u_onlyPoints, allDetailed ? 1 : 0);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, L.ctex); gl.uniform1i(pr.u.u_ctex, 0);
+    const slots = new Int32Array(8);
+    L.pyr.slots.forEach((c, j) => { slots[j] = c >= 0 ? c : (L.pyr.other_class ?? 0); });
+    gl.uniform1iv(pr.u.u_slots, slots);
+    gl.uniform1i(pr.u.u_vis, L.slotMask());
+    for (const t of list) {
+      if (!t || !t.n) continue;
+      t.last = this.frame;
+      gl.uniform3f(pr.u.u_tile, t.x0, t.y0, t.span);
+      gl.uniform1i(pr.u.u_mode, t.raw ? 0 : (t.hist ? 1 : 2));
+      gl.uniform1f(pr.u.u_bin, 2 ** t.k);
+      gl.bindVertexArray(t.vao);
+      gl.drawArrays(gl.POINTS, 0, t.n);
+    }
+  }
+
+  _drawLocalShapes(p, L, vis, scaleDev, alpha) {
+    const gl = this.gl, st = L.style, pr = this.prog.shp;
+    gl.useProgram(pr.p);
+    gl.uniform3f(pr.u.u_view, p.view.cx, p.view.cy, scaleDev);
+    gl.uniform2f(pr.u.u_vp, p.dev.w, p.dev.h);
+    gl.uniform1f(pr.u.u_w, Math.max(1, (st.line_width ?? 1.5) * this.dpr));
+    gl.uniform1f(pr.u.u_fill, (st.fill_opacity ?? 0) * alpha);
+    gl.uniform1f(pr.u.u_alpha, alpha);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, L.ctex); gl.uniform1i(pr.u.u_ctex, 0);
+    for (const [tx, ty] of L.pyrTiles(0, vis)) {
+      const t = L.ptiles.get(L.pkey(0, tx, ty));
+      if (!t || !t.vaoShp || !t.n) continue;
+      gl.bindVertexArray(t.vaoShp);
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, t.n);
+    }
   }
 
   _drawOverlay() {
@@ -1798,12 +2295,11 @@ export class WsiGrid extends HTMLElement {
       c.beginPath();
       c.rect(p.rect.x * dpr, p.rect.y * dpr, p.rect.w * dpr, p.rect.h * dpr);
       c.clip();
-      if (p.selection) {
+      if (p.selection && p.selection.cx != null) {
         const L = p.slide?.layers.get(p.selection.layer);
         if (L?.state === 'ready') {
-          const f = p.selection.f;
-          const [sx, sy] = toS(L.cen[2 * f], L.cen[2 * f + 1]);
-          const r = Math.max(6 * dpr, (L.size[f] / 2) * p.view.scale * dpr * 1.15);
+          const [sx, sy] = toS(p.selection.cx, p.selection.cy);
+          const r = Math.max(6 * dpr, (p.selection.size / 2) * p.view.scale * dpr * 1.15);
           c.lineWidth = 2 * dpr;
           c.strokeStyle = '#fff';
           c.setLineDash([5 * dpr, 4 * dpr]);
@@ -1909,11 +2405,47 @@ export class WsiGrid extends HTMLElement {
       // annotations: overview per visible layer, detail buckets in view
       for (const L of s.layers.values()) {
         if (!p.layerVisible(L)) continue;
-        if (L.state === 'idle' || L.state === 'error-retry') {
+        // keep the overview wanted while it loads: cancelling it (it is not "in view" yet) could drop a response
+        // already on its way and leave the layer stuck in 'loading'
+        if (L.client === 'pending' && this.inflight.has(`cols|${s.url}|${L.name}|${L.meta.version}`)) {
+          add(`cols|${s.url}|${L.name}|${L.meta.version}`, 0.3, s.annUrl('columns', L.name, L.meta.version), 'bin', { ann: L, columns: true });
+        }
+        if (L.state === 'idle' || L.state === 'error-retry' || L.state === 'loading') {
           add(`ann|${s.url}|${L.name}|${L.meta.version}`, 0.2, s.annUrl('overview', L.name, L.meta.version), 'bin', { ann: L });
           continue;
         }
         if (L.state !== 'ready') continue;
+        if (L.client === 'pending') {
+          add(`cols|${s.url}|${L.name}|${L.meta.version}`, 0.3, s.annUrl('columns', L.name, L.meta.version), 'bin', { ann: L, columns: true });
+          continue;
+        }
+        if (L.client === 'building') continue;
+        if (L.client === 'ready') {   // tiles come from the local pyramid: GPU upload only, no requests
+          const lvl = L.pyrLevel(scaleDev), top = L.pyr.levels - 1;
+          let made = 0;
+          for (const lv of new Set([top, lvl])) for (const [tx, ty] of L.pyrTiles(lv, vis)) {
+            const pk = L.pkey(lv, tx, ty), t = L.ptiles.get(pk);
+            if (t) { t.last = this.frame; continue; }
+            if (made++ < 24) L.localPTile(pk); else this._localPending = true;
+          }
+          continue;
+        }
+        if (L.pyr) {  // object pyramid: coarsest tile (instant overview) + the level for this zoom, centre-out
+          const lvl = L.pyrLevel(scaleDev), top = L.pyr.levels - 1;
+          const want = (lv, rect, base) => {
+            for (const [tx, ty] of L.pyrTiles(lv, rect)) {
+              const pk = L.pkey(lv, tx, ty);
+              const t = L.ptiles.get(pk);
+              if (t) { t.last = this.frame; continue; }
+              const span = L.pyrSpan(lv);
+              const dist = Math.hypot((tx + 0.5) * span - cx, (ty + 0.5) * span - cy) / diag;
+              add(`pt|${s.url}|${L.name}|${L.meta.version}|${pk}`, base + Math.min(dist, 2), s.annUrl(`ptile/${lv}/${tx}/${ty}`, L.name, L.meta.version),
+                'bin', { ann: L, ptile: pk });
+            }
+          };
+          want(top, vis, 0.25);
+          if (lvl !== top) want(lvl, vis, 1.1);
+        }
         const B = L.buckets, minPx = L.style.detail_min_px ?? 6;
         const vr = this._visRect(p, ts0 * 0.5);
         for (let b = 0; b < L.nb; b++) {
@@ -1949,6 +2481,7 @@ export class WsiGrid extends HTMLElement {
     this._pendingWork = todo.length > 0;
     this._todo = this.lod.decoupled ? todo : null;
     this._bgSlots = bgSlots;
+    if (this._localPending) { this._localPending = false; this.requestRender(); }   // more local overlay tiles to upload
   }
 
   // Between frames: when a request finishes, start the next wanted one (from the last schedule) right away.
@@ -1971,7 +2504,7 @@ export class WsiGrid extends HTMLElement {
     this.inflight.set(key, req);
     const C = this.counters;
     C.requests++;
-    if (w.meta.ann && w.meta.bucket == null) w.meta.ann.state = 'loading';
+    if (w.meta.ann && w.meta.bucket == null && !w.meta.ptile && !w.meta.columns) w.meta.ann.state = 'loading';
     req.promise.then((res) => {
       if (this.inflight.get(key) !== req) { res.bmp?.close?.(); return; }
       this.inflight.delete(key);
@@ -1985,7 +2518,7 @@ export class WsiGrid extends HTMLElement {
       this.requestRender();
     }, (err) => {
       if (this.inflight.get(key) === req) this.inflight.delete(key);
-      if (w.meta.ann && w.meta.bucket == null && w.meta.ann.state === 'loading') w.meta.ann.state = 'error-retry';
+      if (w.meta.ann && w.meta.bucket == null && !w.meta.ptile && !w.meta.columns && w.meta.ann.state === 'loading') w.meta.ann.state = 'error-retry';
       if (err.message === 'abort') C.aborted++; else C.failed++;
       if (err.message !== 'abort') {
         // per-tile exponential back-off (0.5 s, 1 s, 2 s … ≤ 30 s), and wake up when it expires:
@@ -2016,7 +2549,9 @@ export class WsiGrid extends HTMLElement {
         const L = meta.ann;
         if (L.state === 'dead') continue;
         try {
-          if (meta.bucket == null) { L._ingest(res.buf); this._legendDirty = true; }
+          if (meta.columns) { if (L.state === 'ready' && L.client === 'pending') L.ingestColumns(res.buf); }
+          else if (meta.ptile) { if (L.state === 'ready') L.ingestPTile(meta.ptile, res.buf); }
+          else if (meta.bucket == null) { L._ingest(res.buf); this._legendDirty = true; }
           else L.ingestBucket(meta.bucket, res.buf);
         } catch (e) { console.warn('wissi-viz annotation', e); L.state = 'error'; }
         continue;
@@ -2072,9 +2607,12 @@ export class WsiGrid extends HTMLElement {
     const annBudget = this.budget * 0.5;
     if (this.gpuBytes > annBudget) {
       const cand = [];
-      for (const s of this.slides.values()) for (const L of s.layers.values()) for (const [b, d] of L.detail) if (d.last < this.frame - 1) cand.push([L, b, d.last]);
+      for (const s of this.slides.values()) for (const L of s.layers.values()) {
+        for (const [b, d] of L.detail) if (d.last < this.frame - 1) cand.push([L, b, d.last, false]);
+        if (L.ptiles) for (const [k, t] of L.ptiles) if (t.last < this.frame - 1) cand.push([L, k, t.last, true]);
+      }
       cand.sort((a, b) => a[2] - b[2]);
-      for (const [L, b] of cand) { if (this.gpuBytes <= annBudget * 0.85) break; L.dropBucket(b); }
+      for (const [L, b, , pt] of cand) { if (this.gpuBytes <= annBudget * 0.85) break; if (pt) L.dropPTile(b); else L.dropBucket(b); }
     }
   }
 

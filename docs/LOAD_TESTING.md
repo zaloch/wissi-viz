@@ -17,7 +17,8 @@ Each user acts like a person at the viewer:
    - It requests the tiles the viewer would request at rest.
    - At most `--conn` requests are in flight per user: 6 is a browser on HTTP/1.1; 24 is wissi-viz over HTTP/2.
    - It never re-fetches a tile it already has, as a browser cache wouldn't.
-5. **Stops** after `--requests` requests (default 300, **hard cap 999**) or at the stage time limit.
+5. **Fetches overlays** with `--overlays` (wissi-viz servers): each slide's layer index once, then the object-pyramid tiles and outline buckets each move makes visible, exactly as the viewer chooses them. These are reported per request type: `ann_index`, `ann_ptile`, `ann_bucket`.
+6. **Stops** after `--requests` requests (default 300, **hard cap 999**) or at the stage time limit.
 
 Users are added in stages (`--users 10,25,50,100`), each stage ramped over `--ramp` seconds. Later stages reuse the server's warm cache for coarse levels. Each stage uses a different random seed, so most fine-resolution tiles are new.
 

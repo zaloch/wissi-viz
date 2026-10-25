@@ -56,7 +56,18 @@ def serve(args) -> None:
     sys.path.insert(0, str(HERE))
     reg = SlideRegistry(TileService(memory_bytes=args.cache_mb * 2**20, workers=args.workers), warm=False)
     conn = None
-    if args.backend == 'api':
+    if args.backend == 'synthetic':   # overlay-focused: 16 blank 100k × 80k slides (image tiles cost ~nothing)
+        import numpy as np
+
+        from wissi_viz import Level, SlideInfo
+        from wissi_viz.sources.callback import CallbackSource
+        W, H = 100_000, 80_000
+        info = SlideInfo(width=W, height=H, levels=[Level(-(-W // 2**k), -(-H // 2**k), float(2**k)) for k in range(10)],
+                         tile_size=512, mpp=(0.25, 0.25))
+        blank = np.full((512, 512, 3), 235, np.uint8)
+        for i in range(16):
+            reg.add(CallbackSource(info, read_tile=lambda L, x, y, c: blank), slide_id=f'syn{i}')
+    elif args.backend == 'api':
         from connector import DemoApiConnection
         conn = DemoApiConnection(args.vendor_url, args.token)
         for im in conn.list_images():
@@ -64,6 +75,11 @@ def serve(args) -> None:
     else:
         for i, f in enumerate(args.files):
             reg.add(f, slide_id=f's{i}')
+    if args.overlay_table:   # the same object table on every slide, compiled once (memory-mapped, shared)
+        from wissi_viz import cached_object_layer
+        layer = cached_object_layer(args.overlay_table, args.layer_cache, mpp=0.25, read_kw={'units': 'px'}, name='cells')
+        for sid in reg.ids():
+            reg.add_annotations(sid, layer)
     app = create_app(reg)
 
     @app.get('/_sim/stats')
@@ -74,7 +90,10 @@ def serve(args) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
-    ap.add_argument('--backend', choices=['api', 'files'], default='api')
+    ap.add_argument('--backend', choices=['api', 'files', 'synthetic'], default='api')
+    ap.add_argument('--overlay-table', default=None, help='object table (parquet/csv/…) shown on every slide; users fetch overlays')
+    ap.add_argument('--layer-cache', default='/tmp/wissi-layer-cache', help='compiled overlay cache directory')
+    ap.add_argument('--overlay-mode', choices=['server', 'client'], default='server', help='how simulated viewers get overlays')
     ap.add_argument('--files', nargs='*', default=[], help='slide files (the vendor\'s images, or served directly)')
     ap.add_argument('--users', default='10,25,50,75,100')
     ap.add_argument('--requests', type=int, default=200)
@@ -96,7 +115,7 @@ def main() -> None:
     args = ap.parse_args()
     if args._serve:
         return serve(args)
-    if not args.files:
+    if not args.files and args.backend != 'synthetic':
         sys.exit('pass --files (slide files)')
     procs = []
     try:
@@ -112,14 +131,16 @@ def main() -> None:
         sp = free_port()
         procs.append(subprocess.Popen([sys.executable, __file__, '--_serve', '--backend', args.backend, '--port', str(sp),
                                        '--vendor-url', vendor_url, '--token', args.token, '--cache-mb', str(args.cache_mb),
-                                       '--workers', str(args.workers), '--files', *args.files],
+                                       '--workers', str(args.workers), '--layer-cache', args.layer_cache,
+                                       *(['--overlay-table', args.overlay_table] if args.overlay_table else []),
+                                       '--files', *args.files],
                                       stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT))
         base = f'http://127.0.0.1:{sp}/wissi-viz'
         wait_http(f'{base}/slides')
         import wissi_loadtest
         argv = [base, '--users', args.users, '--requests', str(args.requests), '--panes', str(args.panes),
                 '--conn', str(args.conn), '--think', args.think, '--procs', str(args.procs),
-                '--stats-url', f'http://127.0.0.1:{sp}/_sim/stats']
+                '--stats-url', f'http://127.0.0.1:{sp}/_sim/stats'] + (['--overlays', '--overlay-mode', args.overlay_mode] if args.overlay_table else [])
         if vendor_url:
             argv += ['--stats-url', f'{vendor_url}/api/_stats']
         if args.out:

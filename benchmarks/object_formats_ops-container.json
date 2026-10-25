@@ -1,0 +1,209 @@
+{
+ "rows": 1000000,
+ "ops": {
+  "csv_pandas": {
+   "full": {
+    "seconds": 5.729779889000042,
+    "rows": 1000000,
+    "peak_rss_MB": 1239.2
+   },
+   "viewer": {
+    "seconds": 3.2341474710000284,
+    "rows": 1000000,
+    "peak_rss_MB": 995.0
+   }
+  },
+  "tsv_pandas": {
+   "full": {
+    "seconds": 5.78459091700006,
+    "rows": 1000000,
+    "peak_rss_MB": 1239.1
+   },
+   "viewer": {
+    "seconds": 2.796490274000007,
+    "rows": 1000000,
+    "peak_rss_MB": 994.9
+   }
+  },
+  "csv": {
+   "full": {
+    "seconds": 1.9437442859999692,
+    "rows": 1000000,
+    "peak_rss_MB": 950.8
+   },
+   "viewer": {
+    "seconds": 0.8131234410000161,
+    "rows": 1000000,
+    "peak_rss_MB": 694.4
+   }
+  },
+  "tsv": {
+   "full": {
+    "seconds": 1.7689924279999332,
+    "rows": 1000000,
+    "peak_rss_MB": 944.9
+   },
+   "viewer": {
+    "seconds": 0.9119738410000764,
+    "rows": 1000000,
+    "peak_rss_MB": 696.4
+   }
+  },
+  "parquet": {
+   "full": {
+    "seconds": 1.037546937000002,
+    "rows": 1000000,
+    "peak_rss_MB": 841.0
+   },
+   "viewer": {
+    "seconds": 0.3978511020000042,
+    "rows": 1000000,
+    "peak_rss_MB": 259.6
+   },
+   "window": {
+    "seconds": 0.05182043819999649,
+    "open_s": 0.30620530200008034,
+    "rows": 4631.15,
+    "peak_rss_MB": 243.1
+   },
+   "click": {
+    "seconds": 0.025161377780000292,
+    "open_s": 0.022898657999917305,
+    "rows": 1.0,
+    "peak_rss_MB": 167.4
+   }
+  },
+  "parquet_hilbert": {
+   "full": {
+    "seconds": 1.172696141000074,
+    "rows": 1000000,
+    "peak_rss_MB": 777.7
+   },
+   "viewer": {
+    "seconds": 0.46568520000005265,
+    "rows": 1000000,
+    "peak_rss_MB": 260.1
+   },
+   "window": {
+    "seconds": 0.009190945950001606,
+    "open_s": 0.24894573599999603,
+    "rows": 4631.15,
+    "peak_rss_MB": 173.9
+   },
+   "click": {
+    "seconds": 0.02999971822000134,
+    "open_s": 0.03061990399999104,
+    "rows": 1.0,
+    "peak_rss_MB": 169.4
+   }
+  },
+  "feather": {
+   "full": {
+    "seconds": 0.5469034459999875,
+    "rows": 1000000,
+    "peak_rss_MB": 390.4
+   },
+   "viewer": {
+    "seconds": 0.3851423880000766,
+    "rows": 1000000,
+    "peak_rss_MB": 258.9
+   },
+   "window": {
+    "seconds": 0.015266325900000766,
+    "open_s": 0.09528356700002405,
+    "rows": 4631.15,
+    "peak_rss_MB": 210.9
+   },
+   "click": {
+    "seconds": 0.00018356913999923564,
+    "open_s": 0.013478171999963706,
+    "rows": 1.0,
+    "peak_rss_MB": 259.1
+   }
+  },
+  "feather_lz4": {
+   "full": {
+    "seconds": 0.7522565900000018,
+    "rows": 1000000,
+    "peak_rss_MB": 531.4
+   },
+   "viewer": {
+    "seconds": 0.3818528909999941,
+    "rows": 1000000,
+    "peak_rss_MB": 211.1
+   }
+  },
+  "sqlite": {
+   "full": {
+    "seconds": 14.557895012000017,
+    "rows": 1000000,
+    "peak_rss_MB": 2185.9
+   },
+   "viewer": {
+    "seconds": 2.4797604289999526,
+    "rows": 1000000,
+    "peak_rss_MB": 443.7
+   },
+   "window": {
+    "seconds": 0.023478669550001996,
+    "open_s": 0.01326339199999893,
+    "rows": 4631.15,
+    "peak_rss_MB": 65.1
+   },
+   "click": {
+    "seconds": 2.630788000033135e-05,
+    "open_s": 0.011562734999984059,
+    "rows": 1.0,
+    "peak_rss_MB": 60.0
+   }
+  },
+  "duckdb": {
+   "full": {
+    "seconds": 0.9869670570000153,
+    "rows": 1000000,
+    "peak_rss_MB": 894.4
+   },
+   "viewer": {
+    "seconds": 0.42860047500005294,
+    "rows": 1000000,
+    "peak_rss_MB": 282.8
+   },
+   "window": {
+    "seconds": 0.008296748850000313,
+    "open_s": 0.10780140699989715,
+    "rows": 4631.15,
+    "peak_rss_MB": 123.1
+   },
+   "click": {
+    "seconds": 0.00362430348000089,
+    "open_s": 0.10538182499999493,
+    "rows": 1.0,
+    "peak_rss_MB": 212.4
+   }
+  },
+  "postgres": {
+   "full": {
+    "seconds": 6.33338104500001,
+    "rows": 1000000,
+    "peak_rss_MB": 1246.0
+   },
+   "viewer": {
+    "seconds": 1.7592354419999765,
+    "rows": 1000000,
+    "peak_rss_MB": 336.8
+   },
+   "window": {
+    "seconds": 0.022451136649999627,
+    "open_s": 0.1287499380000554,
+    "rows": 4631.15,
+    "peak_rss_MB": 78.4
+   },
+   "click": {
+    "seconds": 0.00013964307999913216,
+    "open_s": 0.11379345400007423,
+    "rows": 1.0,
+    "peak_rss_MB": 73.6
+   }
+  }
+ }
+}

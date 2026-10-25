@@ -1,0 +1,87 @@
+{
+ "mode": "new/client",
+ "server_read_s": 1.31,
+ "server_layer_s": 0.54,
+ "server_compile_s": 1.53,
+ "server_rss_MB": 1238,
+ "runs": [
+  {
+   "panes": 1,
+   "ready_ms": 3309,
+   "fit_transfer_MB": 7.82,
+   "fit_requests": 5,
+   "gpu_overlay_MB": 0.5,
+   "js_heap_MB": 72,
+   "client_build_ms": 1861,
+   "click_fit_ms": 117,
+   "pan_frame_ms": {
+    "p50": 95.8,
+    "p95": 115.8,
+    "js50": 0.6,
+    "js95": 3.3
+   },
+   "zoom": [
+    {
+     "mag": 2.5,
+     "ms": 1471,
+     "transfer_MB": 0.0,
+     "requests": 0
+    },
+    {
+     "mag": 10,
+     "ms": 1402,
+     "transfer_MB": 0.0,
+     "requests": 0
+    },
+    {
+     "mag": 40,
+     "ms": 1277,
+     "transfer_MB": 0.0,
+     "requests": 0
+    }
+   ],
+   "click_40x_ms": 94,
+   "gpu_overlay_MB_end": 1.1,
+   "js_heap_MB_end": 72
+  },
+  {
+   "panes": 16,
+   "ready_ms": 32062,
+   "fit_transfer_MB": 124.54,
+   "fit_requests": 32,
+   "gpu_overlay_MB": 1,
+   "js_heap_MB": 1109,
+   "client_build_ms": 12150,
+   "click_fit_ms": 113,
+   "pan_frame_ms": {
+    "p50": 103.8,
+    "p95": 153.7,
+    "js50": 1.3,
+    "js95": 3.4
+   },
+   "zoom": [
+    {
+     "mag": 2.5,
+     "ms": 12687,
+     "transfer_MB": 0.0,
+     "requests": 0
+    },
+    {
+     "mag": 10,
+     "ms": 6376,
+     "transfer_MB": 0.0,
+     "requests": 0
+    },
+    {
+     "mag": 40,
+     "ms": 11282,
+     "transfer_MB": 0.0,
+     "requests": 0
+    }
+   ],
+   "click_40x_ms": 159,
+   "gpu_overlay_MB_end": 5.5,
+   "js_heap_MB_end": 1110
+  }
+ ]
+}

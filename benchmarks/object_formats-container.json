@@ -1,0 +1,224 @@
+{
+ "rows": 1000000,
+ "write_s": {
+  "csv": 4.08,
+  "tsv": 4.66,
+  "parquet": 3.35,
+  "parquet_hilbert": 3.69,
+  "feather": 0.19,
+  "feather_lz4": 0.6,
+  "sqlite": 19.49,
+  "duckdb": 0.89,
+  "postgres": 14.46
+ },
+ "size_MB": {
+  "csv": 284.7,
+  "tsv": 284.7,
+  "parquet": 274.3,
+  "parquet_hilbert": 208.4,
+  "feather": 272.9,
+  "feather_lz4": 196.5,
+  "sqlite": 352.6,
+  "duckdb": 102.0,
+  "postgres": 393.3
+ },
+ "ops": {
+  "csv_pandas": {
+   "full": {
+    "seconds": 5.747505971000066,
+    "rows": 1000000,
+    "peak_rss_MB": 1972.2
+   },
+   "viewer": {
+    "seconds": 2.881766389999939,
+    "rows": 1000000,
+    "peak_rss_MB": 1972.2
+   }
+  },
+  "tsv_pandas": {
+   "full": {
+    "seconds": 5.653989308000064,
+    "rows": 1000000,
+    "peak_rss_MB": 1972.2
+   },
+   "viewer": {
+    "seconds": 2.79328142199995,
+    "rows": 1000000,
+    "peak_rss_MB": 1972.2
+   }
+  },
+  "csv": {
+   "full": {
+    "seconds": 1.6999029229999678,
+    "rows": 1000000,
+    "peak_rss_MB": 1972.2
+   },
+   "viewer": {
+    "seconds": 0.7540767579999965,
+    "rows": 1000000,
+    "peak_rss_MB": 1972.2
+   }
+  },
+  "tsv": {
+   "full": {
+    "seconds": 1.8944840920000843,
+    "rows": 1000000,
+    "peak_rss_MB": 1972.2
+   },
+   "viewer": {
+    "seconds": 0.805210762999991,
+    "rows": 1000000,
+    "peak_rss_MB": 1972.2
+   }
+  },
+  "parquet": {
+   "full": {
+    "seconds": 1.0377763380000715,
+    "rows": 1000000,
+    "peak_rss_MB": 1972.2
+   },
+   "viewer": {
+    "seconds": 0.4642475699999977,
+    "rows": 1000000,
+    "peak_rss_MB": 1972.2
+   },
+   "window": {
+    "seconds": 0.04972748435000085,
+    "open_s": 0.23523871299994425,
+    "rows": 4631.15,
+    "peak_rss_MB": 1972.2
+   },
+   "click": {
+    "seconds": 0.0242089732799991,
+    "open_s": 0.02781711099999029,
+    "rows": 1.0,
+    "peak_rss_MB": 1972.2
+   }
+  },
+  "parquet_hilbert": {
+   "full": {
+    "seconds": 0.9819306229999256,
+    "rows": 1000000,
+    "peak_rss_MB": 1972.2
+   },
+   "viewer": {
+    "seconds": 0.4205034369999794,
+    "rows": 1000000,
+    "peak_rss_MB": 1972.2
+   },
+   "window": {
+    "seconds": 0.01008074284999907,
+    "open_s": 0.2637760000000071,
+    "rows": 4631.15,
+    "peak_rss_MB": 1972.2
+   },
+   "click": {
+    "seconds": 0.02660457128000189,
+    "open_s": 0.023110186999929283,
+    "rows": 1.0,
+    "peak_rss_MB": 1972.2
+   }
+  },
+  "feather": {
+   "full": {
+    "seconds": 0.5721476819999225,
+    "rows": 1000000,
+    "peak_rss_MB": 1972.2
+   },
+   "viewer": {
+    "seconds": 0.34433955300005437,
+    "rows": 1000000,
+    "peak_rss_MB": 1972.2
+   },
+   "window": {
+    "seconds": 0.014078092799996967,
+    "open_s": 0.0708243130000028,
+    "rows": 4631.15,
+    "peak_rss_MB": 1972.2
+   },
+   "click": {
+    "seconds": 0.00028844418000062433,
+    "open_s": 0.014052263000053244,
+    "rows": 1.0,
+    "peak_rss_MB": 1972.2
+   }
+  },
+  "feather_lz4": {
+   "full": {
+    "seconds": 0.8331497159999799,
+    "rows": 1000000,
+    "peak_rss_MB": 1972.2
+   },
+   "viewer": {
+    "seconds": 0.3218693110000004,
+    "rows": 1000000,
+    "peak_rss_MB": 1972.2
+   }
+  },
+  "sqlite": {
+   "full": {
+    "seconds": 14.28576039099994,
+    "rows": 1000000,
+    "peak_rss_MB": 2186.5
+   },
+   "viewer": {
+    "seconds": 2.7061497120000695,
+    "rows": 1000000,
+    "peak_rss_MB": 1972.2
+   },
+   "window": {
+    "seconds": 0.025753596900000276,
+    "open_s": 0.010637348000045677,
+    "rows": 4631.15,
+    "peak_rss_MB": 1972.2
+   },
+   "click": {
+    "seconds": 3.733517999989999e-05,
+    "open_s": 0.015061555999977827,
+    "rows": 1.0,
+    "peak_rss_MB": 1972.2
+   }
+  },
+  "duckdb": {
+   "full": {
+    "error": "AttributeError: '_duckdb.DuckDBPyConnection' object has no attribute 'arrow'"
+   },
+   "viewer": {
+    "error": "AttributeError: '_duckdb.DuckDBPyConnection' object has no attribute 'arrow'"
+   },
+   "window": {
+    "error": "AttributeError: '_duckdb.DuckDBPyConnection' object has no attribute 'arrow'"
+   },
+   "click": {
+    "seconds": 0.0040868804599995204,
+    "open_s": 0.09965494699997635,
+    "rows": 1.0,
+    "peak_rss_MB": 1972.2
+   }
+  },
+  "postgres": {
+   "full": {
+    "seconds": 6.410918244999948,
+    "rows": 1000000,
+    "peak_rss_MB": 1972.2
+   },
+   "viewer": {
+    "seconds": 1.8078871739999158,
+    "rows": 1000000,
+    "peak_rss_MB": 1972.2
+   },
+   "window": {
+    "seconds": 0.026152374349999265,
+    "open_s": 0.11914263899996058,
+    "rows": 4631.15,
+    "peak_rss_MB": 1972.2
+   },
+   "click": {
+    "seconds": 0.00018178344000034487,
+    "open_s": 0.12371022700006051,
+    "rows": 1.0,
+    "peak_rss_MB": 1972.2
+   }
+  }
+ }
+}

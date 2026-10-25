@@ -25,7 +25,7 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from .annotations import POINT, POLYGON, AnnotationLayer, _box_rings, _columns_of, _find_col, _norm_col, _ring
+from .annotations import ELLIPSE, POINT, POLYGON, RECT, AnnotationLayer, _columns_of, _find_col, _norm_col, _ring
 
 _UM = re.compile(r'(µm|μm|\bum\b|micron)', re.I)
 
@@ -172,13 +172,13 @@ class ObjectTable:
         if shape == 'outline' and self.outlines is not None:
             L._bulk(POLYGON, [_ring(p, closed=True) for p in self.outlines], labels, None, None)
         elif shape in ('ellipse', 'rect') and self.bbox is not None:
-            b = self.bbox
-            L._bulk(POLYGON, _box_rings(b[:, 0], b[:, 1], b[:, 2], b[:, 3], shape), labels, None, None)
+            L._bulk_shapes(ELLIPSE if shape == 'ellipse' else RECT, self.bbox, cls)   # columnar, GPU-drawn shapes
         else:
             xy = self.xy.astype(np.float32)
             r = np.broadcast_to(np.asarray(style.get('radius', 0.0), np.float32), (n,))
-            L._bulk(POINT, [xy[i:i + 1] for i in range(n)], labels, r, None)
-        L._columns = {k: v for k, v in list(self.columns.items())[:max_columns]}
+            L._bulk_shapes(POINT, np.stack([xy[:, 0] - r, xy[:, 1] - r, xy[:, 0] + r, xy[:, 1] + r], 1), cls)
+        # measurement columns: float32 (half of float64) — clicked cells read their values from here
+        L._columns = {k: _compact(v) for k, v in list(self.columns.items())[:max_columns]}
         if color_by is not None:
             L.color_by(self.column(color_by) if isinstance(color_by, str) else color_by, cmap=cmap,
                        label=color_by if isinstance(color_by, str) else None)
@@ -368,6 +368,34 @@ def from_anndata(adata: Any, *, mpp: float | None = None, spatial_key: str = 'sp
                        None, mpp, name)
 
 
+def cached_object_layer(path: str | Path, cache_dir: str | Path, *, mpp: float | None = None, read_kw: dict | None = None,
+                        **layer_kw) -> AnnotationLayer:
+    """``read_objects(path).to_layer(**layer_kw)``, compiled once and kept in ``cache_dir``.
+
+    The cache key covers the file (absolute path, size, modification time) and every option, so editing the export
+    rebuilds it. A cached layer opens in milliseconds (memory-mapped .npy files: no parsing, no compiling, shared
+    by every server worker through the OS page cache); a 1M-cell table otherwise costs ~3 s of CPU per process."""
+    import hashlib
+    p = Path(path).resolve()
+    st = p.stat()
+    key_src = json.dumps([str(p), st.st_size, st.st_mtime_ns, mpp, read_kw or {}, layer_kw, AnnotationLayer._SAVE_FORMAT],
+                         sort_keys=True, default=str)
+    key = hashlib.sha1(key_src.encode()).hexdigest()[:20]
+    d = Path(cache_dir) / f'{p.stem}-{key}'
+    version = int(key[:6], 16) * 1024   # stable per content: browser caches stay valid across restarts
+    if (d / 'meta.json').exists():
+        try:
+            return AnnotationLayer.open(d, version=version)
+        except Exception:  # noqa: BLE001  (corrupt / old cache: rebuild)
+            pass
+    layer = read_objects(p, mpp=mpp, **(read_kw or {})).to_layer(**layer_kw)
+    try:
+        layer.save(d)
+        return AnnotationLayer.open(d, version=version)   # serve the memory-mapped copy (frees the build memory)
+    except (OSError, ValueError):
+        return layer
+
+
 def read_objects(path: str | Path, *, mpp: float | None = None, fmt: str = 'auto', **kw) -> ObjectTable:
     """Read an object export by extension / content (see module docstring)."""
     p = Path(path)
@@ -389,19 +417,59 @@ def read_objects(path: str | Path, *, mpp: float | None = None, fmt: str = 'auto
 
 
 def _read_delimited(p: Path) -> dict[str, np.ndarray]:
+    """CSV / TSV / semicolon exports. pyarrow's multi-threaded parser when available (≈3× faster than pandas on
+    10^6 rows), else pandas, else the csv module. The delimiter is detected from the header line."""
+    with open(p, 'rb') as f:
+        head = f.readline().decode('utf-8-sig', 'replace')
+    delim = max(('\t', ',', ';'), key=head.count) if any(d in head for d in '\t,;') else ','
+    try:
+        import pyarrow.csv as pacsv
+        t = pacsv.read_csv(p, parse_options=pacsv.ParseOptions(delimiter=delim),
+                           read_options=pacsv.ReadOptions(block_size=1 << 24))
+        return {str(c): t[c].to_numpy(zero_copy_only=False) for c in t.column_names}
+    except ImportError:
+        pass
     try:
         import pandas as pd
-        df = pd.read_csv(p, sep=None, engine='python') if p.stat().st_size < 2e6 else pd.read_csv(
-            p, sep='\t' if p.suffix.lower() in ('.tsv', '.txt') else ',', low_memory=False)
+        df = pd.read_csv(p, sep=delim, low_memory=False)
         return {str(c): df[c].to_numpy() for c in df.columns}
     except ImportError:
         import csv
         with open(p, newline='', encoding='utf-8-sig') as f:
-            sample = f.read(65536)
-            f.seek(0)
-            dialect = csv.Sniffer().sniff(sample, delimiters=',\t;')
-            rows = list(csv.DictReader(f, dialect=dialect))
+            rows = list(csv.DictReader(f, delimiter=delim))
         return {k: np.asarray([r[k] for r in rows]) for k in (rows[0] if rows else {})}
+
+
+class _Categorical:
+    """A text column as integer codes + categories (10^6 Python strings would cost ~60 MB per column)."""
+
+    def __init__(self, values) -> None:
+        arr = np.asarray(values, dtype=object)
+        cats, codes = np.unique(np.where(arr == None, '', arr).astype(str), return_inverse=True)  # noqa: E711
+        self.categories = cats
+        self.codes = codes.astype(np.uint16 if len(cats) < 65536 else np.uint32)
+        self.dtype = np.dtype(object)
+
+    def __len__(self) -> int:
+        return len(self.codes)
+
+    def __getitem__(self, i):
+        if isinstance(i, (int, np.integer)):
+            return str(self.categories[self.codes[i]])
+        return self.categories[self.codes[i]]
+
+    @property
+    def nbytes(self) -> int:
+        return int(self.codes.nbytes + self.categories.nbytes)
+
+
+def _compact(v: np.ndarray):
+    """Columns kept on a viewer layer: float32 for floats, categories for text."""
+    if v.dtype.kind == 'f':
+        return v.astype(np.float32)
+    if v.dtype.kind in 'OUS':
+        return _Categorical(v)
+    return v
 
 
 _ = _norm_col

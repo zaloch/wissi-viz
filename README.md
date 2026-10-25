@@ -195,6 +195,53 @@ grid.show(slide_id, cells.to_layer(color_by='Nucleus: Ki67 mean', cmap='magma'))
 - **HALO multiplex flags:** `<Marker> Positive Classification` columns become phenotypes such as `CD3+CD8+`.
 - **Measurements:** measurement columns travel with the layer, so clicking any cell shows them.
 
+### Millions of objects, 1–16 panes, 10–100 users
+
+Layers with ≥ 50,000 objects get an **object pyramid**, built once on the server. It mirrors the image pyramid:
+
+- **Zoomed out:** each pane gets aggregated dots, about one per 4 screen px.
+  - Each dot carries a per-class histogram, so hiding a class re-colours dots by the most common *visible* class.
+  - Colour-by-value layers carry the bin's mean value instead.
+- **Zoomed in:** only the visible cells arrive, as 128 × 128-bin tiles.
+- **Outlines:** bounding-box objects (HALO XMin/XMax/YMin/YMax, centroid tables) are stored as columns and drawn as exact ellipses or rectangles by a GPU shader, at about 19 bytes per cell. Before, each cell was a 12-vertex polygon of ~200 bytes, and the server kept 10⁶ small arrays.
+- **Clicks:** clicks on aggregated dots are resolved by the server. Zoomed in, they are resolved in the browser.
+
+What one browser downloads now scales with **screen area, not with the object count**.
+
+```python
+from wissi_viz import cached_object_layer
+layer = cached_object_layer('cells.parquet', '/cache/layers', mpp=0.25, name='cells')   # compiled once, then memory-mapped
+grid.show(slide_id, layer)
+```
+
+`cached_object_layer` keys the compiled layer (buckets plus pyramid) on the file's path, size and modification time and on every option.
+- **Reopening is fast:** ~35 ms instead of ~3.5 s of CPU per 1M cells.
+- **It survives restarts.**
+- **Server workers share one copy** through the OS page cache.
+
+1M cells per slide, same browser and container ([benchmarks/results-overlays.md](benchmarks/results-overlays.md)):
+
+| | 1 pane, legacy | 1 pane, new | 16 panes, legacy | 16 panes, new |
+|---|---|---|---|---|
+| until every overlay is drawn | 1.95 s | 1.08 s | 75.7 s | **1.5 s** |
+| data sent to the browser (gzip) | 9.1 MB | 0.43 MB | 145 MB | **0.64 MB** |
+| GPU memory for overlays | 20 MB | 0.6 MB | 321 MB | **1.1 MB** |
+| server memory kept per 1M-cell layer | ≈ 650 MB | 225 MB | | |
+
+**Server- or client-side?** `setLod({overlays: 'server' | 'client' | 'auto'})`, or `WissiViz(lod={'overlays': …})`.
+- **`client`:** the browser downloads each layer's objects once (17 B each), builds the same pyramid in a Web Worker, and then navigates and clicks with no overlay requests.
+  - Measured per 1M cells: 7.8 MB, 72 MB of browser memory and a 1.9 s build.
+  - With 16 slides: 125 MB, **1.1 GB** and 32 s, against 0.66 MB, 5 MB and 1.5 s for the server pyramid.
+- **`server`** stays the default.
+- **`auto`** goes client-side only for layers ≤ 300k objects, up to 1M per viewer.
+
+**Which file format for object tables?** Measured on 1M cells × 37 columns ([details](benchmarks/results-overlays.md#storage-formats)):
+- **Parquet** for exchange: 0.4 s to load what the viewer needs. CSV/TSV with pandas takes 2.8–3.2 s; wissi-viz now parses CSV/TSV with pyarrow in 0.8 s.
+- **Arrow IPC / Feather** for the fastest loads and single-row lookups (0.2 ms).
+- **SQLite or PostgreSQL** for *editable, shared* annotations. They are slow for bulk object loads (2.5–14 s, up to 2 GB peak), but single lookups take ~0.1 ms and concurrent writers are safe.
+- **DuckDB** for cohort queries over many slides' Parquet files.
+- **CSV vs TSV:** the same speed; TSV avoids quoting problems with commas in class names.
+
 ## Spatial analysis
 
 `wissi_viz.spatial` (install the `[analysis]` extra). Every function works in µm and returns:
@@ -342,7 +389,7 @@ Measured with `wissi-viz bench --zoom` (legacy vs new; 1 and 16 panes; SVS, OME-
 ## Tests
 
 ```bash
-pip install -e ".[all,dev]" && pytest -q tests                      # 67 tests
+pip install -e ".[all,dev]" && pytest -q tests                      # 75 tests
 python tests/make_test_data.py /tmp/wsi --size 16000                # synthetic SVS + 3-channel CZI + 120k cell GeoJSON
 python tests/make_analysis_data.py /tmp/wsi                         # QuPath-style multiplex cell table + ROIs
 python examples/analysis_app.py /tmp/wsi/synthetic_he.svs /tmp/wsi/synthetic_he_cells.tsv /tmp/wsi/synthetic_he_rois.geojson

@@ -193,12 +193,49 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
         data = await asyncio.to_thread(gz.get, (sid, layer_name, ver, i), lambda: c.bucket(i))
         return gz_response(data, v, ver)
 
+    @r.get('/slides/{sid}/annotations/ptile/{level}/{tx}/{ty}')
+    async def ann_ptile(sid: str, level: int, tx: int, ty: int, layer_name: str = Query(alias='layer'), v: str | None = None):
+        """Object-pyramid tile: aggregated dots (level ≥ 1) or the raw features (level 0) of one tile."""
+        L = layer(sid, layer_name)
+        c = await asyncio.to_thread(L.compiled)
+        if c.pyr_meta is None or not (0 <= level < c.pyr_meta['levels']):
+            raise HTTPException(404)
+        ver = L.version
+        data = await asyncio.to_thread(gz.get, (sid, layer_name, ver, 'pt', level, tx, ty), lambda: c.pyramid_tile(level, tx, ty))
+        return gz_response(data, v, ver)
+
+    @r.get('/slides/{sid}/annotations/columns')
+    async def ann_columns(sid: str, layer_name: str = Query(alias='layer'), v: str | None = None):
+        """Client-side overlay mode: the whole layer as compact columns (bulk object layers only)."""
+        L = layer(sid, layer_name)
+        c = await asyncio.to_thread(L.compiled)
+        if L._block is None or L._kinds:
+            raise HTTPException(409, 'client mode needs a bulk object layer')
+        ver = L.version
+        data = await asyncio.to_thread(gz.get, (sid, layer_name, ver, 'cols'), lambda: c.columns_payload(L))
+        return gz_response(data, v, ver)
+
+    @r.get('/slides/{sid}/annotations/hit')
+    async def ann_hit(sid: str, x: float, y: float, tol: float = 0.0, hidden: str = '',
+                      layer_name: str = Query(alias='layer')):
+        """Smallest feature at (x, y) ± tol (level-0 px), skipping hidden class ids — clicks on aggregated dots."""
+        L = layer(sid, layer_name)
+        c = await asyncio.to_thread(L.compiled)
+        hid = [int(h) for h in hidden.split(',') if h.strip().lstrip('-').isdigit()]
+        i = await asyncio.to_thread(c.hit_test, x, y, tol, hid)
+        if i is None:
+            return JSONResponse({'index': None}, headers=hdrs('no-cache'))
+        return JSONResponse({'index': int(i), 'cx': float(c.cx[i]), 'cy': float(c.cy[i]), 'size': float(c.size[i]),
+                             'cls': int(c.cls[i])}, headers=hdrs('no-cache'))
+
     @r.get('/slides/{sid}/annotations/feature/{idx}')
     def ann_feature(sid: str, idx: int, layer_name: str = Query(alias='layer')):
         L = layer(sid, layer_name)
         if not (0 <= idx < len(L)):
             raise HTTPException(404)
-        return JSONResponse({'index': idx, 'class': L.class_of(idx), 'properties': _jsonable(L.properties(idx))},
+        c = L.compiled()
+        return JSONResponse({'index': idx, 'class': L.class_of(idx), 'properties': _jsonable(L.properties(idx)),
+                             'centroid': [float(c.cx[idx]), float(c.cy[idx])], 'size': float(c.size[idx])},
                             headers=hdrs('no-cache'))
 
     @r.get('/slides/{sid}/annotations/geojson')

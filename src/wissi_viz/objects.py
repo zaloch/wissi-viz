@@ -46,8 +46,7 @@ class ObjectTable:
         self.x = np.asarray(self.x, np.float64)
         self.y = np.asarray(self.y, np.float64)
         if self.classes is not None:
-            self.classes = np.asarray([('' if c is None or (isinstance(c, float) and np.isnan(c)) else str(c))
-                                       for c in self.classes], dtype=object)
+            self.classes = _norm_labels(self.classes)
 
     # ------------------------------------------------------------------ basics
     def __len__(self) -> int:
@@ -193,6 +192,26 @@ class ObjectTable:
             d['class'] = self.classes
         d.update(self.columns)
         return pd.DataFrame(d)
+
+
+def _norm_labels(values) -> np.ndarray:
+    """Class labels as an object array of str ('' = unclassified; None/NaN included). Dictionary-encodes in C when
+    pyarrow is available (10^6 labels: ~50 ms instead of ~0.4 s for a Python loop)."""
+    from .annotations import CleanText
+    if isinstance(values, CleanText):           # already str with '' for missing (Polars reader path)
+        return values.view(np.ndarray)
+    c = values if isinstance(values, np.ndarray) else np.asarray(values, dtype=object)
+    try:
+        import pyarrow as pa
+        import pyarrow.compute as pc
+        a = pa.array(c, from_pandas=True)
+        if not (pa.types.is_string(a.type) or pa.types.is_large_string(a.type)):
+            a = pc.cast(a, pa.string())
+        d = pc.fill_null(a, '').dictionary_encode()
+        cats = np.asarray(d.dictionary.to_pylist(), dtype=object)
+        return cats[d.indices.to_numpy(zero_copy_only=False)]
+    except Exception:  # noqa: BLE001  (no pyarrow / mixed types: plain loop)
+        return np.asarray([('' if v is None or (isinstance(v, float) and np.isnan(v)) else str(v)) for v in c], dtype=object)
 
 
 # ============================================================================= readers
@@ -396,8 +415,25 @@ def cached_object_layer(path: str | Path, cache_dir: str | Path, *, mpp: float |
         return layer
 
 
-def read_objects(path: str | Path, *, mpp: float | None = None, fmt: str = 'auto', **kw) -> ObjectTable:
-    """Read an object export by extension / content (see module docstring)."""
+def _engine(engine: str) -> str:
+    """'auto' → the fastest installed table reader: Polars (MIT), else pyarrow (Apache-2.0), else pandas."""
+    if engine != 'auto':
+        return engine
+    for name in ('polars', 'pyarrow'):
+        try:
+            __import__(name)
+            return name
+        except ImportError:
+            pass
+    return 'pandas'
+
+
+def read_objects(path: str | Path, *, mpp: float | None = None, fmt: str = 'auto', engine: str = 'auto', **kw) -> ObjectTable:
+    """Read an object export by extension / content (see module docstring).
+
+    ``engine``: table reader for CSV/TSV/Parquet/Feather — 'auto' (Polars if installed, else pyarrow, else pandas),
+    'polars', 'pyarrow' or 'pandas'. On 10^6 rows Polars parses CSV/TSV ~3.8× faster than pandas and loads Parquet
+    with half the memory (benchmarks/results-dataframes.md)."""
     p = Path(path)
     ext = ''.join(p.suffixes[-2:]).lower() if p.suffix.lower() in ('.gz',) else p.suffix.lower()
     name = kw.pop('name', p.stem)
@@ -407,22 +443,49 @@ def read_objects(path: str | Path, *, mpp: float | None = None, fmt: str = 'auto
         return from_anndata(p, mpp=mpp, name=name, **kw)
     if fmt == 'mask' or ext in ('.tif', '.tiff', '.png') and fmt == 'auto':
         return from_label_mask(p, mpp=mpp, name=name, **kw)
-    if ext in ('.parquet', '.feather', '.arrow'):
-        import pyarrow.parquet as pq
+    eng = _engine(engine)
+    if ext in ('.parquet', '.feather', '.arrow', '.ipc'):
+        if eng == 'polars':
+            import polars as pl
+            df = pl.read_parquet(p) if ext == '.parquet' else pl.read_ipc(p, memory_map=True)
+            return from_table(df, mpp=mpp, name=name, **kw)
+        if eng == 'pandas':
+            import pandas as pd
+            return from_table(pd.read_parquet(p) if ext == '.parquet' else pd.read_feather(p), mpp=mpp, name=name, **kw)
         import pyarrow.feather as pf
+        import pyarrow.parquet as pq
         tbl = pq.read_table(p) if ext == '.parquet' else pf.read_table(p)
-        return from_table({c: tbl.column(c).to_numpy(zero_copy_only=False) for c in tbl.column_names},
-                          mpp=mpp, name=name, **kw)
-    return from_table(_read_delimited(p), mpp=mpp, name=name, **kw)
+        return from_table(tbl, mpp=mpp, name=name, **kw)
+    return from_table(_read_delimited(p, eng), mpp=mpp, name=name, **kw)
 
 
-def _read_delimited(p: Path) -> dict[str, np.ndarray]:
-    """CSV / TSV / semicolon exports. pyarrow's multi-threaded parser when available (≈3× faster than pandas on
-    10^6 rows), else pandas, else the csv module. The delimiter is detected from the header line."""
+def _read_delimited(p: Path, engine: str = 'auto'):
+    """CSV / TSV / semicolon exports with the fastest installed parser (Polars ≈ 3.8×, pyarrow ≈ 3× faster than
+    pandas on 10^6 rows), else pandas, else the csv module. The delimiter is detected from the header line."""
     with open(p, 'rb') as f:
         head = f.readline().decode('utf-8-sig', 'replace')
     delim = max(('\t', ',', ';'), key=head.count) if any(d in head for d in '\t,;') else ','
+    engine = _engine(engine)
+    if engine == 'polars':
+        try:
+            import polars as pl
+            # QuPath writes 'NaN' into otherwise-integer columns: read those as missing (→ NaN in numpy); if a type
+            # guessed from the first rows still fails later in the file, rescan the whole file; else use pyarrow
+            try:   # fast path: types from the first 10k rows, strict UTF-8
+                df = pl.read_csv(p, separator=delim, infer_schema_length=10000)
+            except Exception:  # noqa: BLE001  ('NaN' in an int column, a late string, Latin-1 bytes …)
+                df = pl.read_csv(p, separator=delim, infer_schema_length=None, null_values=['NaN', 'nan', 'NA', ''],
+                                 encoding='utf8-lossy')
+            if df.columns and df.columns[0].startswith('\ufeff'):     # byte-order mark on the first header
+                df = df.rename({df.columns[0]: df.columns[0].lstrip('\ufeff')})
+            return df
+        except ImportError:
+            pass
+        except Exception:  # noqa: BLE001  (anything Polars cannot parse: fall back to pyarrow / pandas)
+            engine = 'pyarrow'
     try:
+        if engine == 'pandas':
+            raise ImportError
         import pyarrow.csv as pacsv
         t = pacsv.read_csv(p, parse_options=pacsv.ParseOptions(delimiter=delim),
                            read_options=pacsv.ReadOptions(block_size=1 << 24))

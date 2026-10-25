@@ -1,0 +1,47 @@
+{
+ "csv/pandas": {
+  "read_s": 5.45,
+  "layer_s": 0.44,
+  "peak_MB": 1259
+ },
+ "csv/pyarrow": {
+  "read_s": 1.85,
+  "layer_s": 0.46,
+  "peak_MB": 1156
+ },
+ "csv/polars": {
+  "read_s": 2.07,
+  "layer_s": 0.54,
+  "peak_MB": 991
+ },
+ "tsv/pandas": {
+  "read_s": 5.25,
+  "layer_s": 0.41,
+  "peak_MB": 1259
+ },
+ "tsv/pyarrow": {
+  "read_s": 1.75,
+  "layer_s": 0.45,
+  "peak_MB": 1158
+ },
+ "tsv/polars": {
+  "read_s": 1.93,
+  "layer_s": 0.54,
+  "peak_MB": 982
+ },
+ "parquet/pandas": {
+  "read_s": 1.16,
+  "layer_s": 0.43,
+  "peak_MB": 1020
+ },
+ "parquet/pyarrow": {
+  "read_s": 1.01,
+  "layer_s": 0.42,
+  "peak_MB": 1158
+ },
+ "parquet/polars": {
+  "read_s": 1.13,
+  "layer_s": 0.52,
+  "peak_MB": 942
+ }
+}

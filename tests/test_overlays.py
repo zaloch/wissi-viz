@@ -282,3 +282,31 @@ def test_client_mode_builds_the_same_pyramid_in_the_browser(tmp_path):
             b.close()
     finally:
         srv.should_exit = True
+
+
+@pytest.mark.parametrize('ext', ['csv', 'tsv', 'parquet'])
+def test_read_objects_engines_agree(tmp_path, ext):
+    """Polars, pyarrow and pandas readers produce the same objects (classes, positions, measurements)."""
+    pl = pytest.importorskip('polars')
+    pytest.importorskip('pyarrow')
+    pytest.importorskip('pandas')
+    from wissi_viz import read_objects
+    from wissi_viz.objects import from_table
+    rng = np.random.default_rng(3)
+    n = 5000
+    df = pl.DataFrame({'Object Id': np.arange(n), 'XMin': rng.uniform(0, 1e4, n), 'YMin': rng.uniform(0, 1e4, n),
+                       'Classification': rng.choice(['Tumor', 'Stroma', 'CD8 T cell'], n), 'Area': rng.random(n)})
+    df = df.with_columns((pl.col('XMin') + 9).alias('XMax'), (pl.col('YMin') + 9).alias('YMax'))
+    df = df.with_columns(pl.when(pl.col('Object Id') == 7).then(None).otherwise(pl.col('Classification')).alias('Classification'))
+    f = tmp_path / f'o.{ext}'
+    if ext == 'parquet':
+        df.write_parquet(f)
+    else:
+        df.write_csv(f, separator='\t' if ext == 'tsv' else ',')
+    tabs = {e: read_objects(f, units='px', engine=e) for e in ('polars', 'pyarrow', 'pandas')}
+    ref = tabs['pandas']
+    for e, o in tabs.items():
+        assert len(o) == n and o.classes[7] == '' and list(o.classes[:50]) == list(ref.classes[:50]), e
+        assert np.allclose(o.x, ref.x) and np.allclose(o.column('Area'), ref.column('Area')), e
+    lazy = from_table(df.lazy(), units='px')            # Polars LazyFrame input
+    assert len(lazy) == n and list(lazy.classes[:50]) == list(ref.classes[:50])

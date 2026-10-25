@@ -1053,8 +1053,29 @@ class _Compiled:
         return int(cand[np.argmin(self.size[cand])])
 
 
+class CleanText(np.ndarray):
+    """Marker view: an object array of str with no None/NaN (text columns already normalised by a fast reader)."""
+
+
 def _columns_of(table: Any) -> dict[str, np.ndarray]:
-    if hasattr(table, 'columns') and hasattr(table, 'to_numpy'):  # pandas / polars-like
+    mod = type(table).__module__.split('.')[0]
+    if mod == 'polars':                                            # Polars DataFrame / LazyFrame
+        if hasattr(table, 'collect') and not hasattr(table, 'to_numpy'):
+            table = table.collect()
+        import polars as pl
+        out = {}
+        for c in table.columns:
+            col = table.get_column(c)
+            if col.dtype == pl.String:   # text: distinct values once + codes (no 10^6 Python string conversions)
+                filled = col.fill_null('')
+                cats = filled.unique().sort()
+                out[str(c)] = np.asarray(cats.to_list(), dtype=object)[cats.search_sorted(filled).to_numpy()].view(CleanText)
+            else:
+                out[str(c)] = col.to_numpy()
+        return out
+    if mod == 'pyarrow' and hasattr(table, 'column_names'):          # pyarrow Table / RecordBatch
+        return {str(c): table.column(c).to_numpy(zero_copy_only=False) for c in table.column_names}
+    if hasattr(table, 'columns') and hasattr(table, 'to_numpy'):  # pandas and pandas-like
         return {str(c): np.asarray(table[c]) for c in table.columns}
     if isinstance(table, dict):
         return {str(k): np.asarray(v) for k, v in table.items()}

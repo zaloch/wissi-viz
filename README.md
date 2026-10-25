@@ -241,6 +241,9 @@ grid.show(slide_id, layer)
 - **SQLite or PostgreSQL** for *editable, shared* annotations. They are slow for bulk object loads (2.5–14 s, up to 2 GB peak), but single lookups take ~0.1 ms and concurrent writers are safe.
 - **DuckDB** for cohort queries over many slides' Parquet files.
 - **CSV vs TSV:** the same speed; TSV avoids quoting problems with commas in class names.
+- **pandas vs Polars:** Polars parses CSV/TSV 3.8× faster than pandas and holds a table in about half the memory ([results-dataframes.md](benchmarks/results-dataframes.md)).
+  - `read_objects(engine='auto')` uses Polars when installed (`[polars]` extra), else pyarrow, else pandas.
+  - Polars `DataFrame`/`LazyFrame` and Arrow tables can be passed in directly.
 
 ## Spatial analysis
 
@@ -389,7 +392,7 @@ Measured with `wissi-viz bench --zoom` (legacy vs new; 1 and 16 panes; SVS, OME-
 ## Tests
 
 ```bash
-pip install -e ".[all,dev]" && pytest -q tests                      # 75 tests
+pip install -e ".[all,dev]" && pytest -q tests                      # 79 tests
 python tests/make_test_data.py /tmp/wsi --size 16000                # synthetic SVS + 3-channel CZI + 120k cell GeoJSON
 python tests/make_analysis_data.py /tmp/wsi                         # QuPath-style multiplex cell table + ROIs
 python examples/analysis_app.py /tmp/wsi/synthetic_he.svs /tmp/wsi/synthetic_he_cells.tsv /tmp/wsi/synthetic_he_rois.geojson

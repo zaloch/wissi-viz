@@ -1,0 +1,184 @@
+{
+ "read_csv": {
+  "pandas": {
+   "s": 3.292,
+   "peak_MB": 661
+  },
+  "polars": {
+   "s": 0.882,
+   "peak_MB": 656
+  },
+  "pyarrow": {
+   "s": 1.073,
+   "peak_MB": 875
+  }
+ },
+ "read_tsv": {
+  "pandas": {
+   "s": 3.241,
+   "peak_MB": 661
+  },
+  "polars": {
+   "s": 0.866,
+   "peak_MB": 656
+  },
+  "pyarrow": {
+   "s": 1.062,
+   "peak_MB": 871
+  }
+ },
+ "read_csv_viewer_cols": {
+  "pandas": {
+   "s": 1.654,
+   "peak_MB": 208
+  },
+  "polars": {
+   "s": 0.328,
+   "peak_MB": 384
+  },
+  "pyarrow": {
+   "s": 0.449,
+   "peak_MB": 610
+  }
+ },
+ "read_parquet": {
+  "pandas": {
+   "s": 0.557,
+   "peak_MB": 776
+  },
+  "polars": {
+   "s": 0.386,
+   "peak_MB": 374
+  },
+  "pyarrow": {
+   "s": 0.592,
+   "peak_MB": 777
+  }
+ },
+ "read_parquet_viewer_cols": {
+  "pandas": {
+   "s": 0.07,
+   "peak_MB": 198
+  },
+  "polars": {
+   "s": 0.045,
+   "peak_MB": 113
+  },
+  "pyarrow": {
+   "s": 0.222,
+   "peak_MB": 193
+  }
+ },
+ "parquet_window_pushdown": {
+  "pandas": {
+   "s": 0.316,
+   "peak_MB": 159
+  },
+  "polars": {
+   "s": 0.295,
+   "peak_MB": 100
+  },
+  "pyarrow": {
+   "s": 0.465,
+   "peak_MB": 170
+  }
+ },
+ "a_class_counts": {
+  "pandas": {
+   "s": 0.025,
+   "peak_MB": 772
+  },
+  "polars": {
+   "s": 0.041,
+   "peak_MB": 406
+  },
+  "pyarrow": {
+   "s": 0.019,
+   "peak_MB": 778
+  }
+ },
+ "a_gate_phenotype": {
+  "pandas": {
+   "s": 0.159,
+   "peak_MB": 865
+  },
+  "polars": {
+   "s": 0.045,
+   "peak_MB": 428
+  },
+  "pyarrow": {
+   "s": 0.044,
+   "peak_MB": 796
+  }
+ },
+ "a_viewport_filter": {
+  "pandas": {
+   "s": 0.183,
+   "peak_MB": 774
+  },
+  "polars": {
+   "s": 0.139,
+   "peak_MB": 395
+  },
+  "pyarrow": {
+   "s": 0.157,
+   "peak_MB": 791
+  }
+ },
+ "a_groupby_means": {
+  "pandas": {
+   "s": 0.097,
+   "peak_MB": 793
+  },
+  "polars": {
+   "s": 0.072,
+   "peak_MB": 430
+  },
+  "pyarrow": {
+   "s": 0.032,
+   "peak_MB": 776
+  }
+ },
+ "a_region_class_pct": {
+  "pandas": {
+   "s": 0.114,
+   "peak_MB": 848
+  },
+  "polars": {
+   "s": 0.011,
+   "peak_MB": 386
+  },
+  "pyarrow": {
+   "s": 0.014,
+   "peak_MB": 779
+  }
+ },
+ "a_top_k": {
+  "pandas": {
+   "s": 0.031,
+   "peak_MB": 784
+  },
+  "polars": {
+   "s": 0.122,
+   "peak_MB": 701
+  },
+  "pyarrow": {
+   "s": 0.041,
+   "peak_MB": 787
+  }
+ },
+ "a_to_numpy_viewer": {
+  "pandas": {
+   "s": 0.049,
+   "peak_MB": 829
+  },
+  "polars": {
+   "s": 0.07,
+   "peak_MB": 451
+  },
+  "pyarrow": {
+   "s": 0.068,
+   "peak_MB": 849
+  }
+ }
+}

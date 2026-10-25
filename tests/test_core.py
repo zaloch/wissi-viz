@@ -227,3 +227,26 @@ def test_slideio_backend_matches(tmp_path):
     assert type(b).__name__ == 'SlideioSource'
     for lv in range(2):
         assert np.array_equal(a.read_tile(lv, 0, 0, 0), b.read_tile(lv, 0, 0, 0))
+
+
+def test_tiff_fast_path_matches_zarr(tmp_path, data):
+    """Direct tile decode (bypassing zarr) must be pixel-identical, incl. OME SubIFD pyramids and edges."""
+    rng = np.random.default_rng(5)
+    img = (rng.random((3, 1100, 1500)) * 60000).astype(np.uint16)
+    p = tmp_path / 'p.ome.tif'
+    with tifffile.TiffWriter(p, ome=True) as tw:
+        o = dict(tile=(256, 256), compression='zlib', photometric='minisblack')
+        tw.write(img, subifds=2, metadata={'axes': 'CYX'}, **o)
+        tw.write(img[:, ::2, ::2].copy(), subfiletype=1, **o)
+        tw.write(img[:, ::4, ::4].copy(), subfiletype=1, **o)
+    for path in (p, data / 'a.svs'):
+        s = open_slide(path)
+        chans = range(len(s.info.channels)) if s.info.mode == 'channels' else [None]
+        for lv, L in enumerate(s.info.levels):
+            for c in chans:
+                for x, y, w, h in ((0, 0, L.width, L.height), (37, 11, 300, 260), (max(0, L.width - 200), max(0, L.height - 150), 200, 150)):
+                    w, h = min(w, L.width - x), min(h, L.height - y)
+                    assert np.array_equal(s.read_region(lv, x, y, w, h, c), s._read_zarr(lv, x, y, w, h, c)), (path, lv, c)
+        assert s._fast, f'fast path disabled for {path}'
+    s = open_slide(p)
+    assert len(s.info.levels) == 3 and np.array_equal(s.read_region(1, 0, 0, 750, 550, 2), img[2, ::2, ::2])

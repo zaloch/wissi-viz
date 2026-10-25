@@ -26,7 +26,35 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument('--cors', default='*')
     i = sub.add_parser('info', help='print slide metadata')
     i.add_argument('path')
+    b = sub.add_parser('bench', help='benchmark opening, tile serving and in-browser panning')
+    b.add_argument('slides', nargs='+')
+    b.add_argument('--panes', default='1,4,9,16')
+    b.add_argument('--server-only', action='store_true')
+    b.add_argument('--browser-only', action='store_true')
+    b.add_argument('--headed', action='store_true', help='visible browser window (uses your desktop GPU)')
+    b.add_argument('--seconds', type=float, default=8, help='pan duration per run')
+    b.add_argument('--speed', type=float, default=900, help='pan speed, screen px/s')
+    b.add_argument('--magnification', type=float, default=20)
+    b.add_argument('--concurrency', type=int, default=8)
+    b.add_argument('--browser-args', default=None, help='extra Chromium flags, e.g. "--use-angle=vulkan"')
+    b.add_argument('--viewport', default='1600x1000', help='browser viewport WxH')
+    b.add_argument('--out', default=None, help='write JSON (+ .md table)')
+    f = sub.add_parser('fetch-samples', help='download public whole-slide test images')
+    f.add_argument('dest')
+    f.add_argument('--set', default='standard', choices=['small', 'standard', 'full'])
+    f.add_argument('--max-mb', type=float, default=2000)
+    f.add_argument('--url', action='append', default=[], help='additional URL(s) to download')
     a = ap.parse_args(argv)
+
+    if a.cmd == 'bench':
+        from .bench import main as bench_main
+        bench_main(a)
+        return
+    if a.cmd == 'fetch-samples':
+        from .bench import fetch_samples
+        for p in fetch_samples(a.dest, a.set, a.max_mb, a.url):
+            print(p)
+        return
 
     if a.cmd == 'info':
         from .sources import open_slide

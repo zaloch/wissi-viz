@@ -1,0 +1,169 @@
+{
+  "server": [
+    {
+      "slide": "CMU-1-Small-Region.svs",
+      "reader": "TiffSource",
+      "size": "2220x2967",
+      "mode": "rgb",
+      "levels": 4,
+      "file_MB": 1.8,
+      "open_ms": 16.8,
+      "levels_bench": [
+        {
+          "level": 0,
+          "downsample": 1.0,
+          "cold_p50_ms": 3.63,
+          "cold_p95_ms": 94.19,
+          "throughput_x8_tiles_s": 279.3,
+          "n_tiles": 30,
+          "warm_p50_ms": 0.004,
+          "tile_KB": 27.0
+        },
+        {
+          "level": 2,
+          "downsample": 4.0,
+          "cold_p50_ms": 94.94,
+          "cold_p95_ms": 270.75,
+          "throughput_x8_tiles_s": null,
+          "n_tiles": 4,
+          "warm_p50_ms": 0.008,
+          "tile_KB": 24.6
+        },
+        {
+          "level": 3,
+          "downsample": 8.0,
+          "cold_p50_ms": 23.26,
+          "cold_p95_ms": 23.26,
+          "throughput_x8_tiles_s": null,
+          "n_tiles": 1,
+          "warm_p50_ms": 0.032,
+          "tile_KB": 26.0
+        }
+      ]
+    },
+    {
+      "slide": "bench_he_64k.svs",
+      "reader": "TiffSource",
+      "size": "64000x48000",
+      "mode": "rgb",
+      "levels": 5,
+      "file_MB": 360.7,
+      "open_ms": 8.3,
+      "levels_bench": [
+        {
+          "level": 0,
+          "downsample": 1.0,
+          "cold_p50_ms": 2.2,
+          "cold_p95_ms": 3.71,
+          "throughput_x8_tiles_s": 334.6,
+          "n_tiles": 96,
+          "warm_p50_ms": 0.004,
+          "tile_KB": 24.5
+        },
+        {
+          "level": 2,
+          "downsample": 16.0,
+          "cold_p50_ms": 3.38,
+          "cold_p95_ms": 4.06,
+          "throughput_x8_tiles_s": 639.6,
+          "n_tiles": 48,
+          "warm_p50_ms": 0.006,
+          "tile_KB": 63.0
+        },
+        {
+          "level": 4,
+          "downsample": 128.0,
+          "cold_p50_ms": 38.63,
+          "cold_p95_ms": 38.63,
+          "throughput_x8_tiles_s": null,
+          "n_tiles": 1,
+          "warm_p50_ms": 0.034,
+          "tile_KB": 67.2
+        }
+      ]
+    },
+    {
+      "slide": "bench_if_40k.ome.tif",
+      "reader": "TiffSource",
+      "size": "40000x30000",
+      "mode": "channels",
+      "levels": 8,
+      "file_MB": 1652.4,
+      "open_ms": 8.0,
+      "levels_bench": [
+        {
+          "level": 0,
+          "downsample": 1.0,
+          "cold_p50_ms": 2.55,
+          "cold_p95_ms": 17.47,
+          "throughput_x8_tiles_s": 207.2,
+          "n_tiles": 96,
+          "warm_p50_ms": 0.005,
+          "tile_KB": 70.4
+        },
+        {
+          "level": 4,
+          "downsample": 16.0,
+          "cold_p50_ms": 6.98,
+          "cold_p95_ms": 11.53,
+          "throughput_x8_tiles_s": 313.8,
+          "n_tiles": 60,
+          "warm_p50_ms": 0.005,
+          "tile_KB": 128.0
+        },
+        {
+          "level": 7,
+          "downsample": 128.0,
+          "cold_p50_ms": 27.0,
+          "cold_p95_ms": 31.0,
+          "throughput_x8_tiles_s": null,
+          "n_tiles": 3,
+          "warm_p50_ms": 0.008,
+          "tile_KB": 58.2
+        }
+      ]
+    },
+    {
+      "slide": "bench_if_24k.czi",
+      "reader": "CziSource",
+      "size": "24000x18000",
+      "mode": "channels",
+      "levels": 7,
+      "file_MB": 644.3,
+      "open_ms": 16.7,
+      "levels_bench": [
+        {
+          "level": 0,
+          "downsample": 1.0,
+          "cold_p50_ms": 20.42,
+          "cold_p95_ms": 53.58,
+          "throughput_x8_tiles_s": 85.8,
+          "n_tiles": 96,
+          "warm_p50_ms": 0.004,
+          "tile_KB": 107.1
+        },
+        {
+          "level": 3,
+          "downsample": 8.0,
+          "cold_p50_ms": 4.92,
+          "cold_p95_ms": 15.05,
+          "throughput_x8_tiles_s": 436.1,
+          "n_tiles": 90,
+          "warm_p50_ms": 0.004,
+          "tile_KB": 112.6
+        },
+        {
+          "level": 6,
+          "downsample": 64.0,
+          "cold_p50_ms": 26.43,
+          "cold_p95_ms": 27.95,
+          "throughput_x8_tiles_s": null,
+          "n_tiles": 3,
+          "warm_p50_ms": 0.006,
+          "tile_KB": 75.4
+        }
+      ]
+    }
+  ],
+  "browser": null
+}

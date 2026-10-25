@@ -1,0 +1,186 @@
+{
+  "server": null,
+  "browser": {
+    "runs": [
+      {
+        "panes": 1,
+        "open_ms": 513,
+        "zoom_to_sharp_ms": 438,
+        "pan": {
+          "fps_median": 59.9,
+          "frame_p50_ms": 16.7,
+          "frame_p95_ms": 33.4,
+          "frame_p99_ms": 50.0,
+          "long_frames_pct": 7.4,
+          "sharp_while_moving_pct": 100.0,
+          "blank_while_moving_pct": 0.0,
+          "settle_ms": 23,
+          "js_frame_p50_ms": 0.2,
+          "js_frame_p95_ms": 3.2,
+          "tiles_requested": 80,
+          "tiles_cancelled": 1,
+          "MB": 2.9
+        },
+        "revisit": {
+          "fps_median": 59.9,
+          "frame_p50_ms": 16.7,
+          "frame_p95_ms": 33.4,
+          "frame_p99_ms": 33.4,
+          "long_frames_pct": 1.5,
+          "sharp_while_moving_pct": 100.0,
+          "blank_while_moving_pct": 0.0,
+          "settle_ms": 21,
+          "js_frame_p50_ms": 0.2,
+          "js_frame_p95_ms": 0.6,
+          "tiles_requested": 1,
+          "tiles_cancelled": 0,
+          "MB": 0.1
+        },
+        "stats": {
+          "textures": 104,
+          "textureMB": 102.6,
+          "annotationMB": 0,
+          "inflight": 0,
+          "queuedUploads": 0,
+          "frame": 797,
+          "budgetMB": 768,
+          "requests": 110,
+          "completed": 109,
+          "bytes": 3990517,
+          "aborted": 0,
+          "cancelled": 1,
+          "failed": 0,
+          "maxInflight": 5
+        }
+      },
+      {
+        "panes": 4,
+        "open_ms": 172,
+        "zoom_to_sharp_ms": 655,
+        "pan": {
+          "fps_median": 29.9,
+          "frame_p50_ms": 33.4,
+          "frame_p95_ms": 83.3,
+          "frame_p99_ms": 83.4,
+          "long_frames_pct": 48.7,
+          "sharp_while_moving_pct": 100.0,
+          "blank_while_moving_pct": 0.0,
+          "settle_ms": 27,
+          "js_frame_p50_ms": 0.7,
+          "js_frame_p95_ms": 6.2,
+          "tiles_requested": 246,
+          "tiles_cancelled": 1,
+          "MB": 14.7
+        },
+        "revisit": {
+          "fps_median": 30.0,
+          "frame_p50_ms": 33.3,
+          "frame_p95_ms": 33.5,
+          "frame_p99_ms": 56.7,
+          "long_frames_pct": 21.5,
+          "sharp_while_moving_pct": 100.0,
+          "blank_while_moving_pct": 0.0,
+          "settle_ms": 37,
+          "js_frame_p50_ms": 0.4,
+          "js_frame_p95_ms": 1.0,
+          "tiles_requested": 10,
+          "tiles_cancelled": 0,
+          "MB": 1.7
+        },
+        "stats": {
+          "textures": 408,
+          "textureMB": 297.8,
+          "annotationMB": 0,
+          "inflight": 0,
+          "queuedUploads": 0,
+          "frame": 1267,
+          "budgetMB": 768,
+          "requests": 418,
+          "completed": 416,
+          "bytes": 22309953,
+          "aborted": 0,
+          "cancelled": 2,
+          "failed": 0,
+          "maxInflight": 5
+        }
+      },
+      {
+        "panes": 16,
+        "open_ms": 1402,
+        "zoom_to_sharp_ms": 1458,
+        "pan": {
+          "fps_median": 15.0,
+          "frame_p50_ms": 66.7,
+          "frame_p95_ms": 100.0,
+          "frame_p99_ms": 115.3,
+          "long_frames_pct": 100.0,
+          "sharp_while_moving_pct": 84.8,
+          "blank_while_moving_pct": 0.0,
+          "settle_ms": 78,
+          "js_frame_p50_ms": 4.1,
+          "js_frame_p95_ms": 7.8,
+          "tiles_requested": 523,
+          "tiles_cancelled": 0,
+          "MB": 21.6
+        },
+        "revisit": {
+          "fps_median": 20.0,
+          "frame_p50_ms": 50.0,
+          "frame_p95_ms": 83.3,
+          "frame_p99_ms": 83.4,
+          "long_frames_pct": 74.7,
+          "sharp_while_moving_pct": 100.0,
+          "blank_while_moving_pct": 0.0,
+          "settle_ms": 35,
+          "js_frame_p50_ms": 1.7,
+          "js_frame_p95_ms": 7.6,
+          "tiles_requested": 393,
+          "tiles_cancelled": 4,
+          "MB": 23.4
+        },
+        "stats": {
+          "textures": 1093,
+          "textureMB": 726.4,
+          "annotationMB": 0,
+          "inflight": 0,
+          "queuedUploads": 0,
+          "frame": 1579,
+          "budgetMB": 768,
+          "requests": 1426,
+          "completed": 1420,
+          "bytes": 72944261,
+          "aborted": 2,
+          "cancelled": 6,
+          "failed": 2,
+          "maxInflight": 5
+        }
+      }
+    ],
+    "webgl_renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+    "software_rendering": true,
+    "hardware_concurrency": 2,
+    "server_tile_cache": {
+      "memory": {
+        "entries": 1639,
+        "bytes": 96075061,
+        "max_bytes": 2147483648,
+        "hits": 97,
+        "misses": 1641
+      },
+      "disk": null,
+      "produced": 1639,
+      "avg_produce_ms": 14.27,
+      "inflight": 0
+    },
+    "settings": {
+      "pan_seconds": 8.0,
+      "pan_speed_px_s": 900,
+      "magnification": 20,
+      "viewport": [
+        800,
+        500
+      ],
+      "headed": false
+    }
+  }
+}

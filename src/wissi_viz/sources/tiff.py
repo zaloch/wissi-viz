@@ -26,6 +26,7 @@ class TiffSource(SlideSource):
         self.series_index = series
         self._local = threading.local()
         self._handles: list = []
+        self._fast = True  # direct tile decode (bypasses zarr); disabled automatically on any surprise
         self._hlock = threading.Lock()
         st = self.path.stat()
         self.version = f'{int(st.st_mtime)}-{st.st_size}'
@@ -75,6 +76,7 @@ class TiffSource(SlideSource):
             import tifffile
             import zarr
             tf = tifffile.TiffFile(self.path)
+            self._local.tf = tf
             with self._hlock:
                 self._handles.append(tf)
             z = zarr.open(tf.series[self.series_index].aszarr(), mode='r')
@@ -84,7 +86,83 @@ class TiffSource(SlideSource):
             self._local.arrs = arrs
         return arrs
 
+    # ---------------------------------------------------------------- fast path
+    def _page_for(self, level: int, channel: int | None):
+        """The TIFF page backing (level, channel) in this thread, or None if the fast path doesn't apply."""
+        cache = getattr(self._local, 'pages', None)
+        if cache is None:
+            cache = self._local.pages = {}
+        key = (level, channel)
+        if key in cache:
+            return cache[key]
+        page = None
+        try:
+            self._arrays()  # opens this thread's TiffFile
+            tf = self._handles[-1] if not hasattr(self._local, 'tf') else self._local.tf
+            series = tf.series[self.series_index]
+            levels = list(series.levels)
+            if level < len(levels):
+                lv = levels[level]
+                axes = lv.axes
+                plane_axes = [a for a in axes if a not in 'YXS']
+                shape = [lv.shape[axes.index(a)] for a in plane_axes]
+                idx = [((channel or 0) if a == 'C' and not self._rgb else 0) for a in plane_axes]
+                flat = int(np.ravel_multi_index(idx, shape)) if plane_axes else 0
+                pages = lv.pages
+                if flat < len(pages):
+                    page = pages[flat]
+                    page = getattr(page, 'keyframe', page) if page is not None and not hasattr(page, 'dataoffsets') else page
+            if page is not None and not (page.is_tiled and (page.samplesperpixel == 1 or page.planarconfig == 1)
+                                         and page.compression in (1, 5, 7, 8, 32946, 50000, 50001, 34887, 34712, 33003, 33005)):
+                page = None
+        except Exception:
+            page = None
+        cache[key] = page
+        return page
+
+    def _read_fast(self, page, x, y, w, h) -> np.ndarray:
+        tw, th = page.tilewidth, page.tilelength
+        W, H = page.imagewidth, page.imagelength
+        ntx = (W + tw - 1) // tw
+        fh = page.parent.filehandle
+        spp = page.samplesperpixel
+        out = None
+        for ty in range(y // th, min((y + h - 1) // th, (H - 1) // th) + 1):
+            for tx in range(x // tw, min((x + w - 1) // tw, (W - 1) // tw) + 1):
+                k = ty * ntx + tx
+                off, cnt = page.dataoffsets[k], page.databytecounts[k]
+                if cnt == 0:
+                    continue
+                fh.seek(off)
+                a = page.decode(fh.read(cnt), k, jpegtables=page.jpegtables)[0]
+                a = np.asarray(a).reshape(th, tw, -1) if a is not None else None
+                if a is None:
+                    continue
+                if out is None:
+                    out = np.zeros((h, w, a.shape[2]), a.dtype)
+                ox, oy = tx * tw - x, ty * th - y
+                sx0, sy0, dx0, dy0 = max(0, -ox), max(0, -oy), max(0, ox), max(0, oy)
+                ww, hh = min(tw - sx0, w - dx0, W - tx * tw - sx0), min(th - sy0, h - dy0, H - ty * th - sy0)
+                if ww > 0 and hh > 0:
+                    out[dy0:dy0 + hh, dx0:dx0 + ww] = a[sy0:sy0 + hh, sx0:sx0 + ww]
+        if out is None:
+            out = np.zeros((h, w, spp), page.dtype)
+        return out
+
     def read_region(self, level, x, y, w, h, channel=None):
+        page = self._page_for(level, channel) if self._fast else None
+        if page is not None:
+            try:
+                out = self._read_fast(page, x, y, w, h)
+                if self._rgb:
+                    return out[..., :3].astype(np.uint8, copy=False)
+                out = out[..., 0]
+                return out if out.dtype in (np.uint8, np.uint16) else np.clip(out, 0, 65535).astype(np.uint16)
+            except Exception:
+                self._fast = False  # anything unexpected → the general zarr path from now on
+        return self._read_zarr(level, x, y, w, h, channel)
+
+    def _read_zarr(self, level, x, y, w, h, channel=None):
         a = self._arrays()[level]
         sl = [slice(None)] * a.ndim
         sl[self._yi] = slice(y, y + h)

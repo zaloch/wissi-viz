@@ -41,18 +41,19 @@ async function wissiLoad(url, kind, signal) {
   if (kind === 'image') {
     const blob = await r.blob();
     const bmp = await createImageBitmap(blob, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
-    return { bmp, transfer: [bmp] };
+    return { bmp, bytes: blob.size, transfer: [bmp] };
   }
   if (kind === 'raw') {
     const ct = r.headers.get('content-type') || '';
     let buf;
+    const len = +(r.headers.get('content-length') || 0);
     if (ct.includes('x-wissi-raw')) {
       buf = await new Response(r.body.pipeThrough(new DecompressionStream('deflate'))).arrayBuffer();
     } else buf = await r.arrayBuffer();
-    return { buf, transfer: [buf] };
+    return { buf, bytes: len || buf.byteLength, transfer: [buf] };
   }
   const buf = await r.arrayBuffer();
-  return { buf, transfer: [buf] };
+  return { buf, bytes: buf.byteLength, transfer: [buf] };
 }
 
 const WORKER_SRC = `const wissiLoad = ${wissiLoad.toString()};
@@ -574,6 +575,7 @@ export class WsiGrid extends HTMLElement {
     this.quality = 1.0;
     this.showControls = true;
     this.showLegend = true;
+    this.counters = { requests: 0, completed: 0, bytes: 0, aborted: 0, cancelled: 0, failed: 0 };
     this.maxInflight = 5;
     this.budget = Math.min(1024, ((navigator.deviceMemory || 8) * 96)) * 2 ** 20; // GPU texture budget (bytes)
     this._raf = 0;
@@ -841,9 +843,54 @@ export class WsiGrid extends HTMLElement {
     this.requestRender();
   }
 
+  /**
+   * How much of each pane is drawn at full resolution right now.
+   * sharp: fraction of the visible slide area covered by target-level tiles (all visible channels);
+   * blank: fraction covered by no level at all (only background) — what a user sees as "holes".
+   */
+  coverage() {
+    const per = [];
+    for (const p of this.panes) {
+      const info = p.slide?.info;
+      if (!info || !p.view || p.rect.w <= 0) { per.push(null); continue; }
+      const chans = this._visibleChannels(p);
+      const target = this._level(info, p.view.scale * this.dpr);
+      const vis = this._visRect(p);
+      const clip = [Math.max(0, vis[0]), Math.max(0, vis[1]), Math.min(info.width, vis[2]), Math.min(info.height, vis[3])];
+      const area = Math.max(1, (clip[2] - clip[0]) * (clip[3] - clip[1]));
+      const tileArea = (L, rg, fn) => {
+        const lv = info.levels[L], ts = info.tile_size;
+        let a = 0;
+        for (let ty = rg.y0; ty <= rg.y1; ty++) for (let tx = rg.x0; tx <= rg.x1; tx++) {
+          if (!fn(L, tx, ty)) continue;
+          const x0 = Math.max(clip[0], tx * ts * lv.sx), x1 = Math.min(clip[2], (tx + 1) * ts * lv.sx);
+          const y0 = Math.max(clip[1], ty * ts * lv.sy), y1 = Math.min(clip[3], (ty + 1) * ts * lv.sy);
+          if (x1 > x0 && y1 > y0) a += (x1 - x0) * (y1 - y0);
+        }
+        return a;
+      };
+      const rg = this._tileRange(info, target, clip);
+      const sharp = rg ? tileArea(target, rg, (L, x, y) => this._ready(p, L, x, y, chans)) / area : 1;
+      // any level: sample a grid of points and check the finest loaded level covering each
+      let covered = 0, n = 0;
+      for (let gy = 0; gy < 12; gy++) for (let gx = 0; gx < 12; gx++, n++) {
+        const X = clip[0] + (gx + 0.5) / 12 * (clip[2] - clip[0]), Y = clip[1] + (gy + 0.5) / 12 * (clip[3] - clip[1]);
+        for (let L = target; L < info.levels.length; L++) {
+          const lv = info.levels[L], ts = info.tile_size;
+          if (this._ready(p, L, Math.floor(X / lv.sx / ts), Math.floor(Y / lv.sy / ts), chans)) { covered++; break; }
+        }
+      }
+      per.push({ pane: p.index, level: target, sharp: Math.min(1, sharp), blank: 1 - covered / n });
+    }
+    const ok = per.filter(Boolean);
+    const mean = (k) => (ok.length ? ok.reduce((a, c) => a + c[k], 0) / ok.length : 0);
+    return { sharp: mean('sharp'), blank: mean('blank'), panes: per };
+  }
+
   stats() {
     return { textures: this.tex.size, textureMB: +(this.texBytes / 2 ** 20).toFixed(1), annotationMB: +(this.gpuBytes / 2 ** 20).toFixed(1),
-      inflight: this.inflight.size, queuedUploads: this.uploads.length, frame: this.frame, budgetMB: this.budget / 2 ** 20 };
+      inflight: this.inflight.size, queuedUploads: this.uploads.length, frame: this.frame, budgetMB: this.budget / 2 ** 20,
+      ...this.counters, maxInflight: this.maxInflight };
   }
 
   setTextureBudget(mb) { this.budget = mb * 2 ** 20; this._evict(); }
@@ -1269,6 +1316,10 @@ export class WsiGrid extends HTMLElement {
     this._raf = 0;
     if (this._lost) return;
     const t = now();
+    try { this._frameBody(t); } finally { if (this.jsFrameMs) { this.jsFrameMs.push(now() - t); if (this.jsFrameMs.length > 20000) this.jsFrameMs.length = 0; } }
+  }
+
+  _frameBody(t) {
     const dt = this._lastT ? Math.min(64, t - this._lastT) : 16;
     this._lastT = t;
     let again = false;
@@ -1690,7 +1741,7 @@ export class WsiGrid extends HTMLElement {
       }
     }
     // cancel what is no longer wanted
-    for (const [k, r] of this.inflight) if (!want.has(k)) { r.abort(); this.inflight.delete(k); }
+    for (const [k, r] of this.inflight) if (!want.has(k)) { r.abort(); this.inflight.delete(k); this.counters.cancelled++; }
     const t = now();
     const todo = [];
     for (const [k, w] of want) {
@@ -1710,16 +1761,21 @@ export class WsiGrid extends HTMLElement {
   _start(key, w) {
     const req = this.fetcher.load(w.url, w.kind);
     this.inflight.set(key, req);
+    const C = this.counters;
+    C.requests++;
     if (w.meta.ann && w.meta.bucket == null) w.meta.ann.state = 'loading';
     req.promise.then((res) => {
       if (this.inflight.get(key) !== req) { res.bmp?.close?.(); return; }
       this.inflight.delete(key);
       this.failed.delete(key);
+      C.completed++;
+      C.bytes += res.bytes || 0;
       this.uploads.push({ key, res, meta: w.meta });
       this.requestRender();
     }, (err) => {
       if (this.inflight.get(key) === req) this.inflight.delete(key);
       if (w.meta.ann && w.meta.bucket == null && w.meta.ann.state === 'loading') w.meta.ann.state = 'error-retry';
+      if (err.message === 'abort') C.aborted++; else C.failed++;
       if (err.message !== 'abort') {
         const n = (this._failCount = (this._failCount || 0) + 1);
         this.failed.set(key, now() + Math.min(30000, 1000 * 2 ** Math.min(5, n % 6)));

@@ -1,0 +1,237 @@
+{
+  "server": null,
+  "browser": {
+    "runs": [
+      {
+        "panes": 1,
+        "open_ms": 2434,
+        "zoom_to_sharp_ms": 1363,
+        "pan": {
+          "fps_median": 10.0,
+          "frame_p50_ms": 99.9,
+          "frame_p95_ms": 188.3,
+          "frame_p99_ms": 237.6,
+          "long_frames_pct": 100.0,
+          "sharp_while_moving_pct": 99.3,
+          "blank_while_moving_pct": 0.0,
+          "settle_ms": 89,
+          "js_frame_p50_ms": 0.7,
+          "js_frame_p95_ms": 7.77,
+          "tiles_requested": 116,
+          "tiles_cancelled": 0,
+          "MB": 4.7
+        },
+        "revisit": {
+          "fps_median": 12.0,
+          "frame_p50_ms": 83.4,
+          "frame_p95_ms": 116.7,
+          "frame_p99_ms": 118.7,
+          "long_frames_pct": 100.0,
+          "sharp_while_moving_pct": 100.0,
+          "blank_while_moving_pct": 0.0,
+          "settle_ms": 98,
+          "js_frame_p50_ms": 0.4,
+          "js_frame_p95_ms": 1.64,
+          "tiles_requested": 11,
+          "tiles_cancelled": 0,
+          "MB": 0.2
+        },
+        "stats": {
+          "textures": 213,
+          "textureMB": 209.4,
+          "annotationMB": 0,
+          "inflight": 0,
+          "queuedUploads": 0,
+          "frame": 202,
+          "budgetMB": 768,
+          "requests": 247,
+          "completed": 247,
+          "bytes": 11042062,
+          "aborted": 0,
+          "cancelled": 0,
+          "failed": 0,
+          "maxInflight": 5
+        }
+      },
+      {
+        "panes": 4,
+        "open_ms": 1508,
+        "zoom_to_sharp_ms": 2000,
+        "pan": {
+          "fps_median": 4.0,
+          "frame_p50_ms": 250.0,
+          "frame_p95_ms": 344.2,
+          "frame_p99_ms": 402.1,
+          "long_frames_pct": 100.0,
+          "sharp_while_moving_pct": 81.1,
+          "blank_while_moving_pct": 0.0,
+          "settle_ms": 565,
+          "js_frame_p50_ms": 4.4,
+          "js_frame_p95_ms": 7.72,
+          "tiles_requested": 175,
+          "tiles_cancelled": 0,
+          "MB": 10.4
+        },
+        "revisit": {
+          "fps_median": 6.7,
+          "frame_p50_ms": 150.0,
+          "frame_p95_ms": 192.5,
+          "frame_p99_ms": 216.9,
+          "long_frames_pct": 98.0,
+          "sharp_while_moving_pct": 100.0,
+          "blank_while_moving_pct": 0.0,
+          "settle_ms": 150,
+          "js_frame_p50_ms": 2.5,
+          "js_frame_p95_ms": 7.42,
+          "tiles_requested": 141,
+          "tiles_cancelled": 0,
+          "MB": 12.2
+        },
+        "stats": {
+          "textures": 608,
+          "textureMB": 459.5,
+          "annotationMB": 0,
+          "inflight": 3,
+          "queuedUploads": 0,
+          "frame": 312,
+          "budgetMB": 768,
+          "requests": 657,
+          "completed": 654,
+          "bytes": 37996994,
+          "aborted": 0,
+          "cancelled": 0,
+          "failed": 0,
+          "maxInflight": 5
+        }
+      },
+      {
+        "panes": 9,
+        "open_ms": 2676,
+        "zoom_to_sharp_ms": 2812,
+        "pan": {
+          "fps_median": 4.3,
+          "frame_p50_ms": 233.3,
+          "frame_p95_ms": 296.7,
+          "frame_p99_ms": 407.3,
+          "long_frames_pct": 100.0,
+          "sharp_while_moving_pct": 79.7,
+          "blank_while_moving_pct": 0.0,
+          "settle_ms": 168,
+          "js_frame_p50_ms": 3.3,
+          "js_frame_p95_ms": 10.13,
+          "tiles_requested": 180,
+          "tiles_cancelled": 0,
+          "MB": 8.2
+        },
+        "revisit": {
+          "fps_median": 5.5,
+          "frame_p50_ms": 183.4,
+          "frame_p95_ms": 216.8,
+          "frame_p99_ms": 236.1,
+          "long_frames_pct": 97.7,
+          "sharp_while_moving_pct": 99.9,
+          "blank_while_moving_pct": 0.0,
+          "settle_ms": 153,
+          "js_frame_p50_ms": 2.95,
+          "js_frame_p95_ms": 5.75,
+          "tiles_requested": 184,
+          "tiles_cancelled": 0,
+          "MB": 14.5
+        },
+        "stats": {
+          "textures": 1099,
+          "textureMB": 732.5,
+          "annotationMB": 0,
+          "inflight": 4,
+          "queuedUploads": 1,
+          "frame": 425,
+          "budgetMB": 768,
+          "requests": 1150,
+          "completed": 1146,
+          "bytes": 67464643,
+          "aborted": 0,
+          "cancelled": 0,
+          "failed": 0,
+          "maxInflight": 5
+        }
+      },
+      {
+        "panes": 16,
+        "open_ms": 1291,
+        "zoom_to_sharp_ms": 3181,
+        "pan": {
+          "fps_median": 5.0,
+          "frame_p50_ms": 200.0,
+          "frame_p95_ms": 250.0,
+          "frame_p99_ms": 271.0,
+          "long_frames_pct": 100.0,
+          "sharp_while_moving_pct": 78.9,
+          "blank_while_moving_pct": 0.0,
+          "settle_ms": 377,
+          "js_frame_p50_ms": 4.85,
+          "js_frame_p95_ms": 7.89,
+          "tiles_requested": 210,
+          "tiles_cancelled": 0,
+          "MB": 8.4
+        },
+        "revisit": {
+          "fps_median": 5.0,
+          "frame_p50_ms": 200.0,
+          "frame_p95_ms": 333.3,
+          "frame_p99_ms": 365.8,
+          "long_frames_pct": 100.0,
+          "sharp_while_moving_pct": 93.5,
+          "blank_while_moving_pct": 0.0,
+          "settle_ms": 174,
+          "js_frame_p50_ms": 5.4,
+          "js_frame_p95_ms": 9.51,
+          "tiles_requested": 185,
+          "tiles_cancelled": 0,
+          "MB": 12.4
+        },
+        "stats": {
+          "textures": 1108,
+          "textureMB": 731.4,
+          "annotationMB": 0,
+          "inflight": 0,
+          "queuedUploads": 0,
+          "frame": 537,
+          "budgetMB": 768,
+          "requests": 1651,
+          "completed": 1651,
+          "bytes": 91998934,
+          "aborted": 0,
+          "cancelled": 0,
+          "failed": 0,
+          "maxInflight": 5
+        }
+      }
+    ],
+    "webgl_renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+    "software_rendering": true,
+    "hardware_concurrency": 2,
+    "server_tile_cache": {
+      "memory": {
+        "entries": 1835,
+        "bytes": 109553494,
+        "max_bytes": 2147483648,
+        "hits": 144,
+        "misses": 1837
+      },
+      "disk": null,
+      "produced": 1835,
+      "avg_produce_ms": 12.65,
+      "inflight": 0
+    },
+    "settings": {
+      "pan_seconds": 8.0,
+      "pan_speed_px_s": 900,
+      "magnification": 20,
+      "viewport": [
+        1600,
+        1000
+      ],
+      "headed": false
+    }
+  }
+}

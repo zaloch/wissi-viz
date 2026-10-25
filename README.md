@@ -88,6 +88,8 @@ Examples:
 - `examples/nicegui_app.py`: a viewer UI.
 - `examples/wissi_integration.py`: Docker plus HALO Link/PathCore stubs.
 
+To protect slides with your app's login, pass FastAPI dependencies, which apply to every tile and annotation route: `configure(dependencies=[Depends(require_login)])`.
+
 **Docker notes**
 - Mount a volume for `cache_dir`, so cached tiles survive restarts.
 - Put an HTTP/2 reverse proxy in front: Caddy, Traefik, or nginx with `http2 on`. Browsers allow only 6 HTTP/1.1 connections per host, and uvicorn speaks HTTP/1.1. With HTTP/2 the viewer detects multiplexing and raises its parallel tile requests from 5 to 24, which matters a lot with 16 panes.

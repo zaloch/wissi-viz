@@ -33,18 +33,19 @@ SlideRef = 'str | os.PathLike | SlideSource | dict'
 
 def configure(*, cache_dir: str | os.PathLike | None = None, memory_mb: int = 1024, disk_gb: float = 20,
               workers: int | None = None, registry: SlideRegistry | None = None, prefix: str = '/wissi-viz',
-              allow_edit: bool = True) -> SlideRegistry:
+              allow_edit: bool = True, dependencies: list | None = None) -> SlideRegistry:
     """Set up the shared registry (call once at startup, before creating viewers).
 
     ``cache_dir`` enables the persistent tile cache — mount it as a Docker volume so it
-    survives container restarts.
+    survives container restarts. ``dependencies``: FastAPI dependencies applied to every
+    tile/annotation route, e.g. ``[Depends(require_login)]`` to protect slides with your app's auth.
     """
     global _default
     if registry is None:
         registry = SlideRegistry(TileService(memory_bytes=memory_mb * 2**20, disk_dir=cache_dir,
                                              disk_bytes=int(disk_gb * 2**30), workers=workers))
     _default = registry
-    mount(registry, prefix, allow_edit=allow_edit)
+    mount(registry, prefix, allow_edit=allow_edit, dependencies=dependencies)
     return registry
 
 
@@ -55,12 +56,14 @@ def default_registry() -> SlideRegistry:
     return _default
 
 
-def mount(registry: SlideRegistry, prefix: str = '/wissi-viz', allow_edit: bool = True) -> None:
+def mount(registry: SlideRegistry, prefix: str = '/wissi-viz', allow_edit: bool = True,
+          dependencies: list | None = None) -> None:
     if prefix in _mounted:
         if _mounted[prefix] is not registry:
             raise RuntimeError(f'another registry is already mounted at {prefix}')
         return
-    app.include_router(create_router(registry, cors=None, allow_edit=allow_edit), prefix=prefix)
+    app.include_router(create_router(registry, cors=None, allow_edit=allow_edit), prefix=prefix,
+                       dependencies=list(dependencies or []))
     _mounted[prefix] = registry
 
 

@@ -305,7 +305,7 @@ GPU acceleration happens in the viewer's browser. The server, for example wissi 
 ## Tests
 
 ```bash
-pip install -e ".[all,dev]" && pytest -q tests                      # 51 tests
+pip install -e ".[all,dev]" && pytest -q tests                      # 62 tests
 python tests/make_test_data.py /tmp/wsi --size 16000                # synthetic SVS + 3-channel CZI + 120k cell GeoJSON
 python tests/make_analysis_data.py /tmp/wsi                         # QuPath-style multiplex cell table + ROIs
 python examples/analysis_app.py /tmp/wsi/synthetic_he.svs /tmp/wsi/synthetic_he_cells.tsv /tmp/wsi/synthetic_he_rois.geojson

@@ -12,6 +12,15 @@ from pathlib import Path
 
 
 def main(argv: list[str] | None = None) -> None:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ['loadtest']:  # multi-user load test (the standalone scripts/wissi_loadtest.py, bundled in the wheel)
+        try:
+            from . import loadtest as lt
+        except ImportError:  # editable/source checkout: use the script itself
+            sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))  # importable by --procs children too
+            import wissi_loadtest as lt
+        lt.main(argv[1:])
+        return
     ap = argparse.ArgumentParser(prog='wissi-viz')
     sub = ap.add_subparsers(dest='cmd', required=True)
     s = sub.add_parser('serve', help='serve slides from files/directories')
@@ -24,6 +33,9 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument('--memory-mb', type=int, default=1024, help='in-memory tile cache (MB)')
     s.add_argument('--workers', type=int, default=None, help='tile decode threads')
     s.add_argument('--cors', default='*')
+    s.add_argument('--max-level-step', type=float, default=4.0,
+                   help='insert virtual levels where native ones are further apart (2 = leaner browsers for 4x-step SVS)')
+    s.add_argument('--decoded-cache-mb', type=float, default=1024, help='decoded-array budget shared by all slides (MB)')
     i = sub.add_parser('info', help='print slide metadata')
     i.add_argument('path')
     b = sub.add_parser('bench', help='benchmark opening, tile serving and in-browser panning')
@@ -40,6 +52,10 @@ def main(argv: list[str] | None = None) -> None:
     b.add_argument('--viewport', default='1600x1000', help='browser viewport WxH')
     b.add_argument('--http2', action='store_true', help='serve over HTTPS/HTTP2 (hypercorn) like a production proxy')
     b.add_argument('--out', default=None, help='write JSON (+ .md table)')
+    b.add_argument('--zoom', action='store_true',
+                   help='zoom benchmark instead: continuous zoom in/out + jump zooms, each slide alone and all together')
+    b.add_argument('--lod', default='legacy,default', help='--zoom: viewer LOD policies to compare (or JSON dicts, ";"-separated)')
+    b.add_argument('--zoom-rate', type=float, default=4.0, help='--zoom: zoom speed, × per second')
     f = sub.add_parser('fetch-samples', help='download public whole-slide test images')
     f.add_argument('dest')
     f.add_argument('--set', default='standard', choices=['small', 'standard', 'full'])
@@ -47,6 +63,19 @@ def main(argv: list[str] | None = None) -> None:
     f.add_argument('--url', action='append', default=[], help='additional URL(s) to download')
     a = ap.parse_args(argv)
 
+    if a.cmd == 'bench' and a.zoom:
+        from .bench import format_zoom_report, zoom_bench
+        n = max(int(x) for x in a.panes.split(','))
+        cfg = [(Path(p).name, [p], 1) for p in a.slides] + ([('all slides', list(a.slides), n)] if n > 1 else [])
+        modes = a.lod.split(';') if ';' in a.lod else a.lod.split(',')
+        rep_ = zoom_bench(cfg, modes=modes, rate=a.zoom_rate, magnification=max(a.magnification, 40), headed=a.headed,
+                          viewport=tuple(int(v) for v in a.viewport.lower().split('x')), http2=a.http2,
+                          browser_args=a.browser_args.split() if a.browser_args else None, save_to=a.out)
+        md = format_zoom_report(rep_)
+        print('\n' + md)
+        if a.out:
+            Path(a.out).with_suffix('.md').write_text(md)
+        return
     if a.cmd == 'bench':
         from .bench import main as bench_main
         bench_main(a)
@@ -71,7 +100,7 @@ def main(argv: list[str] | None = None) -> None:
 
     tiles = TileService(memory_bytes=a.memory_mb * 2**20, disk_dir=a.cache_dir, disk_bytes=int(a.cache_gb * 2**30),
                         workers=a.workers)
-    reg = SlideRegistry(tiles)
+    reg = SlideRegistry(tiles, max_level_step=a.max_level_step, decoded_cache_mb=a.decoded_cache_mb)
     for p in a.paths:
         p = Path(p)
         if p.is_dir():

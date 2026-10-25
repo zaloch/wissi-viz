@@ -46,8 +46,12 @@ class SlideEntry:
 
 class SlideRegistry:
     def __init__(self, tiles: TileService | None = None, max_open: int = 64, warm: bool = True,
-                 tile_size: int = 512) -> None:
+                 tile_size: int = 512, max_level_step: float = 4.0, decoded_cache_mb: float | None = None) -> None:
         self.tiles = tiles or TileService()
+        if decoded_cache_mb is not None:  # process-wide budget shared by every slide (see wissi_viz.memory)
+            from .memory import set_decoded_cache_mb
+            set_decoded_cache_mb(decoded_cache_mb)
+        self.max_level_step = max_level_step  # PyramidSlide: insert virtual levels where native ones are further apart
         self.max_open = max_open
         self.warm = warm
         self.tile_size = tile_size
@@ -102,6 +106,13 @@ class SlideRegistry:
             if e:
                 self._close(e)
         self._notify(slide_id, None)
+
+    def close(self) -> None:
+        """Close every slide (releasing file handles and decoded caches) and stop the tile workers."""
+        for sid in list(self._entries):
+            self.remove(sid)
+        self.tiles.close()
+        self._ann_pool.shutdown(wait=False, cancel_futures=True)
 
     def ids(self) -> list[str]:
         return list(self._entries)
@@ -171,7 +182,7 @@ class SlideRegistry:
                     src = e.source
                     if src is None:
                         src = e.factory() if e.factory is not None else open_slide(e.path, tile_size=self.tile_size)
-                    pyr = PyramidSlide(src)
+                    pyr = PyramidSlide(src, max_step=self.max_level_step)
                     e.source, e.pyramid = src, pyr
                     if self.warm:
                         self.tiles.warm(sid, pyr, src.version)
@@ -192,6 +203,8 @@ class SlideRegistry:
             except Exception:
                 pass
             e.source = None
+        if e.pyramid is not None:  # decoded arrays are ours to drop, whoever owns the source
+            e.pyramid.release()
         e.pyramid = None
 
     def _load_file_layers(self, e: SlideEntry, block: bool = True) -> bool:

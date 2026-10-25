@@ -1,0 +1,176 @@
+{
+ "runs": [
+  {
+   "config": "OME-TIFF 40k (2x)",
+   "panes": 1,
+   "mode": "legacy",
+   "repeat": 0,
+   "open_ms": 2440,
+   "zoom_in": {
+    "motion_ms": 10816,
+    "fps_median": 1.6,
+    "frame_p95_ms": 1373.3,
+    "js_frame_p50_ms": 2.15,
+    "js_frame_p95_ms": 8.8,
+    "detail_pct": 66.6,
+    "full_res_pct": 51.1,
+    "blank_pct": 0.0,
+    "settle_ms": 332,
+    "requests": 75,
+    "cancelled": 0,
+    "MB": 1.42,
+    "uploaded": 70,
+    "evicted_undrawn": 0,
+    "overdraw": 1.98,
+    "draws_per_frame": 6.8
+   },
+   "zoom_out": {
+    "motion_ms": 6717,
+    "fps_median": 2.6,
+    "frame_p95_ms": 1175.0,
+    "js_frame_p50_ms": 1.05,
+    "js_frame_p95_ms": 6.62,
+    "detail_pct": 89.8,
+    "full_res_pct": 80.4,
+    "blank_pct": 0.0,
+    "settle_ms": 308,
+    "requests": 45,
+    "cancelled": 0,
+    "MB": 1.78,
+    "uploaded": 50,
+    "evicted_undrawn": 0,
+    "overdraw": 1.322,
+    "draws_per_frame": 9.9
+   },
+   "jumps": {
+    "ms": [
+     4008,
+     11684,
+     14174,
+     9653,
+     7507
+    ],
+    "detail_pct": 78.4,
+    "blank_pct": 0.0,
+    "requests": 359,
+    "cancelled": 0,
+    "MB": 15.32,
+    "uploaded": 354,
+    "evicted_undrawn": 0,
+    "overdraw": 1.68,
+    "draws_per_frame": 14.3
+   },
+   "end": {
+    "textures": 501,
+    "textureMB": 244.8,
+    "undrawn_textures": 66,
+    "requests": 506,
+    "MB": 20.9
+   }
+  },
+  {
+   "config": "OME-TIFF 40k (2x)",
+   "panes": 1,
+   "mode": "default",
+   "repeat": 0,
+   "open_ms": 1849,
+   "zoom_in": {
+    "motion_ms": 5607,
+    "fps_median": 2.9,
+    "frame_p95_ms": 421.6,
+    "js_frame_p50_ms": 2.4,
+    "js_frame_p95_ms": 7.7,
+    "detail_pct": 62.9,
+    "full_res_pct": 41.8,
+    "blank_pct": 0.0,
+    "settle_ms": 460,
+    "requests": 85,
+    "cancelled": 18,
+    "MB": 1.51,
+    "uploaded": 71,
+    "evicted_undrawn": 0,
+    "overdraw": 0.965,
+    "draws_per_frame": 6.8
+   },
+   "zoom_out": {
+    "motion_ms": 4683,
+    "fps_median": 3.2,
+    "frame_p95_ms": 390.0,
+    "js_frame_p50_ms": 1.4,
+    "js_frame_p95_ms": 6.58,
+    "detail_pct": 89.2,
+    "full_res_pct": 72.8,
+    "blank_pct": 0.0,
+    "settle_ms": 235,
+    "requests": 50,
+    "cancelled": 13,
+    "MB": 1.03,
+    "uploaded": 48,
+    "evicted_undrawn": 0,
+    "overdraw": 0.874,
+    "draws_per_frame": 12.2
+   },
+   "jumps": {
+    "ms": [
+     3292,
+     8261,
+     8486,
+     6129,
+     4060
+    ],
+    "detail_pct": 80.7,
+    "blank_pct": 0.0,
+    "requests": 355,
+    "cancelled": 72,
+    "MB": 15.92,
+    "uploaded": 314,
+    "evicted_undrawn": 0,
+    "overdraw": 1.0,
+    "draws_per_frame": 15.8
+   },
+   "end": {
+    "textures": 460,
+    "textureMB": 224.8,
+    "undrawn_textures": 31,
+    "requests": 517,
+    "MB": 20.8
+   }
+  }
+ ],
+ "settings": {
+  "rate_per_s": 4.0,
+  "magnification": 40,
+  "viewport": [
+   1600,
+   1000
+  ],
+  "jumps": [
+   [
+    0.5,
+    0.5,
+    40
+   ],
+   [
+    0.35,
+    0.6,
+    10.0
+   ],
+   [
+    0.62,
+    0.42,
+    20.0
+   ],
+   [
+    0.5,
+    0.5,
+    2.5
+   ],
+   [
+    0.45,
+    0.55,
+    40
+   ]
+  ],
+  "http2": false
+ }
+}

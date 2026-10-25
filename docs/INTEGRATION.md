@@ -247,3 +247,12 @@ volumes:
 - **HTTP/2 matters for many panes.** Browsers open only 6 HTTP/1.1 connections per host. Over HTTP/2 the viewer detects multiplexing and keeps up to 24 tile requests in flight. Measurements are in `benchmarks/results-tile-api.md`.
 - **Cache volume:** the disk tile cache (`cache_dir`) survives restarts. That matters most for API-backed slides, where every cache miss is a network round-trip.
 - **Scaling:** one NiceGUI process serves the UI and the tiles. If tile decoding saturates the CPU, move it to a separate tile server (path D) and scale that alone. The viewer only needs `api=` pointed at it.
+
+## 8. Load testing before go-live
+
+`scripts/wissi_loadtest.py` is a single file (httpx + numpy) that replays realistic viewer sessions against your deployment:
+- 10 → 100 users (configurable);
+- 1–16 panes each;
+- at most 999 requests per user.
+
+It reports 404/429/5xx/502/timeout counts, latency and *time until a move is sharp* for each user count. It then fits a scalability model to estimate capacity, and the latency and error rate at user counts you didn't test. See [LOAD_TESTING.md](LOAD_TESTING.md). A three-process simulation against the mock vendor API is in `examples/tile_api/load_sim.py`, with results in `benchmarks/results-load.md`.

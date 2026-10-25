@@ -16,8 +16,9 @@ from .objects import ObjectTable, read_objects
 from .registry import SlideRegistry
 from .server import create_app, create_router
 from .sources import CallbackSource, Channel, Level, SlideInfo, SlideSource, open_slide
+from .memory import decoded_cache, set_decoded_cache_mb
 from .tiles import TileService
 
-__version__ = '0.3.2'
-__all__ = ['AnnotationLayer', 'ObjectTable', 'read_objects', 'SlideRegistry', 'create_app', 'create_router',
+__version__ = '0.4.0'
+__all__ = ['decoded_cache', 'set_decoded_cache_mb', 'AnnotationLayer', 'ObjectTable', 'read_objects', 'SlideRegistry', 'create_app', 'create_router',
            'CallbackSource', 'Channel', 'Level', 'SlideInfo', 'SlideSource', 'open_slide', 'TileService']

@@ -30,7 +30,6 @@ import random
 import statistics
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -254,6 +253,205 @@ def browser_bench(paths: Sequence[str] | None = None, panes: Sequence[int] = (1,
     report['settings'] = {'pan_seconds': pan_seconds, 'pan_speed_px_s': pan_speed, 'magnification': magnification,
                           'viewport': viewport, 'headed': headed}
     return report
+
+
+# ============================================================================= zoom / level-of-detail stage
+_ZOOM_JS = """
+async ([rate, toScales, maxSeconds, sampleEvery]) => {
+  // continuous zoom about each pane's centre at `rate`× per second (the way a wheel/trackpad zoom drives the
+  // viewer: _zoomAt with animation), until every pane's target reaches toScales[i]; then wait for full res
+  const g = document.querySelector('wissi-viz');
+  const S = { frames: [], sharp: [], detail: [], blank: [] };
+  g.jsFrameMs = [];
+  let last = null, t0 = null, k = 0;
+  await new Promise((resolve) => {
+    const step = (ts) => {
+      if (t0 === null) { t0 = ts; last = ts; }
+      const dt = ts - last; last = ts;
+      if (dt > 0) S.frames.push(dt);
+      let busy = false;
+      g.panes.forEach((p, i) => {
+        if (!p.view || toScales[i] == null) return;
+        const cur = (p.target || p.view).scale, goal = toScales[i];
+        const lr = Math.log(goal / cur);
+        if (Math.abs(lr) > 1e-3) {
+          const stepL = Math.sign(lr) * Math.min(Math.abs(lr), Math.log(rate) * dt / 1000);
+          g._zoomAt(p, p.rect.w / 2, p.rect.h / 2, Math.exp(stepL), true);
+          busy = true;
+        } else if (p.target) busy = true;
+      });
+      if (k++ % sampleEvery === 0) { const c = g.coverage(); S.sharp.push(c.sharp); S.detail.push(c.detail); S.blank.push(c.blank); }
+      if (busy && (ts - t0) / 1000 < maxSeconds) requestAnimationFrame(step); else resolve();
+    };
+    requestAnimationFrame(step);
+  });
+  S.motion_ms = performance.now() - (t0 || performance.now());
+  S.js = g.jsFrameMs.slice();
+  const tStop = performance.now();
+  S.settle_ms = null;
+  while (performance.now() - tStop < 30000) {
+    await new Promise((r) => requestAnimationFrame(r));
+    if (g.coverage().sharp >= 0.999) { S.settle_ms = performance.now() - tStop; break; }
+  }
+  return S;
+}
+"""
+
+_JUMP_JS = """
+async ([targets, timeout, sampleEvery]) => {
+  // animated goTo (double-click / 'centre on object' style) to each [fx, fy, magnification]; time to full res
+  const g = document.querySelector('wissi-viz');
+  const out = [];
+  for (const [fx, fy, mag] of targets) {
+    for (const p of g.panes) if (p.slide && p.slide.info) g.goTo(p.index, fx * p.slide.info.width, fy * p.slide.info.height, { magnification: mag });
+    const t0 = performance.now();
+    const S = { detail: [], blank: [] };
+    let k = 0, ms = null;
+    while (performance.now() - t0 < timeout) {
+      await new Promise((r) => requestAnimationFrame(r));
+      const c = g.coverage();
+      if (k++ % sampleEvery === 0) { S.detail.push(c.detail); S.blank.push(c.blank); }
+      if (!g.panes.some((p) => p.target) && c.sharp >= 0.999) { ms = performance.now() - t0; break; }
+    }
+    out.push({ mag, ms, detail: S.detail, blank: S.blank });
+  }
+  return out;
+}
+"""
+
+_SNAP_JS = """() => { const g = document.querySelector('wissi-viz');
+  let undrawn = 0; for (const t of g.tex.values()) if (!t.drawn) undrawn++;
+  return { ...g.counters, ...g.fx, undrawn, textures: g.tex.size, textureMB: g.texBytes / 2 ** 20 }; }"""
+
+
+def _delta(a: dict, b: dict) -> dict:
+    d = {k: b[k] - a[k] for k in ('requests', 'completed', 'cancelled', 'aborted', 'failed', 'uploaded', 'wasted',
+                                  'frames', 'draws', 'fill', 'area')}
+    return {'requests': d['requests'], 'cancelled': d['cancelled'] + d['aborted'], 'MB': round((b['bytes'] - a['bytes']) / 2**20, 2),
+            'uploaded': d['uploaded'], 'evicted_undrawn': d['wasted'],
+            'overdraw': round(d['fill'] / d['area'], 3) if d['area'] else None,
+            'draws_per_frame': round(d['draws'] / d['frames'], 1) if d['frames'] else None}
+
+
+def _summ_zoom(r: dict) -> dict:
+    f = r['frames'][2:] or r['frames']
+    js = r.get('js') or []
+    return {'motion_ms': round(r['motion_ms']), 'fps_median': round(1000 / _pct(f, 50), 1) if f else None,
+            'frame_p95_ms': round(_pct(f, 95), 1) if f else None,
+            'js_frame_p50_ms': round(_pct(js, 50), 2) if js else None, 'js_frame_p95_ms': round(_pct(js, 95), 2) if js else None,
+            'detail_pct': round(100 * float(np.mean(r['detail'])), 1) if r['detail'] else None,
+            'full_res_pct': round(100 * float(np.mean(r['sharp'])), 1) if r['sharp'] else None,
+            'blank_pct': round(100 * float(np.mean(r['blank'])), 2) if r['blank'] else None,
+            'settle_ms': None if r['settle_ms'] is None else round(r['settle_ms'])}
+
+
+def zoom_bench(configs: Sequence[tuple[str, Sequence[str], int]], modes: Sequence[str] = ('legacy', 'default'),
+               rate: float = 4.0, magnification: float = 40, viewport=(1600, 1000), repeats: int = 1,
+               headed: bool = False, browser_args: Sequence[str] | None = None, http2: bool = False,
+               save_to: str | None = None, log=print) -> dict:
+    """Zooming through the pyramid: continuous zoom fit→``magnification``→fit at ``rate``×/s, then jump zooms.
+
+    ``configs``: (label, slide paths, panes). ``modes``: viewer LOD policies (``'legacy'``, ``'default'`` or a JSON
+    dict for ``setLod``). Every (mode, config, repeat) gets a fresh server registry and a fresh browser, so tile
+    caches start cold on both sides and the comparison is fair."""
+    import socket
+
+    import uvicorn
+    from playwright.sync_api import sync_playwright
+
+    from .registry import SlideRegistry
+    from .server import create_app
+    from .tiles import TileService
+
+    args = list(browser_args or ['--ignore-gpu-blocklist', '--enable-gpu-rasterization', '--enable-unsafe-swiftshader'])
+    if http2:
+        args.append('--ignore-certificate-errors')
+    jumps = [[0.5, 0.5, magnification], [0.35, 0.6, magnification / 4], [0.62, 0.42, magnification / 2],
+             [0.5, 0.5, max(1.25, magnification / 16)], [0.45, 0.55, magnification]]
+    report: dict[str, Any] = {'runs': [], 'settings': {'rate_per_s': rate, 'magnification': magnification,
+                                                       'viewport': viewport, 'jumps': jumps, 'http2': http2}}
+    with sync_playwright() as pw:
+        for rep in range(repeats):
+            for cfg in configs:
+                label, paths, n = cfg[:3]
+                reg_kw = cfg[3] if len(cfg) > 3 else {}
+                for mode in modes:
+                    reg = SlideRegistry(TileService(memory_bytes=2048 * 2**20), warm=True, **reg_kw)
+                    ids = [reg.add(paths[i % len(paths)], slide_id=f'z{i}') for i in range(n)]
+                    with socket.socket() as s_:
+                        s_.bind(('127.0.0.1', 0))
+                        port = s_.getsockname()[1]
+                    if http2:
+                        th, stop = _serve_h2(create_app(reg), port)
+                        scheme = 'https'
+                    else:
+                        server = uvicorn.Server(uvicorn.Config(create_app(reg), host='127.0.0.1', port=port, log_level='warning'))
+                        th = threading.Thread(target=server.run, daemon=True)
+                        th.start()
+                        while not server.started:
+                            time.sleep(0.05)
+                        stop = lambda server=server: setattr(server, 'should_exit', True)  # noqa: E731
+                        scheme = 'http'
+                    b = pw.chromium.launch(headless=not headed, args=args)
+                    try:
+                        pg = b.new_page(viewport={'width': viewport[0], 'height': viewport[1]}, ignore_https_errors=True)
+                        pg.goto(f'{scheme}://127.0.0.1:{port}/')
+                        pg.wait_for_function('() => window.grid && customElements.get("wissi-viz")', timeout=30000)
+                        lod = mode if mode in ('legacy', 'default') else json.loads(mode)
+                        pg.evaluate("""([ids, lod]) => { grid.setAttribute('controls','false'); grid.setSync('none');
+                            grid.setLod(lod); grid.setLayout('auto'); grid.setSlides(ids); }""", [ids, lod])
+                        open_ms = pg.evaluate(_WAIT_SHARP_JS, 60000)
+                        fit = pg.evaluate('() => grid.panes.map((p) => p.view && p.view.scale)')
+                        mpp = pg.evaluate('() => grid.panes.map((p) => p.slide.info.mpp ? p.slide.info.mpp[0] : 1)')
+                        deep = [m * magnification / 10 for m in mpp]
+                        s0 = pg.evaluate(_SNAP_JS)
+                        zin = pg.evaluate(_ZOOM_JS, [rate, deep, 30, 2])
+                        s1 = pg.evaluate(_SNAP_JS)
+                        zout = pg.evaluate(_ZOOM_JS, [rate, fit, 30, 2])
+                        s2 = pg.evaluate(_SNAP_JS)
+                        jump = pg.evaluate(_JUMP_JS, [jumps, 30000, 2])
+                        s3 = pg.evaluate(_SNAP_JS)
+                    finally:
+                        b.close()
+                        stop()
+                        th.join(timeout=5)
+                        reg.close()   # release caches + workers before the next (cold) run
+                    run = {'config': label, 'panes': n, 'mode': mode, 'repeat': rep,
+                           'open_ms': None if open_ms is None else round(open_ms),
+                           'zoom_in': {**_summ_zoom(zin), **_delta(s0, s1)},
+                           'zoom_out': {**_summ_zoom(zout), **_delta(s1, s2)},
+                           'jumps': {'ms': [None if j['ms'] is None else round(j['ms']) for j in jump],
+                                     'detail_pct': round(100 * float(np.mean([x for j in jump for x in j['detail']] or [0])), 1),
+                                     'blank_pct': round(100 * float(np.mean([x for j in jump for x in j['blank']] or [0])), 2),
+                                     **_delta(s2, s3)},
+                           'end': {'textures': s3['textures'], 'textureMB': round(s3['textureMB'], 1),
+                                   'undrawn_textures': s3['undrawn'], 'requests': s3['requests'],
+                                   'MB': round(s3['bytes'] / 2**20, 1)}}
+                    report['runs'].append(run)
+                    if save_to:  # keep partial results of long sweeps
+                        Path(save_to).write_text(json.dumps(report, indent=1))
+                    zi, zo, jp = run['zoom_in'], run['zoom_out'], run['jumps']
+                    log(f"{label:<14} {n:>2}p {str(mode)[:8]:<8} in: detail {zi['detail_pct']}% blank {zi['blank_pct']}% "
+                        f"settle {zi['settle_ms']} ms {zi['MB']} MB req {zi['requests']} overdraw {zi['overdraw']} js {zi['js_frame_p50_ms']} | "
+                        f"out: detail {zo['detail_pct']}% blank {zo['blank_pct']}% {zo['MB']} MB req {zo['requests']} | "
+                        f"jumps {jp['ms']} {jp['MB']} MB | total {run['end']['MB']} MB")
+    return report
+
+
+def format_zoom_report(rep: dict) -> str:
+    rows = ['| config | panes | LOD | phase | detail % | full-res % | blank % | settle ms | MB | requests | cancelled | '
+            'uploaded | overdraw | draws/frame | JS ms p50 (p95) | fps |', '|' + '---|' * 16]
+    for r in rep['runs']:
+        for ph in ('zoom_in', 'zoom_out'):
+            z = r[ph]
+            rows.append(f"| {r['config']} | {r['panes']} | {r['mode']} | {ph.replace('_', ' ')} | {z['detail_pct']} | {z['full_res_pct']} | "
+                        f"{z['blank_pct']} | {z['settle_ms']} | {z['MB']} | {z['requests']} | {z['cancelled']} | {z['uploaded']} | "
+                        f"{z['overdraw']} | {z['draws_per_frame']} | {z['js_frame_p50_ms']} ({z['js_frame_p95_ms']}) | {z['fps_median']} |")
+        j = r['jumps']
+        rows.append(f"| {r['config']} | {r['panes']} | {r['mode']} | jumps ({', '.join(str(x) for x in j['ms'])} ms) | {j['detail_pct']} | | "
+                    f"{j['blank_pct']} | {sum(x or 0 for x in j['ms'])} | {j['MB']} | {j['requests']} | {j['cancelled']} | {j['uploaded']} | "
+                    f"{j['overdraw']} | {j['draws_per_frame']} | | |")
+    return '\n'.join(rows)
 
 
 def _serve_h2(app, port: int):

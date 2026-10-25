@@ -77,7 +77,7 @@ class WissiViz(Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'},
 
     def __init__(self, slides: Sequence[Any] = (), *, layout: str = 'auto', sync: str = 'none',
                  controls: bool = True, legend: bool = True, tool: str = 'pan', draw_layer: str | None = None, quality: float = 1.0,
-                 texture_budget_mb: int | None = None, registry: SlideRegistry | None = None,
+                 texture_budget_mb: int | None = None, lod: str | dict | None = None, registry: SlideRegistry | None = None,
                  prefix: str = '/wissi-viz',
                  on_view_change: Callable | None = None, on_click: Callable | None = None,
                  on_object_click: Callable | None = None, on_draw: Callable | None = None,
@@ -101,6 +101,8 @@ class WissiViz(Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'},
         self._props['quality'] = quality
         if texture_budget_mb:
             self._props['textureBudgetMb'] = texture_budget_mb
+        if lod is not None:
+            self._props['lod'] = lod
 
         def _view(e: GenericEventArguments) -> None:
             if isinstance(e.args, dict) and 'pane' in e.args:
@@ -182,6 +184,18 @@ class WissiViz(Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'},
         if draw_layer is not None:
             self._props['drawLayer'] = draw_layer
         self.update()
+        return self
+
+    def set_lod(self, preset: str | None = None, **opts: Any) -> 'WissiViz':
+        """Level-of-detail policy. ``set_lod('legacy')`` / ``set_lod('default')`` or individual options:
+        ``motion_bias`` (texels per device px allowed while moving, default 2), ``minify`` (keep loaded finer tiles
+        down to this many device px per texel, 0.5), ``quadtree`` (draw the finest loaded tile per region, True),
+        ``background`` (full-res tiles use spare request slots while moving, True), ``prefetch`` (fetch the next
+        finer level around the centre at rest, False), ``decoupled`` (start requests between frames, True)."""
+        names = {'motion_bias': 'motionBias'}
+        arg: Any = preset if preset else {names.get(k, k): v for k, v in opts.items()}
+        self._props['lod'] = arg
+        self._call('setLod', arg)
         return self
 
     # ------------------------------------------------------------ navigation

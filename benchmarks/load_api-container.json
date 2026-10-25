@@ -1,0 +1,439 @@
+{
+ "settings": {
+  "target": "http://127.0.0.1:52171/wissi-viz",
+  "users": "10,25,50,75,100",
+  "requests": 200,
+  "panes": 4,
+  "conn": 6,
+  "think": [
+   0.3,
+   1.5
+  ],
+  "ramp": 5,
+  "max_seconds": 180,
+  "timeout": 30,
+  "http2": false,
+  "slides": null,
+  "max_slides": 64,
+  "images": null,
+  "pyramid": "100000x80000:256:2",
+  "mpp": 0.25,
+  "ok_404": false,
+  "stats_url": [
+   "http://127.0.0.1:52171/_sim/stats",
+   "http://127.0.0.1:58759/api/_stats"
+  ],
+  "procs": 1,
+  "predict": "",
+  "seed": 0,
+  "insecure": false,
+  "yes": false,
+  "out": "bench/load_api.json",
+  "mode": "wissi",
+  "base": "http://127.0.0.1:52171/wissi-viz"
+ },
+ "stages": [
+  {
+   "users": 10,
+   "requests": 2000,
+   "wall_s": 30.4,
+   "throughput_rps": 73.9,
+   "MB": 100.2,
+   "latency_ms": {
+    "p50": 163.1,
+    "p90": 645.2,
+    "p95": 819.0,
+    "p99": 1311.1,
+    "max": 5247.0
+   },
+   "latency_mean_ms": 257.2,
+   "view_ms": {
+    "p50": 706,
+    "p95": 4696,
+    "p99": 5376
+   },
+   "status": {
+    "200": 2000
+   },
+   "errors": {},
+   "error_rate_pct": 0.0,
+   "rate_pct": {},
+   "client_loop_lag_ms_p95": 11.9,
+   "server": {
+    "http://127.0.0.1:52171/_sim/stats": {
+     "tiles": {
+      "memory": {
+       "entries": 1318,
+       "bytes": 69500580,
+       "max_bytes": 0,
+       "hits": 604,
+       "misses": 1356
+      },
+      "produced": 1318,
+      "avg_produce_ms": -49.37,
+      "inflight": 0,
+      "decoded": {
+       "entries": 0,
+       "bytes": 0,
+       "max_bytes": 0,
+       "hits": 0,
+       "misses": 0,
+       "evictions": 0
+      }
+     },
+     "connector": {
+      "slides_opened": 0,
+      "calls": 1308,
+      "retries": 19,
+      "not_found": 10,
+      "errors": 0,
+      "mean_call_ms": -53.2
+     }
+    },
+    "http://127.0.0.1:58759/api/_stats": {
+     "inflight": -2,
+     "requests": 1337,
+     "tiles": 1308,
+     "r429": 0,
+     "r503": 19,
+     "r404": 10,
+     "bytes": 71104942,
+     "meta": 0
+    }
+   }
+  },
+  {
+   "users": 25,
+   "requests": 5000,
+   "wall_s": 53.1,
+   "throughput_rps": 114.6,
+   "MB": 385.0,
+   "latency_ms": {
+    "p50": 100.0,
+    "p90": 2004.8,
+    "p95": 2291.5,
+    "p99": 2933.2,
+    "max": 4184.7
+   },
+   "latency_mean_ms": 662.1,
+   "view_ms": {
+    "p50": 1208,
+    "p95": 11269,
+    "p99": 15841
+   },
+   "status": {
+    "200": 5000
+   },
+   "errors": {},
+   "error_rate_pct": 0.0,
+   "rate_pct": {},
+   "client_loop_lag_ms_p95": 16.2,
+   "server": {
+    "http://127.0.0.1:52171/_sim/stats": {
+     "tiles": {
+      "memory": {
+       "entries": 2083,
+       "bytes": 166266112,
+       "max_bytes": 0,
+       "hits": 2772,
+       "misses": 2128
+      },
+      "produced": 2083,
+      "avg_produce_ms": 41.83,
+      "inflight": 0,
+      "decoded": {
+       "entries": 0,
+       "bytes": 0,
+       "max_bytes": 0,
+       "hits": 0,
+       "misses": 0,
+       "evictions": 0
+      }
+     },
+     "connector": {
+      "slides_opened": 0,
+      "calls": 1899,
+      "retries": 20,
+      "not_found": 184,
+      "errors": 0,
+      "mean_call_ms": 42.9
+     }
+    },
+    "http://127.0.0.1:58759/api/_stats": {
+     "inflight": 0,
+     "requests": 2103,
+     "tiles": 1899,
+     "r429": 0,
+     "r503": 20,
+     "r404": 184,
+     "bytes": 164282680,
+     "meta": 0
+    }
+   }
+  },
+  {
+   "users": 50,
+   "requests": 10000,
+   "wall_s": 65.4,
+   "throughput_rps": 183.8,
+   "MB": 634.1,
+   "latency_ms": {
+    "p50": 104.6,
+    "p90": 3073.3,
+    "p95": 3769.0,
+    "p99": 5482.1,
+    "max": 6638.3
+   },
+   "latency_mean_ms": 829.8,
+   "view_ms": {
+    "p50": 1109,
+    "p95": 15219,
+    "p99": 25194
+   },
+   "status": {
+    "200": 10000
+   },
+   "errors": {},
+   "error_rate_pct": 0.0,
+   "rate_pct": {},
+   "client_loop_lag_ms_p95": 38.5,
+   "server": {
+    "http://127.0.0.1:52171/_sim/stats": {
+     "tiles": {
+      "memory": {
+       "entries": 2676,
+       "bytes": 168725557,
+       "max_bytes": 0,
+       "hits": 7019,
+       "misses": 2781
+      },
+      "produced": 2676,
+      "avg_produce_ms": 12.44,
+      "inflight": 0,
+      "decoded": {
+       "entries": 0,
+       "bytes": 0,
+       "max_bytes": 0,
+       "hits": 0,
+       "misses": 0,
+       "evictions": 0
+      }
+     },
+     "connector": {
+      "slides_opened": 0,
+      "calls": 2597,
+      "retries": 18,
+      "not_found": 79,
+      "errors": 0,
+      "mean_call_ms": 14.3
+     }
+    },
+    "http://127.0.0.1:58759/api/_stats": {
+     "inflight": 0,
+     "requests": 2694,
+     "tiles": 2597,
+     "r429": 0,
+     "r503": 18,
+     "r404": 79,
+     "bytes": 166715169,
+     "meta": 0
+    }
+   }
+  },
+  {
+   "users": 75,
+   "requests": 15000,
+   "wall_s": 72.0,
+   "throughput_rps": 259.5,
+   "MB": 1008.6,
+   "latency_ms": {
+    "p50": 433.1,
+    "p90": 3665.8,
+    "p95": 4427.2,
+    "p99": 6289.2,
+    "max": 7746.2
+   },
+   "latency_mean_ms": 1063.7,
+   "view_ms": {
+    "p50": 3375,
+    "p95": 19398,
+    "p99": 32349
+   },
+   "status": {
+    "200": 15000
+   },
+   "errors": {},
+   "error_rate_pct": 0.0,
+   "rate_pct": {},
+   "client_loop_lag_ms_p95": 107.0,
+   "server": {
+    "http://127.0.0.1:52171/_sim/stats": {
+     "tiles": {
+      "memory": {
+       "entries": 3474,
+       "bytes": 197667117,
+       "max_bytes": 0,
+       "hits": 11161,
+       "misses": 3539
+      },
+      "produced": 3474,
+      "avg_produce_ms": -11.18,
+      "inflight": 0,
+      "decoded": {
+       "entries": 0,
+       "bytes": 0,
+       "max_bytes": 0,
+       "hits": 0,
+       "misses": 0,
+       "evictions": 0
+      }
+     },
+     "connector": {
+      "slides_opened": 0,
+      "calls": 3228,
+      "retries": 30,
+      "not_found": 246,
+      "errors": 0,
+      "mean_call_ms": -10.5
+     }
+    },
+    "http://127.0.0.1:58759/api/_stats": {
+     "inflight": 0,
+     "requests": 3504,
+     "tiles": 3228,
+     "r429": 0,
+     "r503": 30,
+     "r404": 246,
+     "bytes": 195069374,
+     "meta": 0
+    }
+   }
+  },
+  {
+   "users": 100,
+   "requests": 20000,
+   "wall_s": 125.6,
+   "throughput_rps": 339.8,
+   "MB": 1374.5,
+   "latency_ms": {
+    "p50": 620.0,
+    "p90": 2953.1,
+    "p95": 4122.2,
+    "p99": 4898.6,
+    "max": 7979.0
+   },
+   "latency_mean_ms": 1109.2,
+   "view_ms": {
+    "p50": 3247,
+    "p95": 18647,
+    "p99": 25979
+   },
+   "status": {
+    "200": 20000
+   },
+   "errors": {},
+   "error_rate_pct": 0.0,
+   "rate_pct": {},
+   "client_loop_lag_ms_p95": 124.4,
+   "server": {
+    "http://127.0.0.1:52171/_sim/stats": {
+     "tiles": {
+      "memory": {
+       "entries": 3857,
+       "bytes": 217697543,
+       "max_bytes": 0,
+       "hits": 15706,
+       "misses": 3894
+      },
+      "produced": 3857,
+      "avg_produce_ms": -14.58,
+      "inflight": 0,
+      "decoded": {
+       "entries": 0,
+       "bytes": 0,
+       "max_bytes": 0,
+       "hits": 0,
+       "misses": 0,
+       "evictions": 0
+      }
+     },
+     "connector": {
+      "slides_opened": 0,
+      "calls": 3490,
+      "retries": 34,
+      "not_found": 367,
+      "errors": 0,
+      "mean_call_ms": -14.0
+     }
+    },
+    "http://127.0.0.1:58759/api/_stats": {
+     "inflight": 0,
+     "requests": 3891,
+     "tiles": 3490,
+     "r429": 0,
+     "r503": 34,
+     "r404": 367,
+     "bytes": 213121525,
+     "meta": 0
+    }
+   }
+  }
+ ],
+ "model": {
+  "usl": {
+   "lambda": 4.888079659612775,
+   "sigma": 0.004887374631624427,
+   "kappa": 0.0,
+   "r2": 0.9753733073879306,
+   "peak_users": null,
+   "max_throughput_rps": 1000.1442549510705
+  },
+  "tiles_per_move": 25.1,
+  "think_s": 4.131,
+  "tested_users": [
+   10,
+   25,
+   50,
+   75,
+   100
+  ],
+  "predictions": [
+   {
+    "users": 17,
+    "mode": "interpolated",
+    "throughput_rps": 92.9,
+    "latency_mean_ms": 446.2,
+    "latency_p95_ms": 1506.2,
+    "view_p95_ms": 7763,
+    "error_rate_pct": 0.0
+   },
+   {
+    "users": 37,
+    "mode": "interpolated",
+    "throughput_rps": 147.8,
+    "latency_mean_ms": 742.6,
+    "latency_p95_ms": 3000.7,
+    "view_p95_ms": 13165,
+    "error_rate_pct": 0.0
+   },
+   {
+    "users": 150,
+    "mode": "EXTRAPOLATED (USL)",
+    "throughput_rps": 424.3,
+    "latency_mean_ms": 1616.3,
+    "latency_p95_ms": 6006.7,
+    "view_p95_ms": 27171,
+    "error_rate_pct": 0.0
+   },
+   {
+    "users": 200,
+    "mode": "EXTRAPOLATED (USL)",
+    "throughput_rps": 495.6,
+    "latency_mean_ms": 2044.4,
+    "latency_p95_ms": 7597.6,
+    "view_p95_ms": 34368,
+    "error_rate_pct": 0.0
+   }
+  ]
+ }
+}

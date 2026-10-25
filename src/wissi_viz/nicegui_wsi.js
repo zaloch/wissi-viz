@@ -15,6 +15,7 @@ export default {
     drawLayer: String,
     quality: Number,
     textureBudgetMb: Number,
+    lod: [String, Object],
     legend: { type: Boolean, default: true },
   },
   mounted() {
@@ -34,6 +35,7 @@ export default {
     if (this.sync) el.setSync(this.sync);
     if (this.tool) el.setTool(this.tool);
     if (this.textureBudgetMb) el.setTextureBudget(this.textureBudgetMb);
+    if (this.lod) el.setLod(this.lod);
   },
   unmounted() {
     this.grid?.fetcher?.destroy();

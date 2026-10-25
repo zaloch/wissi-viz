@@ -44,7 +44,7 @@ pip install -e .             # minimal: SVS/TIFF/OME-TIFF/NDPI + CZI viewer
 #         [lgpl] OpenSlide + libCZI (opt-in, LGPL)
 ```
 
-> **Integrating into an app?** [docs/INTEGRATION.md](docs/INTEGRATION.md) covers every option: the NiceGUI element, a raw `<wissi-viz>` tag, mounting on any ASGI app, a separate tile server behind React, Vue, Streamlit, Dash or Django, and an iframe. It also covers auth, Docker and proxies, and how to wire a vendor tile API.
+> **Integrating into an app?** [docs/INTEGRATION.md](docs/INTEGRATION.md) covers every option: the NiceGUI element, a raw `<wissi-viz>` tag, mounting on any ASGI app, a separate tile server behind React, Vue, Streamlit, Dash or Django, and an iframe. It also covers auth, Docker and proxies, and how to wire a vendor tile API. **Before go-live:** [docs/LOAD_TESTING.md](docs/LOAD_TESTING.md) and `scripts/wissi_loadtest.py` simulate 10–100 users (≤ 999 requests each) and estimate capacity.
 
 ## Quick start (standalone server + demo page)
 
@@ -266,13 +266,15 @@ On 120k cells, each analysis takes 0.01–4 s.
 - **Coalescing.** If many panes or users ask for the same tile, it is decoded once.
 - **Parallel reads.** Each worker thread has its own reader (tifffile/zarr, czifile, SlideIO), so decoding uses every core.
 - **CZI.** The reader decodes only the subblocks that intersect a tile, straight from their raw bytes through imagecodecs (zstd, JPEG-XR, JPEG, LZW). The CZI's own pyramid subblocks become native levels. Decoded subblocks are kept in an LRU, so the ~16 tiles inside one 2048² subblock decode it once (cold tile ~15–30 ms, cached tile ~0.1 ms). It is pixel-identical to libCZI on every tile tested.
-- **Pyramid gaps.** `PyramidSlide` inserts virtual 2× levels wherever native levels are more than 4× apart, and below the coarsest level. Each virtual tile is a box-filtered 2×2 mosaic of the level beneath, memoised. A slide with *no* pyramid therefore zooms out by touching each pixel once.
+- **Pyramid gaps.** `PyramidSlide` inserts virtual 2× levels wherever native levels are more than 4× apart (`max_level_step`, default 4), and below the coarsest level. Each virtual tile is a box-filtered 2×2 mosaic of the level beneath, memoised. A slide with *no* pyramid therefore zooms out by touching each pixel once.
+- **Memory.** Decoded arrays (virtual-level inputs, CZI subblocks) share **one process-wide budget**, `decoded_cache_mb`, default 1 GB. Busy slides get more of it, and closing a slide frees its share. (Per-slide caches let a 16-pane run grow past 5 GB and get killed for running out of memory.)
 - **Warming.** The coarse levels are pre-rendered in the background, pausing whenever an interactive request is in flight.
 - **Fluorescence data.** Raw uint16 tiles (zlib) are sent, never 8-bit JPEGs, so contrast, gamma and colour are applied exactly on the GPU.
 
 **Browser**
 - **Load order.** The coarsest level loads first, then the parent of the target level, then the target level from the centre outward, then a one-tile margin plus the area along the pan/zoom direction. Off-screen requests are cancelled.
 - **No blank areas.** A missing tile is covered by the best coarser level already loaded.
+- **Level of detail across zoom** (`setLod`, see [Zooming through the pyramid](#zooming-through-the-pyramid-level-of-detail)). What is drawn is a 3-D frustum over (x, y, pyramid level). Each region shows the finest tile already loaded, coarse tiles fill only the holes, and each pane pixel is drawn once. While a pane moves, a level one step coarser is fetched first and full resolution follows in spare request slots. Animations fetch for where the pane will land.
 - **No stutter.** Fetching and decoding run in Web Workers (`createImageBitmap`, `DecompressionStream`). GPU uploads are capped at about 6 ms per frame.
 - **Memory.** One texture LRU, sized by `navigator.deviceMemory` and changeable with `setTextureBudget(mb)`, is shared across panes. Rendering only happens on demand, so an idle viewer uses no CPU or GPU.
 
@@ -286,6 +288,41 @@ On 120k cells, each analysis takes 0.01–4 s.
   - No run showed a blank area, at any pane count.
 
 GPU acceleration happens in the viewer's browser. The server, for example wissi in Docker, needs no GPU. Run `wissi-viz bench … --headed` on a desktop to get numbers for your GPU.
+
+## Zooming through the pyramid (level of detail)
+
+**What gets drawn.** The view is treated as a 3-D frustum over x, y and pyramid level. For every region of every pane, the viewer walks the pyramid as a quadtree, from the coarsest level down to a *floor*:
+- It draws the finest tile already loaded.
+- A coarser tile is drawn only through the holes its children leave, as sub-rectangles of its texture.
+- Each pane pixel is shaded **once**. The legacy painter's algorithm drew a whole fallback level underneath: 1.1–2.1× fill, which matters for the 8-channel fluorescence shader on a weak GPU.
+- The floor is one level *finer* than needed when that level is already loaded (`minify: 0.5`). When you zoom out, sharp tiles stay on screen instead of dropping to the coarser level.
+
+**What gets fetched.**
+
+| Situation | Fetched first | Then |
+|---|---|---|
+| At rest | the full-resolution level (texels ≤ 1 device px) | margin ring |
+| Moving (pan, fling, zoom) | the level whose texels are ≤ 2 device px (`motionBias: 2`): **¼ of the tiles** on a 2×-step pyramid | full resolution in *spare* request slots only, ⅓ always kept free for urgent tiles; swapped in as it arrives |
+| Animating to a known view (goTo, double-click, wheel target) | the destination's level and its parent | the in-between views, only with spare capacity |
+
+- **Requests between frames.** A finished request starts the next queued one right away, instead of waiting for the next frame. GPU uploads get up to 20% of a slow frame.
+- **Prefetch (`prefetch: true`, off by default)** fetches the next finer level around the centre at rest. It was measured as roughly neutral, so it stays off.
+- **Server option:** `max_level_step=2` gives 4×-step SVS pyramids virtual 2× levels. Browsers then download less, at the cost of server CPU per virtual tile.
+
+```js
+grid.setLod('default');                       // or 'legacy' (pre-0.4 behaviour), or individual options:
+grid.setLod({ motionBias: 2, minify: 0.5, quadtree: true, background: true, destination: true, decoupled: true, prefetch: false });
+```
+```python
+WissiViz(slides, lod='default')               # or grid.set_lod('legacy') / grid.set_lod(motion_bias=1.5, prefetch=True)
+```
+```html
+<wissi-viz lod='{"motionBias": 1.5}' ...></wissi-viz>
+```
+
+Measured with `wissi-viz bench --zoom` (legacy vs new; 1 and 16 panes; SVS, OME-TIFF and CZI): see [benchmarks/results-zoom.md](benchmarks/results-zoom.md).
+
+**Z-stacks.** "3-D" here means the scale axis. Focal planes (CZI Z/T) are still chosen when a source is opened (`CziSource(path, z=…)`). Streaming Z as a fourth tile dimension, with neighbouring planes prefetched, is a natural next step on the same scheduler.
 
 ## Licences
 
@@ -305,7 +342,7 @@ GPU acceleration happens in the viewer's browser. The server, for example wissi 
 ## Tests
 
 ```bash
-pip install -e ".[all,dev]" && pytest -q tests                      # 62 tests
+pip install -e ".[all,dev]" && pytest -q tests                      # 67 tests
 python tests/make_test_data.py /tmp/wsi --size 16000                # synthetic SVS + 3-channel CZI + 120k cell GeoJSON
 python tests/make_analysis_data.py /tmp/wsi                         # QuPath-style multiplex cell table + ROIs
 python examples/analysis_app.py /tmp/wsi/synthetic_he.svs /tmp/wsi/synthetic_he_cells.tsv /tmp/wsi/synthetic_he_rois.geojson

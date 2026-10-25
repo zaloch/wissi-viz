@@ -151,3 +151,71 @@ def test_failed_tile_is_retried_until_sharp(tmp_path):
             b.close()
     finally:
         srv.should_exit = True
+
+
+def test_quadtree_draw_matches_legacy_pixels_and_has_no_overdraw(tmp_path):
+    """The quadtree draw (finest loaded tile per region, coarse tiles only through holes, as sub-rect draws) must
+    produce the same pixels as the legacy painter's draw, including holes left by tiles that always fail, while
+    filling each pane pixel once."""
+    import socket
+    import threading
+    import time
+
+    import uvicorn
+
+    from wissi_viz import Level, SlideInfo, SlideRegistry
+    from wissi_viz.server import create_app
+    from wissi_viz.sources.callback import CallbackSource
+
+    def tile(level, tx, ty, c):
+        if level == 0 and (tx + ty) % 3 == 0:          # holes at full resolution → filled from level 1
+            raise ConnectionError('always fails')
+        # smooth but steep content (triangle waves, 4 levels per texel) + a per-tile code: a sub-rect misplaced by
+        # ≥ 1 texel or a wrong tile/level changes pixels by ≥ 4; rasterizer interpolation noise (~1 % of a texel) doesn't
+        i = np.arange(256)
+        tri = (np.abs(((i * 4) % 512) - 256)).clip(0, 255).astype(np.uint8)
+        t = np.empty((256, 256, 3), np.uint8)
+        t[..., 0] = tri[None, :]
+        t[..., 1] = tri[:, None]
+        t[..., 2] = (level * 97 + tx * 37 + ty * 61) % 256
+        return t
+    W, H = 4096, 3072
+    info = SlideInfo(width=W, height=H, levels=[Level(W >> k, H >> k, float(2 ** k)) for k in range(5)], tile_size=256, mpp=(0.5, 0.5))
+    reg = SlideRegistry(warm=False)
+    reg.add(CallbackSource(info, read_tile=tile), slide_id='q')
+    with socket.socket() as s:
+        s.bind(('127.0.0.1', 0))
+        port = s.getsockname()[1]
+    srv = uvicorn.Server(uvicorn.Config(create_app(reg), host='127.0.0.1', port=port, log_level='warning'))
+    threading.Thread(target=srv.run, daemon=True).start()
+    while not srv.started:
+        time.sleep(0.05)
+    from playwright.sync_api import sync_playwright
+    snap = """(lod) => { const g = grid; g.setLod(lod); g._draw();
+        const gl = g.gl, w = gl.drawingBufferWidth, h = gl.drawingBufferHeight, px = new Uint8Array(w * h * 4);
+        gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px); return Array.from(px); }"""
+    try:
+        with sync_playwright() as pw:
+            try:
+                b = pw.chromium.launch(args=['--enable-unsafe-swiftshader'])
+            except Exception as e:  # noqa: BLE001
+                pytest.skip(f'no Chromium: {e}')
+            pg = b.new_page(viewport={'width': 640, 'height': 400})
+            pg.goto(f'http://127.0.0.1:{port}/')
+            pg.wait_for_function('() => window.grid')
+            pg.evaluate('() => { grid.setAttribute("controls", "false"); grid.setSlides(["q", "q"]); }')
+            # views at full resolution of level 0 (with holes), and between levels
+            for zoom in (1.0, 0.7, 0.3):
+                pg.evaluate(f'() => grid.goTo("all", {W * 0.43}, {H * 0.57}, {{zoom: {zoom}, animate: false}})')
+                pg.wait_for_function('() => grid.stats().inflight === 0 && grid.stats().queuedUploads === 0 && '
+                                     'grid.coverage().blank === 0', timeout=30000)
+                time.sleep(0.6)   # let back-off retries of the failing tiles settle (they keep failing)
+                pg.evaluate('() => { grid.fx = {frames: 0, draws: 0, fill: 0, area: 0}; grid.setLod("default"); grid._draw(); }')
+                st = pg.evaluate('() => grid.stats()')
+                a = np.array(pg.evaluate(snap, 'legacy'), np.int16)
+                q = np.array(pg.evaluate(snap, 'default'), np.int16)
+                assert np.abs(a - q).max() <= 2, (zoom, int(np.abs(a - q).max()))
+                assert st['overdraw'] <= 1.001, st
+            b.close()
+    finally:
+        srv.should_exit = True

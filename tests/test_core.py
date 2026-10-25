@@ -250,3 +250,34 @@ def test_tiff_fast_path_matches_zarr(tmp_path, data):
         assert s._fast, f'fast path disabled for {path}'
     s = open_slide(p)
     assert len(s.info.levels) == 3 and np.array_equal(s.read_region(1, 0, 0, 750, 550, 2), img[2, ::2, ::2])
+
+
+def test_decoded_arrays_share_one_budget_across_slides():
+    """16 open slides must not each keep their own decoded-array cache (that OOM-killed a 16-pane run):
+    they share one byte budget, and closing a slide releases its entries."""
+    import numpy as np
+
+    from wissi_viz import Level, SlideInfo, SlideRegistry, decoded_cache, set_decoded_cache_mb
+    from wissi_viz.sources.callback import CallbackSource
+    old = decoded_cache().max_bytes
+    set_decoded_cache_mb(4)
+    try:
+        info = SlideInfo(width=2048, height=2048, levels=[Level(2048, 2048, 1.0)], tile_size=256, mpp=(0.5, 0.5))
+        reg = SlideRegistry(warm=False, max_level_step=2)
+        ids = [reg.add(CallbackSource(info, read_tile=lambda L, x, y, c, k=k: np.full((256, 256, 3), k, np.uint8)),
+                       slide_id=f's{k}') for k in range(16)]
+        for sid in ids:
+            _, pyr = reg.get(sid)
+            assert len(pyr.info.levels) >= 4          # virtual 2× levels down to one tile
+            for L in range(1, len(pyr.info.levels)):  # read every virtual level → native tiles memoised
+                lv = pyr.info.levels[L]
+                for ty in range(-(-lv.height // 256)):
+                    for tx in range(-(-lv.width // 256)):
+                        pyr._array(L, tx, ty, None)
+        st = decoded_cache().stats()
+        assert st['bytes'] <= 4 * 2**20 and st['evictions'] > 0, st
+        before = st['entries']
+        reg.close()
+        assert decoded_cache().stats()['entries'] < before
+    finally:
+        set_decoded_cache_mb(old / 2**20)

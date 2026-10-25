@@ -12,6 +12,22 @@ const MAX_CH = 8;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const now = () => performance.now();
 
+// Level of detail.
+//  motionBias  while a pane moves, fetch the level whose texels are up to this many device px (2 = one 2× level
+//              coarser); the full-resolution level is fetched in the background and swapped in when it is ready
+//  minify      draw an already-loaded FINER level down to this many device px per texel (0.5 = keep sharp tiles
+//              while zooming out instead of dropping to the coarser level)
+//  quadtree    draw only the finest loaded tile for each region (no painter's-algorithm overdraw)
+//  background  while moving, full-res tiles use spare request slots only (never block urgent tiles)
+//  prefetch    at rest, quietly prefetch the next finer level around the centre (next zoom step is instant)
+//  destination while a pane animates toward a known view (goTo, double-click, wheel), fetch for where it will
+//              land first; the in-between views only get spare capacity
+//  decoupled   start the next request as soon as one finishes, and size GPU uploads to the real frame time,
+//              so slow frames (weak/software GPUs, many panes) don't throttle the network
+const LOD_DEFAULT = { motionBias: 2, minify: 0.5, quadtree: true, background: true, prefetch: false, decoupled: true, destination: true };
+const BG_PRIO = 4;
+const LOD_LEGACY = { motionBias: 1, minify: 1, quadtree: false, background: false, prefetch: false, decoupled: false, destination: false };
+
 function hexToRgb(h) {
   h = String(h || '#ffffff').replace('#', '');
   if (h.length === 3) h = h.split('').map((c) => c + c).join('');
@@ -548,7 +564,7 @@ canvas.ov { pointer-events:none; }
 const SVG_GEAR = '⚙';
 
 export class WsiGrid extends HTMLElement {
-  static get observedAttributes() { return ['api', 'slides', 'layout', 'sync', 'controls', 'quality', 'tool', 'draw-layer', 'legend']; }
+  static get observedAttributes() { return ['api', 'slides', 'layout', 'sync', 'controls', 'quality', 'tool', 'draw-layer', 'legend', 'lod']; }
 
   constructor() {
     super();
@@ -577,7 +593,10 @@ export class WsiGrid extends HTMLElement {
     this.quality = 1.0;
     this.showControls = true;
     this.showLegend = true;
-    this.counters = { requests: 0, completed: 0, bytes: 0, aborted: 0, cancelled: 0, failed: 0 };
+    this.counters = { requests: 0, completed: 0, bytes: 0, aborted: 0, cancelled: 0, failed: 0, uploaded: 0, wasted: 0 };
+    // level-of-detail policy (see setLod). LOD_LEGACY reproduces the pre-0.4 behaviour for A/B benchmarks.
+    this.lod = { ...LOD_DEFAULT };
+    this.fx = { frames: 0, draws: 0, fill: 0, area: 0 }; // draw statistics: tile quads, device px filled vs pane px
     this.maxInflight = 5;
     this.budget = Math.min(1024, ((navigator.deviceMemory || 8) * 96)) * 2 ** 20; // GPU texture budget (bytes)
     this._raf = 0;
@@ -624,6 +643,7 @@ export class WsiGrid extends HTMLElement {
     else if (name === 'controls') { this.showControls = val !== 'false'; this._buildPanes(); }
     else if (name === 'legend') { this.showLegend = val !== 'false'; this._legends(); }
     else if (name === 'quality') this.quality = clamp(parseFloat(val) || 1, 0.25, 4);
+    else if (name === 'lod') { let v = val; try { if (v && v.trim().startsWith('{')) v = JSON.parse(v); } catch (e) { /* preset name */ } this.setLod(v || 'default'); }
     else if (name === 'tool') this.setTool(val || 'pan');
     else if (name === 'draw-layer') this.drawLayer = val || null;
   }
@@ -872,31 +892,54 @@ export class WsiGrid extends HTMLElement {
         }
         return a;
       };
-      const rg = this._tileRange(info, target, clip);
-      const sharp = rg ? tileArea(target, rg, (L, x, y) => this._ready(p, L, x, y, chans)) / area : 1;
-      // any level: sample a grid of points and check the finest loaded level covering each
-      let covered = 0, n = 0;
+      const scaleDev = p.view.scale * this.dpr;
+      const floor = this._drawFloor(info, scaleDev, target);
+      let sharp;
+      if (floor < target) { // full resolution = drawn from the target level or finer
+        sharp = 0;
+        this._cover(p, info, floor, clip, chans, (L, x, y, r) => { if (L <= target) sharp += (r[2] - r[0]) * (r[3] - r[1]); });
+        sharp /= area;
+      } else {
+        const rg = this._tileRange(info, target, clip);
+        sharp = rg ? tileArea(target, rg, (L, x, y) => this._ready(p, L, x, y, chans)) / area : 1;
+      }
+      // sample a grid of points: finest drawable level covering each → blank fraction and mean detail
+      // (detail 1 = texel ≤ 1 device px (× quality); 0.5 = one 2× level coarser; 0 = nothing drawn)
+      let covered = 0, n = 0, detail = 0;
       for (let gy = 0; gy < 12; gy++) for (let gx = 0; gx < 12; gx++, n++) {
         const X = clip[0] + (gx + 0.5) / 12 * (clip[2] - clip[0]), Y = clip[1] + (gy + 0.5) / 12 * (clip[3] - clip[1]);
-        for (let L = target; L < info.levels.length; L++) {
+        for (let L = floor; L < info.levels.length; L++) {
           const lv = info.levels[L], ts = info.tile_size;
-          if (this._ready(p, L, Math.floor(X / lv.sx / ts), Math.floor(Y / lv.sy / ts), chans)) { covered++; break; }
+          if (this._ready(p, L, Math.floor(X / lv.sx / ts), Math.floor(Y / lv.sy / ts), chans)) {
+            covered++;
+            detail += Math.min(1, this.quality / (lv.downsample * scaleDev));
+            break;
+          }
         }
       }
-      per.push({ pane: p.index, level: target, sharp: Math.min(1, sharp), blank: 1 - covered / n });
+      per.push({ pane: p.index, level: target, sharp: Math.min(1, sharp), blank: 1 - covered / n, detail: detail / n });
     }
     const ok = per.filter((c) => c && !c.offSlide);
     const mean = (k) => (ok.length ? ok.reduce((a, c) => a + c[k], 0) / ok.length : 0);
-    return { sharp: mean('sharp'), blank: mean('blank'), panes: per };
+    return { sharp: mean('sharp'), blank: mean('blank'), detail: mean('detail'), panes: per };
   }
 
   stats() {
     return { textures: this.tex.size, textureMB: +(this.texBytes / 2 ** 20).toFixed(1), annotationMB: +(this.gpuBytes / 2 ** 20).toFixed(1),
       inflight: this.inflight.size, queuedUploads: this.uploads.length, frame: this.frame, budgetMB: this.budget / 2 ** 20,
-      ...this.counters, maxInflight: this.maxInflight };
+      ...this.counters, maxInflight: this.maxInflight,
+      overdraw: this.fx.area ? +(this.fx.fill / this.fx.area).toFixed(3) : null,
+      drawsPerFrame: this.fx.frames ? +(this.fx.draws / this.fx.frames).toFixed(1) : null, lod: { ...this.lod } };
   }
 
   setTextureBudget(mb) { this.budget = mb * 2 ** 20; this._evict(); }
+
+  /** Level-of-detail policy: setLod({motionBias, minify, quadtree, background, prefetch}) or setLod('legacy'|'default'). */
+  setLod(opts) {
+    this.lod = opts === 'legacy' ? { ...LOD_LEGACY } : opts === 'default' || opts == null ? { ...LOD_DEFAULT } : { ...this.lod, ...opts };
+    this.requestRender();
+    return { ...this.lod };
+  }
 
   // ---------------------------------------------------------------- internals: panes & layout
   _pane(i) {
@@ -1323,10 +1366,12 @@ export class WsiGrid extends HTMLElement {
   }
 
   _frameBody(t) {
+    if (this._lastT) this._frameMs = 0.8 * (this._frameMs || 16) + 0.2 * Math.min(1000, t - this._lastT);
     const dt = this._lastT ? Math.min(64, t - this._lastT) : 16;
     this._lastT = t;
     let again = false;
     for (const p of this.panes) if (this._animate(p, dt)) again = true;
+    for (const p of this.panes) this._trackMotion(p, t);
     if (this._processUploads()) again = true;
     this.frame++;
     if (this._legendDirty) { this._legendDirty = false; this._legends(); }
@@ -1371,6 +1416,24 @@ export class WsiGrid extends HTMLElement {
     return moving;
   }
 
+  // A pane "moves" while animating/flinging or while its view changed in the last 150 ms (pans driven from
+  // outside). When it comes to rest one more frame is needed to switch to full-resolution fetching.
+  _trackMotion(p, t) {
+    if (!p.view) return;
+    const v = p.view, k = `${v.cx}|${v.cy}|${v.scale}|${p.rect.w}|${p.rect.h}`;
+    if (k !== p._viewKey) {
+      p._viewKey = k;
+      p.movedAt = t;
+      if (this.lod.motionBias > 1 || this.lod.prefetch) {
+        clearTimeout(p._restTimer);
+        p._restTimer = setTimeout(() => this.requestRender(), 170);
+        if (this.lod.prefetch) { clearTimeout(p._idleTimer); p._idleTimer = setTimeout(() => this.requestRender(), 420); }
+      }
+    }
+  }
+
+  _isMoving(p, t = now()) { return !!(p.target || p.vel) || t - (p.movedAt || 0) < 150; }
+
   _emitViews(t) {
     if (t - (this._lastEmit || 0) < 120) { if (!this._emitPending) { this._emitPending = true; setTimeout(() => { this._emitPending = false; this._emitViews(now()); }, 130); } return; }
     this._lastEmit = t;
@@ -1399,11 +1462,71 @@ export class WsiGrid extends HTMLElement {
 
   // ---------------------------------------------------------------- tiles: geometry
   _level(info, scaleDev) {
-    // finest level whose pixels are not smaller than ~1 device pixel (× quality bias)
-    const want = (1 / scaleDev) * this.quality;
+    // full resolution: the coarsest level whose texels are ≤ ~1 device pixel (× quality bias)
+    return this._levelFor(info, scaleDev, this.quality);
+  }
+
+  // coarsest level whose texels are at most `texel` device px
+  _levelFor(info, scaleDev, texel) {
+    const want = texel / scaleDev;
     let L = 0;
     for (let i = 0; i < info.levels.length; i++) if (info.levels[i].downsample <= want * 1.0001) L = i;
     return L;
+  }
+
+  // finest level that may be drawn (if loaded): texels down to `lod.minify` device px, never coarser than `full`
+  _drawFloor(info, scaleDev, full) {
+    if (!this.lod.quadtree || this.lod.minify >= 1) return full;
+    const want = this.quality * this.lod.minify / scaleDev;
+    let L = full;
+    while (L > 0 && info.levels[L - 1].downsample >= want * 0.9999) L--;
+    return L;
+  }
+
+  // tile footprint in level-0 px
+  _foot(info, L, tx, ty) {
+    const lv = info.levels[L], ts = info.tile_size;
+    const tw = Math.min(ts, lv.width - tx * ts), th = Math.min(ts, lv.height - ty * ts);
+    return [tx * ts * lv.sx, ty * ts * lv.sy, (tx * ts + tw) * lv.sx, (ty * ts + th) * lv.sy];
+  }
+
+  // Quadtree over the pyramid restricted to rect `r` (the 3-D view frustum: x, y and level). Calls
+  // emit(L, tx, ty, subRect) for the finest loaded tile covering each part of r, levels top..floor; parts no
+  // loaded tile covers are left out. Returns nothing; coarse tiles are only drawn where finer ones are missing.
+  _cover(p, info, floor, r, chans, emit) {
+    const top = info.levels.length - 1;
+    const visit = (L, tx, ty, rect) => { // → list of uncovered sub-rects, or true if all of rect is uncovered
+      const ready = this._ready(p, L, tx, ty, chans);
+      if (L <= floor) {
+        if (ready) { emit(L, tx, ty, rect); return null; }
+        return true;
+      }
+      const rg = this._tileRange(info, L - 1, rect);
+      let holes = null, all = true, n = 0;
+      if (rg) {
+        for (let y = rg.y0; y <= rg.y1; y++) for (let x = rg.x0; x <= rg.x1; x++) {
+          const f = this._foot(info, L - 1, x, y);
+          const c = [Math.max(f[0], rect[0]), Math.max(f[1], rect[1]), Math.min(f[2], rect[2]), Math.min(f[3], rect[3])];
+          if (c[2] <= c[0] || c[3] <= c[1]) continue;
+          n++;
+          const h = visit(L - 1, x, y, c);
+          if (h === true) (holes ||= []).push(c);
+          else { all = false; if (h) (holes ||= []).push(...h); }
+        }
+      }
+      if (!n) all = true; // (degenerate: no children overlap)
+      if (all) { if (ready) { emit(L, tx, ty, rect); return null; } return true; }
+      if (!holes) return null;
+      if (ready) { for (const h of holes) emit(L, tx, ty, h); return null; }
+      return holes;
+    };
+    const rg = this._tileRange(info, top, r);
+    if (!rg) return;
+    for (let y = rg.y0; y <= rg.y1; y++) for (let x = rg.x0; x <= rg.x1; x++) {
+      const f = this._foot(info, top, x, y);
+      const c = [Math.max(f[0], r[0]), Math.max(f[1], r[1]), Math.min(f[2], r[2]), Math.min(f[3], r[3])];
+      if (c[2] > c[0] && c[3] > c[1]) visit(top, x, y, c);
+    }
   }
 
   _visRect(p, margin = 0) {
@@ -1456,10 +1579,12 @@ export class WsiGrid extends HTMLElement {
       gl.clearColor(bg[0], bg[1], bg[2], 1);
       gl.clear(gl.COLOR_BUFFER_BIT);
       if (!info || !p.view) continue;
+      this.fx.area += w * h;
       this._drawTiles(p);
       this._drawAnnotations(p);
     }
     gl.disable(gl.SCISSOR_TEST);
+    this.fx.frames++;
     this._drawOverlay();
   }
 
@@ -1472,9 +1597,10 @@ export class WsiGrid extends HTMLElement {
     const chans = this._visibleChannels(p);
     const isCh = info.mode === 'channels';
     if (isCh && !chans.length) return;
-    // find the finest level ≥ target that fully covers the view; draw from there down to target (painter's)
+    const quad = this.lod.quadtree;
+    // legacy: find the finest level ≥ target that fully covers the view; draw from there down to target (painter's)
     const levels = [];
-    for (let L = target; L < info.levels.length; L++) {
+    for (let L = target; !quad && L < info.levels.length; L++) {
       const rg = this._tileRange(info, L, vis);
       if (!rg) break;
       levels.push([L, rg]);
@@ -1512,6 +1638,36 @@ export class WsiGrid extends HTMLElement {
         gl.uniform3fv(prog.u.u_col1, st.col1);
       }
     }
+    const fx = this.fx, area2 = scaleDev * scaleDev;
+    if (quad) {
+      // quadtree: the finest loaded tile per region, coarse tiles only through the holes (sub-rect draws)
+      const ov = info.overlap || 0, ts = info.tile_size;
+      const floor = this._drawFloor(info, scaleDev, target);
+      this._cover(p, info, floor, vis, chans, (L, tx, ty, r) => {
+        const lv = info.levels[L];
+        const tw = Math.min(ts, lv.width - tx * ts), th = Math.min(ts, lv.height - ty * ts);
+        let t0 = null;
+        chans.forEach((c, i) => {
+          const t = this.tex.get(this._key(s, L, tx, ty, c));
+          t.last = this.frame;
+          t.drawn = true;
+          if (!t0) t0 = t;
+          gl.activeTexture(gl.TEXTURE0 + i);
+          gl.bindTexture(gl.TEXTURE_2D, t.tex);
+        });
+        const ox = t0.w > tw && tx > 0 ? Math.min(ov, t0.w - tw) : 0;
+        const oy = t0.h > th && ty > 0 ? Math.min(ov, t0.h - th) : 0;
+        const fx0 = tx * ts * lv.sx, fy0 = ty * ts * lv.sy, fw = tw * lv.sx, fh = th * lv.sy;
+        const u0 = (r[0] - fx0) / fw, v0 = (r[1] - fy0) / fh, u1 = (r[2] - fx0) / fw, v1 = (r[3] - fy0) / fh;
+        gl.uniform4f(prog.u.u_uv, (ox + u0 * tw) / t0.w, (oy + v0 * th) / t0.h, (u1 - u0) * tw / t0.w, (v1 - v0) * th / t0.h);
+        gl.uniform4f(prog.u.u_rect, r[0], r[1], r[2] - r[0], r[3] - r[1]);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        fx.draws++;
+        fx.fill += (r[2] - r[0]) * (r[3] - r[1]) * area2;
+      });
+      gl.activeTexture(gl.TEXTURE0);
+      return;
+    }
     for (let k = levels.length - 1; k >= 0; k--) {
       const [L, rg] = levels[k];
       const lv = info.levels[L], ts = info.tile_size;
@@ -1523,6 +1679,7 @@ export class WsiGrid extends HTMLElement {
           chans.forEach((c, i) => {
             const t = this.tex.get(this._key(s, L, tx, ty, c));
             t.last = this.frame;
+            t.drawn = true;
             if (!t0) t0 = t;
             gl.activeTexture(gl.TEXTURE0 + i);
             gl.bindTexture(gl.TEXTURE_2D, t.tex);
@@ -1535,6 +1692,10 @@ export class WsiGrid extends HTMLElement {
           gl.uniform4f(prog.u.u_uv, ox / t0.w, oy / t0.h, tw / t0.w, th / t0.h);
           gl.uniform4f(prog.u.u_rect, tx * ts * lv.sx, ty * ts * lv.sy, tw * lv.sx, th * lv.sy);
           gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+          fx.draws++;
+          { const x0 = Math.max(vis[0], tx * ts * lv.sx), x1 = Math.min(vis[2], (tx * ts + tw) * lv.sx);
+            const y0 = Math.max(vis[1], ty * ts * lv.sy), y1 = Math.min(vis[3], (ty * ts + th) * lv.sy);
+            if (x1 > x0 && y1 > y0) fx.fill += (x1 - x0) * (y1 - y0) * area2; }
         }
       }
     }
@@ -1675,20 +1836,24 @@ export class WsiGrid extends HTMLElement {
   // ---------------------------------------------------------------- scheduling (what to load next)
   _schedule() {
     const want = new Map(); // key → {prio, url, kind, meta}
-    const add = (key, prio, url, kind, meta) => {
+    const add = (key, prio, url, kind, meta, bg = false) => {
       const w = want.get(key);
-      if (!w || w.prio > prio) want.set(key, { prio, url, kind, meta });
+      if (!w || w.prio > prio) want.set(key, { prio, url, kind, meta, bg });
     };
     for (const p of this.panes) {
       const s = p.slide, info = s?.info;
       if (!info || !p.view || p.rect.w <= 0) continue;
       const chans = this._visibleChannels(p);
       const scaleDev = p.view.scale * this.dpr;
-      const target = this._level(info, scaleDev);
+      const full = this._level(info, scaleDev);
+      const lod = this.lod, tNow = now();
+      const moving = this._isMoving(p, tNow);
+      // while moving: fetch a coarser level (texels ≤ motionBias device px) first; full resolution in the background
+      const target = moving && lod.motionBias > 1 ? this._levelFor(info, scaleDev, this.quality * lod.motionBias) : full;
       const top = info.levels.length - 1;
       const vis = this._visRect(p);
       const cx = p.view.cx, cy = p.view.cy, diag = Math.hypot(vis[2] - vis[0], vis[3] - vis[1]) || 1;
-      const queueLevel = (L, rect, base) => {
+      const queueLevel = (L, rect, base, bg = false) => {
         const rg = this._tileRange(info, L, rect);
         if (!rg) return;
         const lv = info.levels[L], ts = info.tile_size;
@@ -1698,17 +1863,27 @@ export class WsiGrid extends HTMLElement {
           for (const c of chans) {
             const key = this._key(s, L, tx, ty, c);
             if (this.tex.has(key)) { this.tex.get(key).last = this.frame; continue; }
-            add(key, base + dist, s.tileUrl(L, tx, ty, c), c == null ? 'image' : 'raw', { s, L, tx, ty, c });
+            add(key, base + dist, s.tileUrl(L, tx, ty, c), c == null ? 'image' : 'raw', { s, L, tx, ty, c }, bg);
           }
         }
       };
       // 1. whole coarsest level (instant overview, fallback for everything)
       queueLevel(top, [0, 0, info.width, info.height], 0);
+      const ts0 = info.tile_size * info.levels[target].downsample;
+      if (lod.destination && p.target) {
+        // animating toward a known view: fetch for the destination; in-between views get spare capacity only
+        const dv = p.target, dScale = dv.scale * this.dpr, dRect = this._visRect({ ...p, view: dv });
+        const dFull = this._level(info, dScale);
+        const dMove = lod.motionBias > 1 ? this._levelFor(info, dScale, this.quality * lod.motionBias) : dFull;
+        if (dMove + 1 < top) queueLevel(dMove + 1, dRect, 0.5);
+        queueLevel(dMove, dRect, 1);
+        if (dFull !== dMove) queueLevel(dFull, dRect, BG_PRIO, lod.background);
+        queueLevel(target, vis, 2.5);
+      } else {
       // 2. parent of target (fast fallback), 3. target centre-out
       if (target + 1 < top) queueLevel(target + 1, vis, 0.5);
       queueLevel(target, vis, 1);
       // 4. margin ring + motion prediction
-      const ts0 = info.tile_size * info.levels[target].downsample;
       const v = p.vel || (p.target ? { vx: (p.target.cx - cx) / 300, vy: (p.target.cy - cy) / 300 } : null);
       const m = [vis[0] - ts0, vis[1] - ts0, vis[2] + ts0, vis[3] + ts0];
       if (v) {
@@ -1719,8 +1894,17 @@ export class WsiGrid extends HTMLElement {
       queueLevel(target, m, 3);
       // zooming in: also the next finer level for the target view
       if (p.target && p.target.scale > p.view.scale * 1.2) {
-        const tl = this._level(info, p.target.scale * this.dpr);
+        const tl = lod.motionBias > 1 ? this._levelFor(info, p.target.scale * this.dpr, this.quality * lod.motionBias)
+          : this._level(info, p.target.scale * this.dpr);
         if (tl < target) queueLevel(tl, this._visRect({ ...p, view: p.target }), 2);
+      }
+      // full resolution while moving: background priority (spare request slots only, see BG_PRIO)
+      if (target !== full) queueLevel(full, vis, lod.background ? BG_PRIO : 1.5, lod.background);
+      // at rest: prefetch the next finer level around the centre so the next zoom step is instant
+      if (lod.prefetch && !moving && full > 0 && tNow - (p.movedAt || 0) > 400) {
+        const hw = (vis[2] - vis[0]) / 4, hh = (vis[3] - vis[1]) / 4;
+        queueLevel(full - 1, [cx - hw, cy - hh, cx + hw, cy + hh], BG_PRIO + 1, true);
+      }
       }
       // annotations: overview per visible layer, detail buckets in view
       for (const L of s.layers.values()) {
@@ -1754,13 +1938,32 @@ export class WsiGrid extends HTMLElement {
       todo.push([k, w]);
     }
     todo.sort((a, b) => a[1].prio - b[1].prio);
+    const bgSlots = this.maxInflight - Math.max(1, Math.ceil(this.maxInflight / 3)); // keep ⅓ free for urgent tiles
     for (const [k, w] of todo) {
       if (this.inflight.size >= this.maxInflight) break;
+      if (w.bg && this.inflight.size >= bgSlots) continue;
       // back-pressure: don't fetch faster than tiles can be uploaded to the GPU (slow/software GPUs)
       if (this.uploads.length >= Math.max(8, this.maxInflight)) break;
       this._start(k, w);
     }
     this._pendingWork = todo.length > 0;
+    this._todo = this.lod.decoupled ? todo : null;
+    this._bgSlots = bgSlots;
+  }
+
+  // Between frames: when a request finishes, start the next wanted one (from the last schedule) right away.
+  // Entries are at most one frame stale; the next _schedule cancels anything no longer in view.
+  _pump() {
+    const todo = this._todo;
+    if (!todo) return;
+    while (todo.length && this.inflight.size < this.maxInflight && this.uploads.length < Math.max(8, this.maxInflight)) {
+      const [k, w] = todo.shift();
+      if (this.inflight.has(k) || this.queued.has(k) || this.tex.has(k)) continue;
+      const f = this.failed.get(k);
+      if (f && f > now()) continue;
+      if (w.bg && this.inflight.size >= this._bgSlots) continue;
+      this._start(k, w);
+    }
   }
 
   _start(key, w) {
@@ -1778,6 +1981,7 @@ export class WsiGrid extends HTMLElement {
       C.bytes += res.bytes || 0;
       this.uploads.push({ key, res, meta: w.meta });
       this.queued.add(key);
+      this._pump();
       this.requestRender();
     }, (err) => {
       if (this.inflight.get(key) === req) this.inflight.delete(key);
@@ -1792,13 +1996,17 @@ export class WsiGrid extends HTMLElement {
         this.failed.set(key, now() + delay);
         setTimeout(() => this.requestRender(), delay + 30);
       }
+      if (err.message !== 'abort') this._pump();
       this.requestRender();
     });
   }
 
   _processUploads() {
     const gl = this.gl;
-    const deadline = now() + 6; // ms of GPU uploads per frame → no jank while panning
+    // ms of GPU uploads per frame → no jank while panning; when frames are slow anyway (GPU-bound), spend up to
+    // 20 % of the frame on uploads so the texture pipeline keeps up with the network
+    const budget = this.lod.decoupled ? Math.min(40, Math.max(6, 0.2 * (this._frameMs || 16))) : 6;
+    const deadline = now() + budget;
     let n = 0;
     while (this.uploads.length && (n < 2 || now() < deadline)) {
       const { key, res, meta } = this.uploads.shift();
@@ -1840,8 +2048,9 @@ export class WsiGrid extends HTMLElement {
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       const old = this.tex.get(key);
       if (old) { gl.deleteTexture(old.tex); this.texBytes -= old.bytes; }
-      this.tex.set(key, { tex, bytes, last: this.frame, w: c == null ? texW : w, h: c == null ? texH : h });
+      this.tex.set(key, { tex, bytes, last: this.frame, w: c == null ? texW : w, h: c == null ? texH : h, drawn: false });
       this.texBytes += bytes;
+      this.counters.uploaded++;
     }
     return this.uploads.length > 0;
   }
@@ -1854,6 +2063,7 @@ export class WsiGrid extends HTMLElement {
       // never evict the coarsest level of a slide on screen
       for (const [k, t] of cand) {
         if (this.texBytes <= this.budget * 0.85) break;
+        if (!t.drawn) this.counters.wasted++;
         gl.deleteTexture(t.tex);
         this.texBytes -= t.bytes;
         this.tex.delete(k);

@@ -62,7 +62,10 @@ def encode_channel(arr: np.ndarray, dtype: str) -> tuple[bytes, str]:
 # ---------------------------------------------------------------- pyramid normalisation
 class PyramidSlide:
     """Wraps a SlideSource and fills pyramid gaps with *virtual* levels so that
-    (a) consecutive levels differ by ≤ 4× and (b) the coarsest level fits in one tile.
+    (a) consecutive levels differ by ≤ ``max_step``× (default 4) and (b) the coarsest level fits in one tile.
+    ``max_step=2`` turns a 4×-step pyramid (most SVS) into a 2×-step one: browsers then download ~½ the pixels in
+    half of every zoom range, for about the same server decode work (each virtual tile reads the 2×2 tiles the
+    browser would otherwise have fetched itself).
 
     A virtual tile is the 2× box-filtered mosaic of its 2×2 children on the level below
     (native or virtual), memoised in a small array LRU — so even a slide with *no*
@@ -71,7 +74,9 @@ class PyramidSlide:
 
     MAX_STEP = 4.0
 
-    def __init__(self, source: SlideSource, array_cache_bytes: int = 256 * 2**20) -> None:
+    def __init__(self, source: SlideSource, array_cache_bytes: int | None = None, max_step: float | None = None) -> None:
+        if max_step is not None:
+            self.MAX_STEP = float(max(2.0, max_step))
         self.source = source
         info = source.info
         ts = info.tile_size
@@ -96,33 +101,30 @@ class PyramidSlide:
                 self.virtual.append(True)
                 self.native_index.append(-1)
         self.info: SlideInfo = replace(info, levels=out)
-        self._arr = OrderedDict()
-        self._arr_bytes = 0
-        self._arr_max = array_cache_bytes
-        self._alock = threading.Lock()
+        # decoded arrays live in the process-wide budget (wissi_viz.memory), keyed by this pyramid
+        from .memory import ByteLRU, decoded_cache
+        self._arr = ByteLRU(array_cache_bytes) if array_cache_bytes else decoded_cache()
+        self._owner = object()
 
     def _tile_size(self, level, tx, ty):
         lv, ts = self.info.levels[level], self.info.tile_size
         return min(ts, lv.width - tx * ts), min(ts, lv.height - ty * ts)
 
     def _array(self, level, tx, ty, channel) -> np.ndarray:
-        key = (level, tx, ty, channel)
-        with self._alock:
-            a = self._arr.get(key)
-            if a is not None:
-                self._arr.move_to_end(key)
-                return a
+        key = (self._owner, level, tx, ty, channel)
+        a = self._arr.get(key)
+        if a is not None:
+            return a
         if not self.virtual[level]:
             a = np.asarray(self.source.read_tile(self.native_index[level], tx, ty, channel))
         else:
             a = self._virtual(level, tx, ty, channel)
-        with self._alock:
-            self._arr[key] = a
-            self._arr_bytes += a.nbytes
-            while self._arr_bytes > self._arr_max and self._arr:
-                _, old = self._arr.popitem(last=False)
-                self._arr_bytes -= old.nbytes
+        self._arr.put(key, a)
         return a
+
+    def release(self) -> None:
+        """Free this slide's decoded arrays (called when the registry closes the slide)."""
+        self._arr.purge(self._owner)
 
     def _virtual(self, level, tx, ty, channel) -> np.ndarray:
         w, h = self._tile_size(level, tx, ty)
@@ -352,7 +354,16 @@ class TileService:
         self.warm_pool.submit(run)
 
     def stats(self) -> dict:
+        from .memory import decoded_cache
         return {'memory': self.memory.stats(), 'disk': str(self.disk.root) if self.disk else None,
                 'produced': self.produced,
                 'avg_produce_ms': round(1000 * self.produce_seconds / max(1, self.produced), 2),
-                'inflight': len(self._inflight)}
+                'inflight': len(self._inflight), 'decoded': decoded_cache().stats()}
+
+    def close(self) -> None:
+        """Stop the worker pools and drop the in-memory tile cache (the disk cache is kept)."""
+        self.pool.shutdown(wait=False, cancel_futures=True)
+        self.warm_pool.shutdown(wait=False, cancel_futures=True)
+        with self.memory._lock:
+            self.memory._d.clear()
+            self.memory._size = 0

@@ -13,7 +13,6 @@ from __future__ import annotations
 import math
 import os
 import threading
-from collections import OrderedDict
 from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,18 +40,21 @@ class _Block:
 class _DecodeCache:
     """Decoded subblocks (bytes-bounded LRU) with in-flight de-duplication across threads."""
 
-    def __init__(self, max_bytes: int) -> None:
-        self.max = max_bytes
-        self.d: OrderedDict[int, np.ndarray] = OrderedDict()
-        self.size = 0
+    def __init__(self, max_bytes: int | None = None) -> None:
+        # storage: the process-wide decoded-array budget (shared with every other slide), or a private one
+        from ..memory import ByteLRU, decoded_cache
+        self.store = ByteLRU(max_bytes) if max_bytes else decoded_cache()
+        self.owner = object()
         self.inflight: dict[int, Future] = {}
         self.lock = threading.Lock()
 
     def get(self, key: int, make):
+        a = self.store.get((self.owner, key))
+        if a is not None:
+            return a
         with self.lock:
-            a = self.d.get(key)
+            a = self.store.get((self.owner, key))
             if a is not None:
-                self.d.move_to_end(key)
                 return a
             f = self.inflight.get(key)
             owner = f is None
@@ -67,22 +69,21 @@ class _DecodeCache:
                 self.inflight.pop(key, None)
             f.set_exception(e)
             raise
+        self.store.put((self.owner, key), a)
         with self.lock:
             self.inflight.pop(key, None)
-            self.d[key] = a
-            self.size += a.nbytes
-            while self.size > self.max and len(self.d) > 1:
-                _, old = self.d.popitem(last=False)
-                self.size -= old.nbytes
         f.set_result(a)
         return a
+
+    def clear(self) -> None:
+        self.store.purge(self.owner)
 
 
 class CziSource(SlideSource):
     extensions = ('.czi',)
 
     def __init__(self, path: str | os.PathLike, tile_size: int = 512, scene: int | None = None,
-                 z: int = 0, t: int = 0, decode_cache_mb: int = 512) -> None:
+                 z: int = 0, t: int = 0, decode_cache_mb: int | None = None) -> None:
         super().__init__()
         import czifile
 
@@ -93,7 +94,7 @@ class CziSource(SlideSource):
         self._local = threading.local()
         self._files: list = []
         self._flock = threading.Lock()
-        self._cache = _DecodeCache(decode_cache_mb * 2**20)
+        self._cache = _DecodeCache(decode_cache_mb * 2**20 if decode_cache_mb else None)
 
         f = self._file()
         entries = f.subblock_directory
@@ -236,6 +237,7 @@ class CziSource(SlideSource):
         return layers
 
     def close(self):
+        self._cache.clear()
         with self._flock:
             for f in self._files:
                 try:

@@ -16,6 +16,8 @@ wissi-viz bench ~/wsi-samples/Aperio/CMU-1.svs ~/wsi-samples/Leica/*.scn ~/wsi-s
 - `--set full` adds every OpenSlide vendor folder and a CAMELYON16 slide (CC0, ~0.9 GB).
 - `--url` adds any other public URL.
 
+- **Tiles from a remote API** (PathCore, HALO Link, …) instead of files: see [results-tile-api.md](results-tile-api.md) and `examples/tile_api/bench_api.py [--http2]`.
+
 ### Free sources
 
 | Source | Formats | Notes |

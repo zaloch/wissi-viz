@@ -18,6 +18,6 @@ from .server import create_app, create_router
 from .sources import CallbackSource, Channel, Level, SlideInfo, SlideSource, open_slide
 from .tiles import TileService
 
-__version__ = '0.3.1'
+__version__ = '0.3.2'
 __all__ = ['AnnotationLayer', 'ObjectTable', 'read_objects', 'SlideRegistry', 'create_app', 'create_router',
            'CallbackSource', 'Channel', 'Level', 'SlideInfo', 'SlideSource', 'open_slide', 'TileService']

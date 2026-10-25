@@ -40,8 +40,11 @@ The slides sit next to the server, in Docker, and they are multi-GB files.
 pip install -e ".[all]"      # viewer + analysis + extra formats + NiceGUI + server — all permissive
 pip install -e .             # minimal: SVS/TIFF/OME-TIFF/NDPI + CZI viewer
 # extras: [analysis] scipy/shapely/scikit-image/pandas · [io] pyarrow/anndata · [slideio] VSI/ZVI/DICOM/SCN/AFI
-#         [nicegui] · [server] uvicorn · [lgpl] OpenSlide + libCZI (opt-in, LGPL)
+#         [nicegui] · [server] uvicorn · [remote] httpx · [bench] playwright/hypercorn/cryptography
+#         [lgpl] OpenSlide + libCZI (opt-in, LGPL)
 ```
+
+> **Integrating into an app?** [docs/INTEGRATION.md](docs/INTEGRATION.md) covers every option: the NiceGUI element, a raw `<wissi-viz>` tag, mounting on any ASGI app, a separate tile server behind React, Vue, Streamlit, Dash or Django, and an iframe. It also covers auth, Docker and proxies, and how to wire a vendor tile API.
 
 ## Quick start (standalone server + demo page)
 
@@ -125,7 +128,13 @@ sid = WissiHaloLink(client).register(registry, 'image-123')   # lazy → 'halo-i
 grid.set_slide(0, sid)
 ```
 
-`examples/wissi_integration.py` has both stubs with the lines to fill in marked. What the connector layer handles:
+`examples/wissi_integration.py` has both stubs with the lines to fill in marked. **`examples/tile_api/`** is a full, runnable simulation:
+- a mock vendor service (bearer auth, 16 images in 4 pyramid styles, latency, 429/503/404);
+- a ~100-line `httpx` connector;
+- a NiceGUI app showing 1–16 images;
+- a cold/warm browser benchmark. Results are in [benchmarks/results-tile-api.md](benchmarks/results-tile-api.md).
+
+What the connector layer handles:
 
 | Real-world API behaviour | Handling |
 |---|---|

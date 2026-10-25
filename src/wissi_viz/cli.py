@@ -38,6 +38,7 @@ def main(argv: list[str] | None = None) -> None:
     b.add_argument('--concurrency', type=int, default=8)
     b.add_argument('--browser-args', default=None, help='extra Chromium flags, e.g. "--use-angle=vulkan"')
     b.add_argument('--viewport', default='1600x1000', help='browser viewport WxH')
+    b.add_argument('--http2', action='store_true', help='serve over HTTPS/HTTP2 (hypercorn) like a production proxy')
     b.add_argument('--out', default=None, help='write JSON (+ .md table)')
     f = sub.add_parser('fetch-samples', help='download public whole-slide test images')
     f.add_argument('dest')

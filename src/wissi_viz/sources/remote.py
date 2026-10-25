@@ -42,6 +42,16 @@ class RemoteError(Exception):
     """A remote call failed after all retries."""
 
 
+class RetryAfter(Exception):
+    """Raise from a fetch when the service asks you to slow down (HTTP 429 / 503 with ``Retry-After``).
+    The call is retried after ``seconds`` (instead of the default exponential back-off) and does not
+    count against ``retries`` more than once per 5 s of waiting."""
+
+    def __init__(self, seconds: float = 0.5, message: str = 'rate limited'):
+        super().__init__(message)
+        self.seconds = float(seconds)
+
+
 # ----------------------------------------------------------------------------- pyramid layouts
 @dataclass
 class RemotePyramid:
@@ -188,7 +198,9 @@ class RemoteSlideSource(SlideSource):
     # -------------------------------------------------------------- calling the client
     def _call(self, fn: Callable, *args: Any) -> Any:
         delay = 0.25
-        for attempt in range(self.retries + 1):
+        attempt = 0
+        waited = 0.0
+        while True:
             t0 = time.perf_counter()
             try:
                 with self._sem:
@@ -199,8 +211,19 @@ class RemoteSlideSource(SlideSource):
             except self.not_found:
                 self.stats['not_found'] += 1
                 return None
+            except RetryAfter as e:  # polite back-off requested by the service
+                self.stats['rate_limited'] = self.stats.get('rate_limited', 0) + 1
+                time.sleep(min(e.seconds, 10.0))
+                waited += e.seconds
+                if waited > 5.0 * (attempt + 1):
+                    attempt += 1
+                    if attempt > self.retries:
+                        self.stats['errors'] += 1
+                        raise RemoteError(f'{args}: still rate limited after {waited:.1f} s') from e
+                continue
             except self.retry_on as e:  # noqa: PERF203
-                if attempt >= self.retries:
+                attempt += 1
+                if attempt > self.retries:
                     self.stats['errors'] += 1
                     raise RemoteError(f'{fn.__name__ if hasattr(fn, "__name__") else fn}{args}: {e}') from e
                 self.stats['retries'] += 1

@@ -9,7 +9,7 @@ import pytest
 PERMISSIVE = re.compile(r'\b(MIT|BSD|Apache|ISC|HPND|MIT-CMU|PSF|Python Software Foundation|Zlib|0BSD|'
                         r'Unlicense|CC0|Historical Permission)\b', re.I)
 COPYLEFT = re.compile(r'\b(L?GPL|AGPL|MPL|EPL|CDDL|SSPL|EUPL|Lesser General Public|General Public License)\b', re.I)
-CORE_EXTRAS = ('analysis', 'io', 'slideio', 'nicegui', 'server', 'all')
+CORE_EXTRAS = ('analysis', 'io', 'slideio', 'nicegui', 'server', 'remote', 'bench', 'all')
 
 
 def _name(req: str) -> str:

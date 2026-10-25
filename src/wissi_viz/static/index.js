@@ -568,6 +568,8 @@ export class WsiGrid extends HTMLElement {
     this.inflight = new Map(); // key → {abort, prio}
     this.failed = new Map(); // key → retry-at
     this.uploads = [];
+    this.failCounts = new Map(); // key → consecutive failures (back-off)
+    this.queued = new Set(); // keys fetched + decoded, waiting for a GPU upload slot (not to be re-requested)
     this.layoutSpec = 'auto';
     this.syncMode = 'none';
     this.tool = 'pan';
@@ -857,6 +859,7 @@ export class WsiGrid extends HTMLElement {
       const target = this._level(info, p.view.scale * this.dpr);
       const vis = this._visRect(p);
       const clip = [Math.max(0, vis[0]), Math.max(0, vis[1]), Math.min(info.width, vis[2]), Math.min(info.height, vis[3])];
+      if (clip[2] <= clip[0] || clip[3] <= clip[1]) { per.push({ pane: p.index, offSlide: true }); continue; } // nothing to draw
       const area = Math.max(1, (clip[2] - clip[0]) * (clip[3] - clip[1]));
       const tileArea = (L, rg, fn) => {
         const lv = info.levels[L], ts = info.tile_size;
@@ -882,7 +885,7 @@ export class WsiGrid extends HTMLElement {
       }
       per.push({ pane: p.index, level: target, sharp: Math.min(1, sharp), blank: 1 - covered / n });
     }
-    const ok = per.filter(Boolean);
+    const ok = per.filter((c) => c && !c.offSlide);
     const mean = (k) => (ok.length ? ok.reduce((a, c) => a + c[k], 0) / ok.length : 0);
     return { sharp: mean('sharp'), blank: mean('blank'), panes: per };
   }
@@ -1745,7 +1748,7 @@ export class WsiGrid extends HTMLElement {
     const t = now();
     const todo = [];
     for (const [k, w] of want) {
-      if (this.inflight.has(k)) continue;
+      if (this.inflight.has(k) || this.queued.has(k)) continue;
       const f = this.failed.get(k);
       if (f && f > t) continue;
       todo.push([k, w]);
@@ -1753,6 +1756,8 @@ export class WsiGrid extends HTMLElement {
     todo.sort((a, b) => a[1].prio - b[1].prio);
     for (const [k, w] of todo) {
       if (this.inflight.size >= this.maxInflight) break;
+      // back-pressure: don't fetch faster than tiles can be uploaded to the GPU (slow/software GPUs)
+      if (this.uploads.length >= Math.max(8, this.maxInflight)) break;
       this._start(k, w);
     }
     this._pendingWork = todo.length > 0;
@@ -1768,18 +1773,24 @@ export class WsiGrid extends HTMLElement {
       if (this.inflight.get(key) !== req) { res.bmp?.close?.(); return; }
       this.inflight.delete(key);
       this.failed.delete(key);
+      this.failCounts.delete(key);
       C.completed++;
       C.bytes += res.bytes || 0;
       this.uploads.push({ key, res, meta: w.meta });
+      this.queued.add(key);
       this.requestRender();
     }, (err) => {
       if (this.inflight.get(key) === req) this.inflight.delete(key);
       if (w.meta.ann && w.meta.bucket == null && w.meta.ann.state === 'loading') w.meta.ann.state = 'error-retry';
       if (err.message === 'abort') C.aborted++; else C.failed++;
       if (err.message !== 'abort') {
-        const n = (this._failCount = (this._failCount || 0) + 1);
-        this.failed.set(key, now() + Math.min(30000, 1000 * 2 ** Math.min(5, n % 6)));
-        setTimeout(() => this.requestRender(), 1100);
+        // per-tile exponential back-off (0.5 s, 1 s, 2 s … ≤ 30 s), and wake up when it expires:
+        // an idle viewer only renders on demand, so without this the retry would never happen
+        const n = (this.failCounts.get(key) || 0) + 1;
+        this.failCounts.set(key, n);
+        const delay = Math.min(30000, 500 * 2 ** Math.min(6, n - 1));
+        this.failed.set(key, now() + delay);
+        setTimeout(() => this.requestRender(), delay + 30);
       }
       this.requestRender();
     });
@@ -1791,6 +1802,7 @@ export class WsiGrid extends HTMLElement {
     let n = 0;
     while (this.uploads.length && (n < 2 || now() < deadline)) {
       const { key, res, meta } = this.uploads.shift();
+      this.queued.delete(key);
       n++;
       if (meta.ann) {
         const L = meta.ann;

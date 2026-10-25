@@ -144,6 +144,10 @@ async (timeout) => {
     const c = g.coverage();
     if (c.panes.length && c.panes.every(Boolean) && c.sharp >= 0.999) return performance.now() - t0;
   }
+  const c = g.coverage();  // timed out: report what is missing
+  window.__wissiTimeout = { coverage: c.panes.filter((p) => p && !p.offSlide && p.sharp < 0.999),
+    stats: g.stats(), failed: [...g.failed.keys()].slice(0, 10), inflight: [...g.inflight.keys()].slice(0, 10) };
+  console.warn('wissi-bench timeout', JSON.stringify(window.__wissiTimeout));
   return null;
 }
 """
@@ -161,10 +165,11 @@ def _summ_pan(r: dict) -> dict:
             'tiles_requested': r['requests'], 'tiles_cancelled': r['cancelled'], 'MB': round(r['MB'], 1)}
 
 
-def browser_bench(paths: Sequence[str], panes: Sequence[int] = (1, 4, 9, 16), headed: bool = False,
+def browser_bench(paths: Sequence[str] | None = None, panes: Sequence[int] = (1, 4, 9, 16), headed: bool = False,
                   pan_seconds: float = 8, pan_speed: float = 900, magnification: float = 20, port: int = 0,
                   browser_args: Sequence[str] | None = None, viewport=(1600, 1000), cache_dir: str | None = None,
-                  log=print) -> dict:
+                  registry=None, slide_ids: Sequence[str] | None = None, http2: bool = False, log=print) -> dict:
+    """``paths``: slide files; or pass an existing ``registry`` + ``slide_ids`` (e.g. API-backed slides)."""
     import socket
 
     import uvicorn
@@ -174,42 +179,60 @@ def browser_bench(paths: Sequence[str], panes: Sequence[int] = (1, 4, 9, 16), he
     from .server import create_app
     from .tiles import TileService
 
-    reg = SlideRegistry(TileService(memory_bytes=2048 * 2**20, disk_dir=cache_dir), warm=True)
-    ids = []
-    for i in range(max(panes)):  # distinct ids → each pane is a separate slide (no shared caches)
-        p = paths[i % len(paths)]
-        ids.append(reg.add(p, slide_id=f'bench{i}', name=f'{Path(p).name} #{i}'))
+    if registry is not None:
+        reg = registry
+        ids = [slide_ids[i % len(slide_ids)] for i in range(max(panes))]
+    else:
+        reg = SlideRegistry(TileService(memory_bytes=2048 * 2**20, disk_dir=cache_dir), warm=True)
+        ids = []
+        for i in range(max(panes)):  # distinct ids → each pane is a separate slide (no shared caches)
+            p = paths[i % len(paths)]
+            ids.append(reg.add(p, slide_id=f'bench{i}', name=f'{Path(p).name} #{i}'))
     if not port:
         with socket.socket() as s_:
             s_.bind(('127.0.0.1', 0))
             port = s_.getsockname()[1]
-    server = uvicorn.Server(uvicorn.Config(create_app(reg), host='127.0.0.1', port=port, log_level='warning'))
-    th = threading.Thread(target=server.run, daemon=True)
-    th.start()
-    while not server.started:
-        time.sleep(0.05)
+    if http2:  # browsers only speak HTTP/2 over TLS → hypercorn with a throwaway self-signed certificate
+        th, stop = _serve_h2(create_app(reg), port)
+        scheme = 'https'
+    else:
+        server = uvicorn.Server(uvicorn.Config(create_app(reg), host='127.0.0.1', port=port, log_level='warning'))
+        th = threading.Thread(target=server.run, daemon=True)
+        th.start()
+        while not server.started:
+            time.sleep(0.05)
+        stop = lambda: setattr(server, 'should_exit', True)  # noqa: E731
+        scheme = 'http'
     args = list(browser_args or ['--ignore-gpu-blocklist', '--enable-gpu-rasterization', '--enable-unsafe-swiftshader'])
+    if http2:
+        args.append('--ignore-certificate-errors')
     report: dict[str, Any] = {'runs': []}
     try:
         with sync_playwright() as pw:
             b = pw.chromium.launch(headless=not headed, args=args)
-            pg = b.new_page(viewport={'width': viewport[0], 'height': viewport[1]})
-            pg.goto(f'http://127.0.0.1:{port}/')
+            pg = b.new_page(viewport={'width': viewport[0], 'height': viewport[1]}, ignore_https_errors=True)
+            pg.goto(f'{scheme}://127.0.0.1:{port}/')
             pg.wait_for_function('() => window.grid && customElements.get("wissi-viz")', timeout=30000)
             report['webgl_renderer'] = pg.evaluate("""() => { const gl = document.createElement('canvas').getContext('webgl2');
                 const e = gl && gl.getExtension('WEBGL_debug_renderer_info');
                 return gl ? (e ? gl.getParameter(e.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)) : 'no WebGL2'; }""")
             report['software_rendering'] = 'swiftshader' in report['webgl_renderer'].lower() or 'llvmpipe' in report['webgl_renderer'].lower()
             report['hardware_concurrency'] = pg.evaluate('navigator.hardwareConcurrency')
+            report['http_protocol'] = pg.evaluate(
+                "() => (performance.getEntriesByType('resource').find(e => e.name.includes('/static/')) || {}).nextHopProtocol || ''")
             log(f"WebGL renderer: {report['webgl_renderer']}{'  (software — no GPU)' if report['software_rendering'] else ''}")
             for n in panes:
                 pg.evaluate("""(ids) => { grid.setAttribute('controls','false'); grid.setSync('none');
                     grid.setLayout('auto'); grid.setSlides(ids); }""", ids[:n])
                 open_ms = pg.evaluate(_WAIT_SHARP_JS, 60000)
+                if open_ms is None:
+                    log('  open timed out: ' + json.dumps(pg.evaluate('() => window.__wissiTimeout')))
                 info = pg.evaluate('() => grid.panes[0].slide.info && [grid.panes[0].slide.info.width, grid.panes[0].slide.info.height]')
                 cx, cy = (info[0] / 2, info[1] / 2) if info else (0, 0)
                 pg.evaluate(f'() => grid.goTo("all", {cx}, {cy}, {{magnification: {magnification}, animate: false}})')
                 zoom_ms = pg.evaluate(_WAIT_SHARP_JS, 60000)
+                if zoom_ms is None:
+                    log('  zoom timed out: ' + json.dumps(pg.evaluate('() => window.__wissiTimeout')))
                 pan = pg.evaluate(_PAN_JS, [pan_seconds, pan_speed, 2])
                 pg.evaluate(f'() => grid.goTo("all", {cx}, {cy}, {{magnification: {magnification}, animate: false}})')
                 pg.evaluate(_WAIT_SHARP_JS, 60000)
@@ -225,12 +248,55 @@ def browser_bench(paths: Sequence[str], panes: Sequence[int] = (1, 4, 9, 16), he
                     f"{run['revisit']['fps_median']} fps, sharp {run['revisit']['sharp_while_moving_pct']}%")
             b.close()
     finally:
-        server.should_exit = True
+        stop()
         th.join(timeout=5)
     report['server_tile_cache'] = reg.tiles.stats()
     report['settings'] = {'pan_seconds': pan_seconds, 'pan_speed_px_s': pan_speed, 'magnification': magnification,
                           'viewport': viewport, 'headed': headed}
     return report
+
+
+def _serve_h2(app, port: int):
+    """Serve ``app`` over HTTPS + HTTP/2 (hypercorn, MIT) with a self-signed certificate (cryptography)."""
+    import asyncio
+    import datetime
+    import tempfile
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+    from hypercorn.asyncio import serve
+    from hypercorn.config import Config
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, '127.0.0.1')])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+            .serial_number(x509.random_serial_number()).not_valid_before(now - datetime.timedelta(days=1))
+            .not_valid_after(now + datetime.timedelta(days=2)).sign(key, hashes.SHA256()))
+    d = tempfile.mkdtemp(prefix='wissi-h2-')
+    Path(d, 'cert.pem').write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    Path(d, 'key.pem').write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                                     serialization.NoEncryption()))
+    cfg = Config()
+    cfg.bind = [f'127.0.0.1:{port}']
+    cfg.certfile, cfg.keyfile = str(Path(d, 'cert.pem')), str(Path(d, 'key.pem'))
+    cfg.alpn_protocols = ['h2', 'http/1.1']
+    cfg.loglevel = 'WARNING'
+    loop = asyncio.new_event_loop()
+    done = asyncio.Event()
+    started = threading.Event()
+
+    def run():
+        asyncio.set_event_loop(loop)
+        loop.call_soon(started.set)
+        loop.run_until_complete(serve(app, cfg, shutdown_trigger=done.wait))
+    th = threading.Thread(target=run, daemon=True)
+    th.start()
+    started.wait(10)
+    time.sleep(0.5)
+    return th, lambda: loop.call_soon_threadsafe(done.set)
 
 
 # ============================================================================= public samples
@@ -324,9 +390,12 @@ def format_report(server: list[dict] | None, browser: dict | None) -> str:
                                                        f"{L['cold_p50_ms']} / {L['cold_p95_ms']}", str(tp),
                                                        str(L['warm_p50_ms']), str(L['tile_KB'])]) + ' |')
     if browser:
-        lines.append(f"\n## Browser ({browser['settings']['viewport'][0]}×{browser['settings']['viewport'][1]}): {browser.get('webgl_renderer')}"
+        vw, vh = browser['settings']['viewport']
+        proto = browser.get('http_protocol') or 'http/1.1'
+        mag = browser['settings'].get('magnification', 20)
+        lines.append(f"\n## Browser ({vw}×{vh}, {proto}): {browser.get('webgl_renderer')}"
                      f"{' — SOFTWARE rendering (no GPU)' if browser.get('software_rendering') else ''}\n")
-        lines.append('| panes | open→sharp ms | 20×→sharp ms | pan fps (p95 ms) | viewer JS ms/frame p50 (p95) | long frames % | sharp while panning % | blank % | settle ms | revisit fps / sharp % | MB |')
+        lines.append(f'| panes | open→sharp ms | {mag:g}×→sharp ms | pan fps (p95 ms) | viewer JS ms/frame p50 (p95) | long frames % | sharp while panning % | blank % | settle ms | revisit fps / sharp % | MB |')
         lines.append('|---|---|---|---|---|---|---|---|---|---|---|')
         for r in browser['runs']:
             p, v = r['pan'], r['revisit']
@@ -347,7 +416,7 @@ def main(args) -> None:
         browser = browser_bench(args.slides, [int(x) for x in args.panes.split(',')], headed=args.headed,
                                 pan_seconds=args.seconds, pan_speed=args.speed, magnification=args.magnification,
                                 browser_args=args.browser_args.split() if args.browser_args else None,
-                                viewport=tuple(int(v) for v in args.viewport.lower().split('x')))
+                                viewport=tuple(int(v) for v in args.viewport.lower().split('x')), http2=args.http2)
     md = format_report(server, browser)
     print('\n' + md)
     if args.out:

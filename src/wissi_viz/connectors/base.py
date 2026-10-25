@@ -16,13 +16,15 @@ import asyncio
 import logging
 import re
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 import numpy as np
 
 from ..annotations import AnnotationLayer
-from ..sources.remote import RemoteImageInfo, RemotePyramid, RemoteSlideSource, TileNotFound, resolve
+from ..sources.remote import (RemoteError, RemoteImageInfo, RemotePyramid, RemoteSlideSource, RetryAfter, TileNotFound,
+                              resolve)
 
 log = logging.getLogger('wissi_viz.connectors')
 
@@ -70,6 +72,7 @@ class RemoteConnection:
 
     def __init__(self) -> None:
         self._sem = threading.BoundedSemaphore(self.max_concurrency)
+        self._sources: list[RemoteSlideSource] = []
 
     # ------------------------------------------------------------------ to implement
     def image_info(self, image_id: str) -> RemoteImageInfo:
@@ -100,12 +103,36 @@ class RemoteConnection:
         self.loop = loop or asyncio.get_running_loop()
         return self
 
+    def _retrying(self, fn, *args):
+        """Metadata / annotation calls get the same policy as tiles: RetryAfter honoured, transient
+        errors retried with exponential back-off, concurrency limited by the connection semaphore."""
+        delay, attempt, waited = 0.25, 0, 0.0
+        while True:
+            try:
+                with self._sem:
+                    return resolve(fn(*args), self.loop, self.timeout)
+            except (TileNotFound, NotImplementedError):
+                raise
+            except RetryAfter as e:
+                time.sleep(min(e.seconds, 10.0))
+                waited += e.seconds
+                if waited > 5.0 * (attempt + 1):
+                    attempt += 1
+                    if attempt > self.retries:
+                        raise RemoteError(f'{getattr(fn, "__name__", fn)}{args}: rate limited') from e
+            except Exception as e:  # noqa: BLE001
+                attempt += 1
+                if attempt > self.retries:
+                    raise RemoteError(f'{getattr(fn, "__name__", fn)}{args}: {e}') from e
+                time.sleep(delay)
+                delay *= 2
+
     def slide_id(self, image_id: str) -> str:
         return f'{self.id_prefix}-' + re.sub(r'[^A-Za-z0-9_.\-~]+', '_', str(image_id))[:180]
 
     def source(self, image_id: str, name: str | None = None) -> RemoteSlideSource:
         """Build the slide source (calls :meth:`image_info` once)."""
-        info: RemoteImageInfo = resolve(self.image_info(image_id), self.loop, self.timeout)
+        info: RemoteImageInfo = self._retrying(self.image_info, image_id)
         pyr = info.build_pyramid()
         has_tile = type(self).tile is not RemoteConnection.tile
         has_region = type(self).region is not RemoteConnection.region
@@ -114,12 +141,26 @@ class RemoteConnection:
         fetch_tile = (lambda lv, c, r, ch: self.tile(image_id, lv, c, r, ch)) if has_tile else None
         fetch_region = (lambda lv, x, y, w, h, ch: self.region(image_id, lv, x, y, w, h, ch)) if has_region else None
         mpp = info.mpp
-        return RemoteSlideSource(
+        src = RemoteSlideSource(
             pyr, fetch_tile, fetch_region=fetch_region, mpp=mpp, name=name or info.name or str(image_id),
             mode=info.mode, channels=info.channels, dtype=info.dtype, background=info.background,
             annotations=lambda: self.load_annotations(image_id, mpp), version=info.version,
             semaphore=self._sem, retries=self.retries, timeout=self.timeout, loop=self.loop,
             browser_tile_url=info.browser_tile_url)
+        if not hasattr(self, '_sources'):
+            self._sources = []
+        self._sources.append(src)
+        return src
+
+    def stats(self) -> dict:
+        """Upstream calls made by every slide of this connection (calls, retries, rate_limited, not_found, errors)."""
+        out: dict[str, float] = {'slides_opened': len(getattr(self, '_sources', []))}
+        for src in getattr(self, '_sources', []):
+            for k, v in src.stats.items():
+                out[k] = out.get(k, 0) + v
+        if 'seconds' in out and out.get('calls'):
+            out['mean_call_ms'] = round(1000 * out.pop('seconds') / out['calls'], 1)
+        return out
 
     def register(self, registry, image_id: str, name: str | None = None, slide_id: str | None = None,
                  lazy: bool = True) -> str:
@@ -137,8 +178,8 @@ class RemoteConnection:
         out: list[AnnotationLayer] = []
         for getter in (self.annotations, self.objects):
             try:
-                items = resolve(getter(image_id), self.loop, None) or []
-            except NotImplementedError:
+                items = self._retrying(getter, image_id) or []
+            except (NotImplementedError, TileNotFound):
                 continue
             except Exception:  # one failing endpoint must not hide the other layers
                 log.exception('%s.%s(%r) failed', type(self).__name__, getter.__name__, image_id)

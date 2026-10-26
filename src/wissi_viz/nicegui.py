@@ -206,7 +206,10 @@ class WissiViz(Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'},
         ``motion_bias`` (texels per device px allowed while moving, default 2), ``minify`` (keep loaded finer tiles
         down to this many device px per texel, 0.5), ``quadtree`` (draw the finest loaded tile per region, True),
         ``background`` (full-res tiles use spare request slots while moving, True), ``prefetch`` (fetch the next
-        finer level around the centre at rest, False), ``decoupled`` (start requests between frames, True)."""
+        finer level around the centre at rest, False), ``decoupled`` (start requests between frames, True),
+        ``destination`` (animations fetch for where they land, True), ``adaptive`` (lower resolution only while
+        moving and frames are slow, True), ``overlays`` ('server' pyramid tiles, 'client' build in the browser,
+        or 'auto' = client for layers ≤ 300k objects)."""
         names = {'motion_bias': 'motionBias'}
         arg: Any = preset if preset else {names.get(k, k): v for k, v in opts.items()}
         self._props['lod'] = arg

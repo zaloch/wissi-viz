@@ -22,8 +22,9 @@ const now = () => performance.now();
 //  prefetch    at rest, quietly prefetch the next finer level around the centre (next zoom step is instant)
 //  destination while a pane animates toward a known view (goTo, double-click, wheel), fetch for where it will
 //              land first; the in-between views only get spare capacity
-//  adaptive    while moving and frames are slow (> ~20 ms), render at reduced resolution (≥ 0.5×) into an offscreen
-//              buffer that the GPU stretches to the screen; full resolution again the moment motion stops
+//  adaptive    while moving and frames are slow (> ~20 ms, measured including the browser's commit), shrink the
+//              WebGL backing store to ¾ or ½ (CSS stretches it); full resolution on the first frame at rest. At rest
+//              with expensive frames, arriving tiles are batched into fewer redraws
 //  decoupled   start the next request as soon as one finishes, and size GPU uploads to the real frame time,
 //              so slow frames (weak/software GPUs, many panes) don't throttle the network
 const LOD_DEFAULT = { motionBias: 2, minify: 0.5, quadtree: true, background: true, prefetch: false, decoupled: true, destination: true,
@@ -1398,7 +1399,8 @@ export class WsiGrid extends HTMLElement {
 
   setTextureBudget(mb) { this.budget = mb * 2 ** 20; this._evict(); }
 
-  /** Level-of-detail policy: setLod({motionBias, minify, quadtree, background, prefetch}) or setLod('legacy'|'default'). */
+  /** Level-of-detail policy: setLod('default'|'legacy') or any of {motionBias, minify, quadtree, background, prefetch,
+   *  decoupled, destination, adaptive, overlays: 'server'|'client'|'auto'} (merged into the current policy). */
   setLod(opts) {
     this.lod = opts === 'legacy' ? { ...LOD_LEGACY } : opts === 'default' || opts == null ? { ...LOD_DEFAULT } : { ...this.lod, ...opts };
     this.requestRender();

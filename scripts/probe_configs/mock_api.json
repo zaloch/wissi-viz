@@ -1,0 +1,17 @@
+{
+  "_comment": "Works against examples/tile_api/mock_tile_api.py. Set MOCK_API_URL (e.g. http://127.0.0.1:9000) and MOCK_API_TOKEN (default 'secret').",
+  "kind": "custom",
+  "base_url": "${MOCK_API_URL}",
+  "headers": {"Authorization": "Bearer ${MOCK_API_TOKEN}"},
+  "max_concurrency": 10,
+  "timeout": 30,
+  "retries": 3,
+  "info": {
+    "path": "/api/images/{image}",
+    "width": "width", "height": "height", "tile_size": "tile_size", "mpp": "mpp", "version": "modified", "name": "name",
+    "deepzoom_if": {"field": "format", "equals": "dzi"}, "overlap": "overlap",
+    "levels": "levels", "level_width": "width", "level_height": "height", "level_id": "id"
+  },
+  "tile": {"path": "/api/images/{image}/tiles/{level}/{col}/{row}", "empty_status": [404, 204], "retry_status": [429, 503]},
+  "annotations": {"path": "/api/images/{image}/annotations", "format": "geojson", "units": "um"}
+}

@@ -1,0 +1,860 @@
+{
+ "target": "halolink connector, mock modality (in-process, 40,120 ms latency)",
+ "kind": "connector",
+ "images": [
+  "halo-1",
+  "halo-2"
+ ],
+ "settings": {
+  "target": "mock:halolink",
+  "images": null,
+  "slides": null,
+  "connector_arg": [],
+  "panes": [
+   1,
+   4,
+   9,
+   16
+  ],
+  "conn": [
+   5,
+   8,
+   10
+  ],
+  "users": 1,
+  "max_calls": 1000,
+  "requests": 300,
+  "seconds": 40,
+  "seq_calls": 8,
+  "skip": "",
+  "no_annotations": false,
+  "max_images": 4,
+  "view_target_ms": 1500,
+  "expected_users": 10,
+  "memory_mb": 1024,
+  "workers": null,
+  "local_size": "24000x18000",
+  "workdir": "/root/.cache/wissi-probe",
+  "mock_latency": "40,120",
+  "mock_limit": 12,
+  "mock_errors": 0.01,
+  "timeout": 30,
+  "insecure": false,
+  "seed": 0,
+  "out": "bench/probe_final_mock_halolink",
+  "yes": false
+ },
+ "budget": {
+  "limit": 1000,
+  "used": 954,
+  "by_kind": {
+   "info": 2,
+   "tile": 948,
+   "annotations": 2,
+   "objects": 2
+  },
+  "refused": 0
+ },
+ "vendor_stats": null,
+ "smoke": [
+  {
+   "check": "[halo-1] metadata",
+   "status": "PASS",
+   "detail": "24000\u00d718000, tile 254 overlap 1, 8 levels (24000\u00d718000, 12000\u00d79000, 6000\u00d74500, 3000\u00d72250, 1500\u00d71125, 750\u00d7563 \u2026), mode rgb",
+   "ms": 108.2
+  },
+  {
+   "check": "[halo-1] mpp",
+   "status": "PASS",
+   "detail": "(0.25, 0.25)",
+   "ms": null
+  },
+  {
+   "check": "[halo-1] pyramid depth",
+   "status": "PASS",
+   "detail": "coarsest level 188\u00d7141 = 1 tile(s)",
+   "ms": null
+  },
+  {
+   "check": "[halo-1] version",
+   "status": "PASS",
+   "detail": "halo-v1",
+   "ms": null
+  },
+  {
+   "check": "[halo-1] coarsest tile (level 7, 0,0)",
+   "status": "PASS",
+   "detail": "image/jpeg 7 KB, 188\u00d7141 for a 188\u00d7141 area: exact size",
+   "ms": 347.4
+  },
+  {
+   "check": "[halo-1] middle-level tile (level 3, 5,4)",
+   "status": "PASS",
+   "detail": "image/jpeg 22 KB, 256\u00d7256 for a 254\u00d7254 area: padded/overlap (cropped by wissi-viz)",
+   "ms": 105.1
+  },
+  {
+   "check": "[halo-1] full-resolution tile (level 0, 47,35)",
+   "status": "PASS",
+   "detail": "image/jpeg 21 KB, 256\u00d7256 for a 254\u00d7254 area: padded/overlap (cropped by wissi-viz)",
+   "ms": 63.3
+  },
+  {
+   "check": "[halo-1] tile outside the image",
+   "status": "INFO",
+   "detail": "error: negative dimensions are not allowed (wissi-viz never asks for these)",
+   "ms": 81.2
+  },
+  {
+   "check": "[halo-1] annotations + objects",
+   "status": "PASS",
+   "detail": "HALO annotations (1 features) \u2014 wissi-viz fetches these once per slide when a viewer first opens it (2 calls, in the background)",
+   "ms": 0.9
+  },
+  {
+   "check": "[halo-2] metadata",
+   "status": "PASS",
+   "detail": "24000\u00d718000, tile 254 overlap 1, 8 levels (24000\u00d718000, 12000\u00d79000, 6000\u00d74500, 3000\u00d72250, 1500\u00d71125, 750\u00d7563 \u2026), mode rgb",
+   "ms": 74.9
+  },
+  {
+   "check": "[halo-2] mpp",
+   "status": "PASS",
+   "detail": "(0.25, 0.25)",
+   "ms": null
+  },
+  {
+   "check": "[halo-2] pyramid depth",
+   "status": "PASS",
+   "detail": "coarsest level 188\u00d7141 = 1 tile(s)",
+   "ms": null
+  },
+  {
+   "check": "[halo-2] version",
+   "status": "PASS",
+   "detail": "halo-v1",
+   "ms": null
+  },
+  {
+   "check": "[halo-2] coarsest tile (level 7, 0,0)",
+   "status": "PASS",
+   "detail": "image/jpeg 7 KB, 188\u00d7141 for a 188\u00d7141 area: exact size",
+   "ms": 184.2
+  },
+  {
+   "check": "[halo-2] middle-level tile (level 3, 5,4)",
+   "status": "PASS",
+   "detail": "image/jpeg 20 KB, 256\u00d7256 for a 254\u00d7254 area: padded/overlap (cropped by wissi-viz)",
+   "ms": 78.4
+  },
+  {
+   "check": "[halo-2] full-resolution tile (level 0, 47,35)",
+   "status": "PASS",
+   "detail": "image/jpeg 23 KB, 256\u00d7256 for a 254\u00d7254 area: padded/overlap (cropped by wissi-viz)",
+   "ms": 80.8
+  },
+  {
+   "check": "[halo-2] tile outside the image",
+   "status": "INFO",
+   "detail": "error: negative dimensions are not allowed (wissi-viz never asks for these)",
+   "ms": 87.0
+  },
+  {
+   "check": "[halo-2] annotations + objects",
+   "status": "PASS",
+   "detail": "HALO annotations (1 features) \u2014 wissi-viz fetches these once per slide when a viewer first opens it (2 calls, in the background)",
+   "ms": 0.7
+  }
+ ],
+ "direct": {
+  "sequential": {
+   "concurrency": 1,
+   "calls": 8,
+   "wall_s": 0.78,
+   "tiles_per_s": 10.3,
+   "MB_per_s": 0.22,
+   "kB_per_tile": 22.4,
+   "p50_ms": 97.7,
+   "p95_ms": 123.8,
+   "p99_ms": 124.7,
+   "status": {
+    "ok": 8
+   },
+   "error_pct": 0.0
+  },
+  "c5": {
+   "concurrency": 5,
+   "calls": 20,
+   "wall_s": 0.41,
+   "tiles_per_s": 48.6,
+   "MB_per_s": 1.06,
+   "kB_per_tile": 22.4,
+   "p50_ms": 98.3,
+   "p95_ms": 129.0,
+   "p99_ms": 131.9,
+   "status": {
+    "ok": 20
+   },
+   "error_pct": 0.0
+  },
+  "c8": {
+   "concurrency": 8,
+   "calls": 24,
+   "wall_s": 0.33,
+   "tiles_per_s": 72.9,
+   "MB_per_s": 1.61,
+   "kB_per_tile": 22.6,
+   "p50_ms": 88.7,
+   "p95_ms": 131.1,
+   "p99_ms": 135.9,
+   "status": {
+    "ok": 24
+   },
+   "error_pct": 0.0
+  },
+  "c10": {
+   "concurrency": 10,
+   "calls": 30,
+   "wall_s": 0.37,
+   "tiles_per_s": 81.0,
+   "MB_per_s": 1.67,
+   "kB_per_tile": 22.7,
+   "p50_ms": 105.9,
+   "p95_ms": 143.1,
+   "p99_ms": 151.4,
+   "status": {
+    "ok": 28,
+    "connection": 2
+   },
+   "error_pct": 6.7
+  }
+ },
+ "runs": [
+  {
+   "panes": 1,
+   "conn": 5,
+   "users": 1,
+   "cap_per_user": 19,
+   "cold": {
+    "requests": 19,
+    "tile_requests": 18,
+    "MB": 0.4,
+    "throughput_rps": 40.9,
+    "tile_p50_ms": 114.9,
+    "tile_p95_ms": 145.8,
+    "view_p50_ms": 285,
+    "view_p95_ms": 414,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 18,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 1.0,
+    "server_produce_ms": 91.53,
+    "budget_exhausted": false
+   },
+   "warm": {
+    "requests": 19,
+    "tile_requests": 18,
+    "MB": 0.4,
+    "throughput_rps": 500.4,
+    "tile_p50_ms": 8.0,
+    "tile_p95_ms": 13.7,
+    "view_p50_ms": 20,
+    "view_p95_ms": 36,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 0,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 0.0,
+    "server_produce_ms": 91.53,
+    "budget_exhausted": false
+   }
+  },
+  {
+   "panes": 1,
+   "conn": 8,
+   "users": 1,
+   "cap_per_user": 19,
+   "cold": {
+    "requests": 19,
+    "tile_requests": 18,
+    "MB": 0.4,
+    "throughput_rps": 51.4,
+    "tile_p50_ms": 149.4,
+    "tile_p95_ms": 218.5,
+    "view_p50_ms": 268,
+    "view_p95_ms": 404,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 18,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 1.0,
+    "server_produce_ms": 84.35,
+    "budget_exhausted": false
+   },
+   "warm": {
+    "requests": 19,
+    "tile_requests": 18,
+    "MB": 0.4,
+    "throughput_rps": 648.2,
+    "tile_p50_ms": 12.3,
+    "tile_p95_ms": 18.7,
+    "view_p50_ms": 17,
+    "view_p95_ms": 31,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 0,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 0.0,
+    "server_produce_ms": 84.35,
+    "budget_exhausted": false
+   }
+  },
+  {
+   "panes": 1,
+   "conn": 10,
+   "users": 1,
+   "cap_per_user": 19,
+   "cold": {
+    "requests": 19,
+    "tile_requests": 18,
+    "MB": 0.4,
+    "throughput_rps": 61.1,
+    "tile_p50_ms": 155.1,
+    "tile_p95_ms": 228.4,
+    "view_p50_ms": 244,
+    "view_p95_ms": 354,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 18,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 1.0,
+    "server_produce_ms": 77.42,
+    "budget_exhausted": false
+   },
+   "warm": {
+    "requests": 19,
+    "tile_requests": 18,
+    "MB": 0.4,
+    "throughput_rps": 614.9,
+    "tile_p50_ms": 15.4,
+    "tile_p95_ms": 30.7,
+    "view_p50_ms": 20,
+    "view_p95_ms": 36,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 0,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 0.0,
+    "server_produce_ms": 77.42,
+    "budget_exhausted": false
+   }
+  },
+  {
+   "panes": 4,
+   "conn": 5,
+   "users": 1,
+   "cap_per_user": 41,
+   "cold": {
+    "requests": 41,
+    "tile_requests": 37,
+    "MB": 0.4,
+    "throughput_rps": 42.8,
+    "tile_p50_ms": 114.8,
+    "tile_p95_ms": 208.1,
+    "view_p50_ms": 543,
+    "view_p95_ms": 797,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 37,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 1.0,
+    "server_produce_ms": 106.56,
+    "budget_exhausted": false
+   },
+   "warm": {
+    "requests": 41,
+    "tile_requests": 37,
+    "MB": 0.4,
+    "throughput_rps": 440.9,
+    "tile_p50_ms": 8.8,
+    "tile_p95_ms": 17.4,
+    "view_p50_ms": 42,
+    "view_p95_ms": 73,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 0,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 0.0,
+    "server_produce_ms": 106.56,
+    "budget_exhausted": false
+   }
+  },
+  {
+   "panes": 4,
+   "conn": 8,
+   "users": 1,
+   "cap_per_user": 41,
+   "cold": {
+    "requests": 41,
+    "tile_requests": 37,
+    "MB": 0.4,
+    "throughput_rps": 44.5,
+    "tile_p50_ms": 183.8,
+    "tile_p95_ms": 237.1,
+    "view_p50_ms": 558,
+    "view_p95_ms": 866,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 37,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 1.0,
+    "server_produce_ms": 107.13,
+    "budget_exhausted": false
+   },
+   "warm": {
+    "requests": 41,
+    "tile_requests": 37,
+    "MB": 0.4,
+    "throughput_rps": 509.2,
+    "tile_p50_ms": 11.5,
+    "tile_p95_ms": 33.4,
+    "view_p50_ms": 42,
+    "view_p95_ms": 73,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 0,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 0.0,
+    "server_produce_ms": 107.13,
+    "budget_exhausted": false
+   }
+  },
+  {
+   "panes": 4,
+   "conn": 10,
+   "users": 1,
+   "cap_per_user": 42,
+   "cold": {
+    "requests": 42,
+    "tile_requests": 38,
+    "MB": 0.4,
+    "throughput_rps": 49.4,
+    "tile_p50_ms": 224.2,
+    "tile_p95_ms": 269.5,
+    "view_p50_ms": 547,
+    "view_p95_ms": 827,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 38,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 1.0,
+    "server_produce_ms": 106.77,
+    "budget_exhausted": false
+   },
+   "warm": {
+    "requests": 42,
+    "tile_requests": 38,
+    "MB": 0.4,
+    "throughput_rps": 504.0,
+    "tile_p50_ms": 14.6,
+    "tile_p95_ms": 37.2,
+    "view_p50_ms": 43,
+    "view_p95_ms": 73,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 0,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 0.0,
+    "server_produce_ms": 106.77,
+    "budget_exhausted": false
+   }
+  },
+  {
+   "panes": 9,
+   "conn": 5,
+   "users": 1,
+   "cap_per_user": 80,
+   "cold": {
+    "requests": 80,
+    "tile_requests": 71,
+    "MB": 0.8,
+    "throughput_rps": 43.9,
+    "tile_p50_ms": 119.0,
+    "tile_p95_ms": 191.5,
+    "view_p50_ms": 987,
+    "view_p95_ms": 1513,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 72,
+     "retries": 1,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 1.014,
+    "server_produce_ms": 105.2,
+    "budget_exhausted": false
+   },
+   "warm": {
+    "requests": 80,
+    "tile_requests": 71,
+    "MB": 0.8,
+    "throughput_rps": 515.0,
+    "tile_p50_ms": 8.8,
+    "tile_p95_ms": 13.7,
+    "view_p50_ms": 70,
+    "view_p95_ms": 120,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 0,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 0.0,
+    "server_produce_ms": 105.2,
+    "budget_exhausted": false
+   }
+  },
+  {
+   "panes": 9,
+   "conn": 8,
+   "users": 1,
+   "cap_per_user": 83,
+   "cold": {
+    "requests": 83,
+    "tile_requests": 74,
+    "MB": 0.8,
+    "throughput_rps": 40.8,
+    "tile_p50_ms": 196.0,
+    "tile_p95_ms": 342.6,
+    "view_p50_ms": 1104,
+    "view_p95_ms": 1670,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 75,
+     "retries": 1,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 1.014,
+    "server_produce_ms": 112.57,
+    "budget_exhausted": false
+   },
+   "warm": {
+    "requests": 83,
+    "tile_requests": 74,
+    "MB": 0.8,
+    "throughput_rps": 476.6,
+    "tile_p50_ms": 12.8,
+    "tile_p95_ms": 33.4,
+    "view_p50_ms": 81,
+    "view_p95_ms": 136,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 0,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 0.0,
+    "server_produce_ms": 112.57,
+    "budget_exhausted": false
+   }
+  },
+  {
+   "panes": 9,
+   "conn": 10,
+   "users": 1,
+   "cap_per_user": 86,
+   "cold": {
+    "requests": 86,
+    "tile_requests": 77,
+    "MB": 0.9,
+    "throughput_rps": 43.2,
+    "tile_p50_ms": 246.7,
+    "tile_p95_ms": 345.9,
+    "view_p50_ms": 1155,
+    "view_p95_ms": 1803,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 79,
+     "retries": 2,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 1.026,
+    "server_produce_ms": 112.01,
+    "budget_exhausted": false
+   },
+   "warm": {
+    "requests": 86,
+    "tile_requests": 77,
+    "MB": 0.9,
+    "throughput_rps": 476.2,
+    "tile_p50_ms": 18.7,
+    "tile_p95_ms": 38.3,
+    "view_p50_ms": 89,
+    "view_p95_ms": 153,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 0,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 0.0,
+    "server_produce_ms": 112.01,
+    "budget_exhausted": false
+   }
+  },
+  {
+   "panes": 16,
+   "conn": 5,
+   "users": 1,
+   "cap_per_user": 147,
+   "cold": {
+    "requests": 147,
+    "tile_requests": 131,
+    "MB": 1.5,
+    "throughput_rps": 33.9,
+    "tile_p50_ms": 113.8,
+    "tile_p95_ms": 225.6,
+    "view_p50_ms": 771,
+    "view_p95_ms": 1616,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 133,
+     "retries": 2,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 1.015,
+    "server_produce_ms": 107.14,
+    "budget_exhausted": false
+   },
+   "warm": {
+    "requests": 147,
+    "tile_requests": 131,
+    "MB": 1.5,
+    "throughput_rps": 159.5,
+    "tile_p50_ms": 9.0,
+    "tile_p95_ms": 13.2,
+    "view_p50_ms": 53,
+    "view_p95_ms": 116,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 0,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 0.0,
+    "server_produce_ms": 107.14,
+    "budget_exhausted": false
+   }
+  },
+  {
+   "panes": 16,
+   "conn": 8,
+   "users": 1,
+   "cap_per_user": 163,
+   "cold": {
+    "requests": 163,
+    "tile_requests": 147,
+    "MB": 1.7,
+    "throughput_rps": 38.4,
+    "tile_p50_ms": 185.1,
+    "tile_p95_ms": 328.1,
+    "view_p50_ms": 1076,
+    "view_p95_ms": 1549,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 150,
+     "retries": 3,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 1.02,
+    "server_produce_ms": 106.53,
+    "budget_exhausted": false
+   },
+   "warm": {
+    "requests": 163,
+    "tile_requests": 147,
+    "MB": 1.7,
+    "throughput_rps": 224.2,
+    "tile_p50_ms": 14.8,
+    "tile_p95_ms": 34.6,
+    "view_p50_ms": 92,
+    "view_p95_ms": 158,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 0,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 0.0,
+    "server_produce_ms": 106.53,
+    "budget_exhausted": false
+   }
+  },
+  {
+   "panes": 16,
+   "conn": 10,
+   "users": 1,
+   "cap_per_user": 197,
+   "cold": {
+    "requests": 197,
+    "tile_requests": 181,
+    "MB": 2.3,
+    "throughput_rps": 34.1,
+    "tile_p50_ms": 220.9,
+    "tile_p95_ms": 362.8,
+    "view_p50_ms": 879,
+    "view_p95_ms": 1549,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 183,
+     "retries": 2,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 1.011,
+    "server_produce_ms": 102.55,
+    "budget_exhausted": false
+   },
+   "warm": {
+    "requests": 197,
+    "tile_requests": 181,
+    "MB": 2.3,
+    "throughput_rps": 118.0,
+    "tile_p50_ms": 20.7,
+    "tile_p95_ms": 40.8,
+    "view_p50_ms": 61,
+    "view_p95_ms": 172,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 0,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 0.0,
+    "server_produce_ms": 102.55,
+    "budget_exhausted": false
+   }
+  }
+ ],
+ "recommendation": {
+  "settings": {
+   "max_concurrency": 8,
+   "timeout_s": 10,
+   "retries": 3,
+   "http2": "optional",
+   "comfortable_panes": 4,
+   "memory_mb": 1024,
+   "disk_cache": true,
+   "workers": 16
+  },
+  "why": {
+   "max_concurrency": "72.9 tiles/s at 8 concurrent calls, within 10 % of the best clean rate (72.9/s)",
+   "timeout_s": "5 \u00d7 the worst p99 call latency (151 ms), between 10 and 60 s",
+   "retries": "13 transient failures (429 / 5xx / timeouts / retried calls) across all phases",
+   "network": "one tile \u2248 97.7 ms (p50, sequential) \u00b7 22.4 kB \u00b7 0.22 MB/s sequential",
+   "http2": "4 panes: view p95 797 \u2192 827 ms with 5 \u2192 10 connections; 9 panes: view p95 1513 \u2192 1803 ms with 5 \u2192 10 connections; 16 panes: view p95 1616 \u2192 1549 ms with 5 \u2192 10 connections \u2192 little gain from more connections; HTTP/1.1 is adequate (HTTP/2 still recommended behind a proxy)",
+   "comfortable_panes": "largest pane count whose first views are sharp within 1500 ms (p95) at every tested connection count",
+   "cache": "cold views p95 1190 ms vs cached 94 ms (medians over runs)",
+   "memory_mb": "a 16-pane session fetched 2.3 MB; \u00d7 10 expected concurrent users \u00d7 2 for history, rounded to a power of two (\u2265 1 GB)",
+   "disk_cache": "every cache miss is an API round trip; a persistent cache_dir keeps tiles across restarts",
+   "upstream_per_tile": "1.03 API calls per viewer tile request at most (\u2264 1: each tile fetched once, concurrent requests coalesced); warm reruns made 0 calls",
+   "workers": "server threads mostly wait on the API: at least 2 \u00d7 max_concurrency"
+  }
+ },
+ "seconds": 41.4
+}

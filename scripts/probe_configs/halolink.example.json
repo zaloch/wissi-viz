@@ -1,0 +1,26 @@
+{
+  "_comment": [
+    "TEMPLATE — fill every TODO from your HALO / HALO Link deployment. Indica Labs does not publish a tile URL scheme:",
+    "programmatic access is the HALO GraphQL API (HALO 3.0+), documented in the Indica Labs customer portal.",
+    "If your HALO Link exposes image tiles at plain URLs (check with your HALO admin), describe them here.",
+    "Otherwise use the connector wissi already has: python scripts/wissi_probe.py yourpkg.halo:make_connection --images ...",
+    "Secrets come from environment variables: ${HALO_LINK_URL}, ${HALO_LINK_TOKEN}."
+  ],
+  "kind": "halolink",
+  "base_url": "${HALO_LINK_URL}",
+  "headers": {"Authorization": "Bearer ${HALO_LINK_TOKEN}"},
+  "max_concurrency": 8,
+  "timeout": 30,
+  "retries": 3,
+  "info": {
+    "path": "TODO: metadata path for one image, e.g. /…/images/{image}",
+    "width": "TODO: field with the full-resolution width",
+    "height": "TODO: field with the full-resolution height",
+    "tile_size": "TODO: field with the tile size (or put a number in a fixed 'pyramid' block instead)",
+    "mpp": "TODO: field with microns per pixel (optional)",
+    "version": "TODO: a field that changes when the image changes (modified date / etag)",
+    "levels": "TODO: field with the list of pyramid levels (or use 'downsamples')",
+    "level_width": "width", "level_height": "height", "level_id": "TODO: field passed back as {level} in tile URLs"
+  },
+  "tile": {"path": "TODO: tile path, e.g. /…/images/{image}/tiles/{level}/{col}/{row}", "empty_status": [404, 204], "retry_status": [429, 503]}
+}

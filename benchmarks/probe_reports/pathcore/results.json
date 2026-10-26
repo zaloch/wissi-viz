@@ -1,0 +1,589 @@
+{
+ "target": "pathcore connector, mock modality (in-process, 40,120 ms latency)",
+ "kind": "connector",
+ "images": [
+  "pathcore-1",
+  "pathcore-2"
+ ],
+ "settings": {
+  "target": "mock:pathcore",
+  "images": null,
+  "slides": null,
+  "connector_arg": [],
+  "panes": [
+   1,
+   4,
+   9,
+   16
+  ],
+  "conn": [
+   5,
+   8,
+   10
+  ],
+  "users": 1,
+  "max_calls": 1000,
+  "requests": 300,
+  "seconds": 40,
+  "seq_calls": 8,
+  "skip": "",
+  "no_annotations": false,
+  "max_images": 4,
+  "view_target_ms": 1500,
+  "expected_users": 10,
+  "memory_mb": 1024,
+  "workers": null,
+  "local_size": "24000x18000",
+  "workdir": "/root/.cache/wissi-probe",
+  "mock_latency": "40,120",
+  "mock_limit": 12,
+  "mock_errors": 0.01,
+  "timeout": 30,
+  "insecure": false,
+  "seed": 0,
+  "out": "bench/probe_final_mock_pathcore",
+  "yes": false
+ },
+ "budget": {
+  "limit": 1000,
+  "used": 881,
+  "by_kind": {
+   "info": 2,
+   "tile": 877,
+   "annotations": 2
+  },
+  "refused": 0
+ },
+ "vendor_stats": null,
+ "smoke": [
+  {
+   "check": "[pathcore-1] metadata",
+   "status": "PASS",
+   "detail": "24000\u00d718000, tile 256, 3 levels (24000\u00d718000, 6000\u00d74500, 1500\u00d71125), mode rgb",
+   "ms": 120.0
+  },
+  {
+   "check": "[pathcore-1] mpp",
+   "status": "PASS",
+   "detail": "(0.25, 0.25)",
+   "ms": null
+  },
+  {
+   "check": "[pathcore-1] pyramid depth",
+   "status": "WARN",
+   "detail": "coarsest level 1500\u00d71125 = 30 tile(s): the first (zoomed-out) view of each slide needs all 30 \u2014 wissi-viz builds the smaller overview levels from them, once per slide (then cached). If the API has a thumbnail / overview endpoint, expose it as an extra coarse level in image_info(); a persistent cache_dir makes this a one-time cost per slide",
+   "ms": null
+  },
+  {
+   "check": "[pathcore-1] version",
+   "status": "PASS",
+   "detail": "pc-etag-1",
+   "ms": null
+  },
+  {
+   "check": "[pathcore-1] coarsest tile (level 2, 2,2)",
+   "status": "PASS",
+   "detail": "image/png 95 KB, 256\u00d7256 for a 256\u00d7256 area: exact size",
+   "ms": 347.4
+  },
+  {
+   "check": "[pathcore-1] middle-level tile (level 1, 11,8)",
+   "status": "PASS",
+   "detail": "image/png 83 KB, 256\u00d7256 for a 256\u00d7256 area: exact size",
+   "ms": 104.3
+  },
+  {
+   "check": "[pathcore-1] full-resolution tile (level 0, 46,35)",
+   "status": "PASS",
+   "detail": "image/png 68 KB, 256\u00d7256 for a 256\u00d7256 area: exact size",
+   "ms": 85.0
+  },
+  {
+   "check": "[pathcore-1] tile outside the image",
+   "status": "INFO",
+   "detail": "returns data (bytes) \u2014 fine if intentional",
+   "ms": 88.3
+  },
+  {
+   "check": "[pathcore-1] annotations + objects",
+   "status": "PASS",
+   "detail": "PathCore annotations (1 features) \u2014 wissi-viz fetches these once per slide when a viewer first opens it (2 calls, in the background)",
+   "ms": 1.3
+  },
+  {
+   "check": "[pathcore-2] metadata",
+   "status": "PASS",
+   "detail": "24000\u00d718000, tile 256, 3 levels (24000\u00d718000, 6000\u00d74500, 1500\u00d71125), mode rgb",
+   "ms": 84.0
+  },
+  {
+   "check": "[pathcore-2] mpp",
+   "status": "PASS",
+   "detail": "(0.25, 0.25)",
+   "ms": null
+  },
+  {
+   "check": "[pathcore-2] pyramid depth",
+   "status": "WARN",
+   "detail": "coarsest level 1500\u00d71125 = 30 tile(s): the first (zoomed-out) view of each slide needs all 30 \u2014 wissi-viz builds the smaller overview levels from them, once per slide (then cached). If the API has a thumbnail / overview endpoint, expose it as an extra coarse level in image_info(); a persistent cache_dir makes this a one-time cost per slide",
+   "ms": null
+  },
+  {
+   "check": "[pathcore-2] version",
+   "status": "PASS",
+   "detail": "pc-etag-1",
+   "ms": null
+  },
+  {
+   "check": "[pathcore-2] coarsest tile (level 2, 2,2)",
+   "status": "PASS",
+   "detail": "image/png 92 KB, 256\u00d7256 for a 256\u00d7256 area: exact size",
+   "ms": 141.3
+  },
+  {
+   "check": "[pathcore-2] middle-level tile (level 1, 11,8)",
+   "status": "PASS",
+   "detail": "image/png 88 KB, 256\u00d7256 for a 256\u00d7256 area: exact size",
+   "ms": 91.0
+  },
+  {
+   "check": "[pathcore-2] full-resolution tile (level 0, 46,35)",
+   "status": "PASS",
+   "detail": "image/png 103 KB, 256\u00d7256 for a 256\u00d7256 area: exact size",
+   "ms": 105.2
+  },
+  {
+   "check": "[pathcore-2] tile outside the image",
+   "status": "INFO",
+   "detail": "returns data (bytes) \u2014 fine if intentional",
+   "ms": 95.1
+  },
+  {
+   "check": "[pathcore-2] annotations + objects",
+   "status": "PASS",
+   "detail": "PathCore annotations (1 features) \u2014 wissi-viz fetches these once per slide when a viewer first opens it (2 calls, in the background)",
+   "ms": 0.8
+  }
+ ],
+ "direct": {
+  "sequential": {
+   "concurrency": 1,
+   "calls": 8,
+   "wall_s": 0.97,
+   "tiles_per_s": 8.2,
+   "MB_per_s": 0.76,
+   "kB_per_tile": 94.9,
+   "p50_ms": 123.5,
+   "p95_ms": 149.5,
+   "p99_ms": 153.4,
+   "status": {
+    "ok": 8
+   },
+   "error_pct": 0.0
+  },
+  "c5": {
+   "concurrency": 5,
+   "calls": 20,
+   "wall_s": 0.59,
+   "tiles_per_s": 34.1,
+   "MB_per_s": 3.14,
+   "kB_per_tile": 94.2,
+   "p50_ms": 129.6,
+   "p95_ms": 201.1,
+   "p99_ms": 201.7,
+   "status": {
+    "ok": 20
+   },
+   "error_pct": 0.0
+  },
+  "c8": {
+   "concurrency": 8,
+   "calls": 24,
+   "wall_s": 0.58,
+   "tiles_per_s": 41.2,
+   "MB_per_s": 3.94,
+   "kB_per_tile": 98.0,
+   "p50_ms": 177.6,
+   "p95_ms": 229.8,
+   "p99_ms": 263.0,
+   "status": {
+    "ok": 24
+   },
+   "error_pct": 0.0
+  },
+  "c10": {
+   "concurrency": 10,
+   "calls": 30,
+   "wall_s": 0.72,
+   "tiles_per_s": 41.9,
+   "MB_per_s": 4.09,
+   "kB_per_tile": 100.1,
+   "p50_ms": 226.1,
+   "p95_ms": 265.6,
+   "p99_ms": 305.2,
+   "status": {
+    "ok": 30
+   },
+   "error_pct": 0.0
+  }
+ },
+ "runs": [
+  {
+   "panes": 1,
+   "conn": 5,
+   "users": 1,
+   "cap_per_user": 26,
+   "cold": {
+    "requests": 26,
+    "tile_requests": 25,
+    "MB": 2.1,
+    "throughput_rps": 6.5,
+    "tile_p50_ms": 136.9,
+    "tile_p95_ms": 261.2,
+    "view_p50_ms": 2069,
+    "view_p95_ms": 3260,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 54,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 2.16,
+    "server_produce_ms": 245.92,
+    "budget_exhausted": false
+   },
+   "warm": {
+    "requests": 26,
+    "tile_requests": 25,
+    "MB": 2.1,
+    "throughput_rps": 461.3,
+    "tile_p50_ms": 10.7,
+    "tile_p95_ms": 15.1,
+    "view_p50_ms": 29,
+    "view_p95_ms": 53,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 0,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 0.0,
+    "server_produce_ms": 245.92,
+    "budget_exhausted": false
+   }
+  },
+  {
+   "panes": 1,
+   "conn": 8,
+   "users": 1,
+   "cap_per_user": 27,
+   "cold": {
+    "requests": 27,
+    "tile_requests": 26,
+    "MB": 2.1,
+    "throughput_rps": 6.9,
+    "tile_p50_ms": 261.6,
+    "tile_p95_ms": 322.4,
+    "view_p50_ms": 2051,
+    "view_p95_ms": 3136,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 55,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 2.115,
+    "server_produce_ms": 249.38,
+    "budget_exhausted": false
+   },
+   "warm": {
+    "requests": 27,
+    "tile_requests": 26,
+    "MB": 2.1,
+    "throughput_rps": 500.4,
+    "tile_p50_ms": 14.9,
+    "tile_p95_ms": 28.9,
+    "view_p50_ms": 30,
+    "view_p95_ms": 56,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 0,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 0.0,
+    "server_produce_ms": 249.38,
+    "budget_exhausted": false
+   }
+  },
+  {
+   "panes": 1,
+   "conn": 10,
+   "users": 1,
+   "cap_per_user": 28,
+   "cold": {
+    "requests": 28,
+    "tile_requests": 27,
+    "MB": 2.1,
+    "throughput_rps": 7.2,
+    "tile_p50_ms": 299.8,
+    "tile_p95_ms": 376.4,
+    "view_p50_ms": 2107,
+    "view_p95_ms": 3226,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 56,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 2.074,
+    "server_produce_ms": 242.71,
+    "budget_exhausted": false
+   },
+   "warm": {
+    "requests": 28,
+    "tile_requests": 27,
+    "MB": 2.1,
+    "throughput_rps": 436.7,
+    "tile_p50_ms": 16.3,
+    "tile_p95_ms": 41.2,
+    "view_p50_ms": 37,
+    "view_p95_ms": 67,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 0,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 0.0,
+    "server_produce_ms": 242.71,
+    "budget_exhausted": false
+   }
+  },
+  {
+   "panes": 4,
+   "conn": 5,
+   "users": 1,
+   "cap_per_user": 56,
+   "cold": {
+    "requests": 56,
+    "tile_requests": 52,
+    "MB": 1.3,
+    "throughput_rps": 10.6,
+    "tile_p50_ms": 9.3,
+    "tile_p95_ms": 3698.3,
+    "view_p50_ms": 254,
+    "view_p95_ms": 3347,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 132,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 2.538,
+    "server_produce_ms": 323.73,
+    "budget_exhausted": false
+   },
+   "warm": {
+    "requests": 56,
+    "tile_requests": 52,
+    "MB": 1.3,
+    "throughput_rps": 50.3,
+    "tile_p50_ms": 7.6,
+    "tile_p95_ms": 12.7,
+    "view_p50_ms": 16,
+    "view_p95_ms": 55,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 0,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 0.0,
+    "server_produce_ms": 323.73,
+    "budget_exhausted": false
+   }
+  },
+  {
+   "panes": 4,
+   "conn": 8,
+   "users": 1,
+   "cap_per_user": 72,
+   "cold": {
+    "requests": 72,
+    "tile_requests": 68,
+    "MB": 2.7,
+    "throughput_rps": 13.4,
+    "tile_p50_ms": 29.0,
+    "tile_p95_ms": 1935.9,
+    "view_p50_ms": 521,
+    "view_p95_ms": 3477,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 148,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 2.176,
+    "server_produce_ms": 283.95,
+    "budget_exhausted": false
+   },
+   "warm": {
+    "requests": 72,
+    "tile_requests": 68,
+    "MB": 2.7,
+    "throughput_rps": 153.4,
+    "tile_p50_ms": 13.9,
+    "tile_p95_ms": 31.6,
+    "view_p50_ms": 34,
+    "view_p95_ms": 86,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 0,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 0.0,
+    "server_produce_ms": 283.95,
+    "budget_exhausted": false
+   }
+  },
+  {
+   "panes": 4,
+   "conn": 10,
+   "skipped": "needs \u2248 154 API calls (\u2248 120 to open 4 slide(s): 30 per slide) and only 126 remain \u2014 raise --max-calls"
+  },
+  {
+   "panes": 9,
+   "conn": 5,
+   "users": 1,
+   "cap_per_user": 171,
+   "cold": {
+    "requests": 171,
+    "tile_requests": 162,
+    "MB": 7.8,
+    "throughput_rps": 12.3,
+    "tile_p50_ms": 17.3,
+    "tile_p95_ms": 1933.7,
+    "view_p50_ms": 2282,
+    "view_p95_ms": 9670,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 342,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 2.111,
+    "server_produce_ms": 260.54,
+    "budget_exhausted": false
+   },
+   "warm": {
+    "requests": 171,
+    "tile_requests": 162,
+    "MB": 7.8,
+    "throughput_rps": 318.5,
+    "tile_p50_ms": 7.4,
+    "tile_p95_ms": 13.5,
+    "view_p50_ms": 133,
+    "view_p95_ms": 140,
+    "error_pct": 0.0,
+    "errors": {},
+    "upstream": {
+     "calls": 0,
+     "retries": 0,
+     "rate_limited": 0,
+     "not_found": 0,
+     "errors": 0
+    },
+    "upstream_per_tile": 0.0,
+    "server_produce_ms": 260.54,
+    "budget_exhausted": false
+   }
+  },
+  {
+   "panes": 9,
+   "conn": 8,
+   "skipped": "needs \u2248 334 API calls (\u2248 270 to open 9 slide(s): 30 per slide) and only 172 remain \u2014 raise --max-calls"
+  },
+  {
+   "panes": 9,
+   "conn": 10,
+   "skipped": "needs \u2248 334 API calls (\u2248 270 to open 9 slide(s): 30 per slide) and only 126 remain \u2014 raise --max-calls"
+  },
+  {
+   "panes": 16,
+   "conn": 5,
+   "skipped": "needs \u2248 586 API calls (\u2248 480 to open 16 slide(s): 30 per slide) and only 372 remain \u2014 raise --max-calls"
+  },
+  {
+   "panes": 16,
+   "conn": 8,
+   "skipped": "needs \u2248 586 API calls (\u2248 480 to open 16 slide(s): 30 per slide) and only 172 remain \u2014 raise --max-calls"
+  },
+  {
+   "panes": 16,
+   "conn": 10,
+   "skipped": "needs \u2248 586 API calls (\u2248 480 to open 16 slide(s): 30 per slide) and only 126 remain \u2014 raise --max-calls"
+  }
+ ],
+ "recommendation": {
+  "settings": {
+   "max_concurrency": 8,
+   "timeout_s": 10,
+   "retries": 2,
+   "http2": "optional",
+   "comfortable_panes": 1,
+   "memory_mb": 1024,
+   "disk_cache": true,
+   "workers": 16
+  },
+  "why": {
+   "max_concurrency": "41.2 tiles/s at 8 concurrent calls, within 10 % of the best clean rate (41.9/s)",
+   "timeout_s": "5 \u00d7 the worst p99 call latency (305 ms), between 10 and 60 s",
+   "retries": "no transient failures seen",
+   "network": "one tile \u2248 123.5 ms (p50, sequential) \u00b7 94.9 kB \u00b7 0.76 MB/s sequential",
+   "http2": "4 panes: view p95 3347 \u2192 3477 ms with 5 \u2192 8 connections \u2192 little gain from more connections; HTTP/1.1 is adequate (HTTP/2 still recommended behind a proxy)",
+   "comfortable_panes": "no pane count met 1500 ms p95 on first view",
+   "cache": "cold views p95 3304 ms vs cached 62 ms (medians over runs)",
+   "memory_mb": "a 9-pane session fetched 7.8 MB; \u00d7 10 expected concurrent users \u00d7 2 for history, rounded to a power of two (\u2265 1 GB)",
+   "disk_cache": "every cache miss is an API round trip; a persistent cache_dir keeps tiles across restarts",
+   "open_cost": "opening a slide costs \u2248 30 API calls (its coarsest API level is 30 tiles; wissi-viz builds the overview levels from them), once per slide while it stays in the cache",
+   "upstream_per_tile": "up to 2.5 API calls per viewer tile: wissi-viz assembles some tiles from several API tiles \u2014 typically overview levels below a shallow API pyramid (see \"pyramid depth\" in the smoke test), or API tiles smaller than wissi-viz tiles. Warm reruns made 0 calls.",
+   "workers": "server threads mostly wait on the API: at least 2 \u00d7 max_concurrency"
+  }
+ },
+ "seconds": 46.9
+}

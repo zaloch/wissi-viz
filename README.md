@@ -44,7 +44,9 @@ pip install -e .             # minimal: SVS/TIFF/OME-TIFF/NDPI + CZI viewer
 #         [lgpl] OpenSlide + libCZI (opt-in, LGPL)
 ```
 
-> **Integrating into an app?** [docs/INTEGRATION.md](docs/INTEGRATION.md) covers every option: the NiceGUI element, a raw `<wissi-viz>` tag, mounting on any ASGI app, a separate tile server behind React, Vue, Streamlit, Dash or Django, and an iframe. It also covers auth, Docker and proxies, and how to wire a vendor tile API. **Before go-live:** [docs/LOAD_TESTING.md](docs/LOAD_TESTING.md) and `scripts/wissi_loadtest.py` simulate 10–100 users (≤ 999 requests each) and estimate capacity.
+> **Integrating into an app?** [docs/INTEGRATION.md](docs/INTEGRATION.md) covers every option: the NiceGUI element, a raw `<wissi-viz>` tag, mounting on any ASGI app, a separate tile server behind React, Vue, Streamlit, Dash or Django, and an iframe. It also covers auth, Docker and proxies, and how to wire a vendor tile API. **Before go-live:**
+> - `scripts/wissi_probe.py` checks a connector (HALO Link, PathCore, any tile API) or a deployment in one command, under a hard API-call cap. It smoke-tests the API, sweeps concurrency, runs 1–16-pane viewer sessions, and writes recommended settings ([§10](docs/INTEGRATION.md#10-probing-an-integration-one-command)).
+> - [docs/LOAD_TESTING.md](docs/LOAD_TESTING.md) and `scripts/wissi_loadtest.py` simulate 10–100 users (≤ 999 requests each) and estimate capacity.
 
 ## Quick start (standalone server + demo page)
 
@@ -149,6 +151,14 @@ What the connector layer handles:
 | Annotations in µm, at a pyramid level, or offset | `AnnotationPayload(units='um', downsample=…, offset=…)`. |
 | HALO XML, GeoJSON, Aperio XML, object tables (XMin/XMax/YMin/YMax, centroids, classes) | `AnnotationPayload(format='auto' \| 'halo_xml' \| 'geojson' \| 'aperio_xml' \| 'table')`. Table measurement columns are kept column-wise, so clicking one of 10⁶ cells shows its values. |
 | Cache invalidation | `RemoteImageInfo.version` (a modified time or ETag) goes into every cache key. |
+
+**No Python needed for plain-URL tile APIs:** `HttpTileConnection('my_api.json')` reads base URL, auth headers (`${ENV_VAR}`), metadata fields and the tile URL template from JSON. See `scripts/probe_configs/`.
+
+**Check a connector before go-live:**
+```bash
+python scripts/wissi_probe.py yourpkg.halo:make_connection --images IMG1,IMG2 --yes
+```
+This runs a smoke test, a concurrency sweep at 5 / 8 / 10, and 1–16-pane sessions, at ≤ 1000 API calls by default. `mock:halolink` / `mock:pathcore` run the same probe on the mocks below.
 
 **Verification** (`tests/test_remote.py`, `examples/mock_remote_server.py`). The mock connectors reproduce these awkward cases, backed by a local SVS:
 - A HALO-style mock: DeepZoom with 1 px overlap, a sync client, flaky calls, HALO XML and a cell table.
@@ -398,7 +408,7 @@ Measured with `wissi-viz bench --zoom` (legacy vs new; 1 and 16 panes; SVS, OME-
 ## Tests
 
 ```bash
-pip install -e ".[all,dev]" && pytest -q tests                      # 87 tests
+pip install -e ".[all,dev]" && pytest -q tests                      # 92 tests
 python tests/make_test_data.py /tmp/wsi --size 16000                # synthetic SVS + 3-channel CZI + 120k cell GeoJSON
 python tests/make_analysis_data.py /tmp/wsi                         # QuPath-style multiplex cell table + ROIs
 python examples/analysis_app.py /tmp/wsi/synthetic_he.svs /tmp/wsi/synthetic_he_cells.tsv /tmp/wsi/synthetic_he_rois.geojson

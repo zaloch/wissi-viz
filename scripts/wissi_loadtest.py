@@ -158,7 +158,10 @@ async def run_user(uid: int, slides: list, args, t_end: float, seed: int, header
     n = max(1, min(16, args.panes))
     cols, rows = GRIDS[n]
     pw, ph = SCREEN[0] // cols, SCREEN[1] // rows
-    mine = [slides[rnd.randrange(len(slides))] for _ in range(n)]
+    # distinct: pane k shows slides[k] and each pane moves on its own (n different images, as in a review of n
+    # cases); default: random slides with linked panes (the same relative move in every pane)
+    distinct = getattr(args, 'distinct', False)
+    mine = [slides[(uid + k) % len(slides)] for k in range(n)] if distinct else [slides[rnd.randrange(len(slides))] for _ in range(n)]
     seen: set = set()
     sem = asyncio.Semaphore(args.conn)
     limits = httpx.Limits(max_connections=args.conn, max_keepalive_connections=args.conn)
@@ -266,6 +269,8 @@ async def run_user(uid: int, slides: list, args, t_end: float, seed: int, header
             await asyncio.sleep(rnd.uniform(*args.think))
             a = rnd.random()
             for s, v, f in zip(mine, st, fit):
+                if distinct:
+                    a = rnd.random()
                 mx = s.mpp * 40 / 10                      # 40× as screen px per level-0 px
                 if a < 0.55:                              # pan 0.3–1 screen
                     ang, d = rnd.uniform(0, 2 * math.pi), rnd.uniform(0.3, 1.0)

@@ -1,6 +1,6 @@
 # Integrating wissi-viz
 
-*Current as of wissi-viz 0.5.2.* This guide covers how to put wissi-viz into an app: NiceGUI (wissi), other Python web frameworks, JavaScript frameworks and notebooks. It also covers:
+*Current as of wissi-viz 0.6.0.* This guide covers how to put wissi-viz into an app: NiceGUI (wissi), other Python web frameworks, JavaScript frameworks and notebooks. It also covers:
 - how to show large cell and object tables;
 - how to keep the viewer smooth, including on clients without a GPU;
 - how to connect a vendor tile API such as PathCore or HALO Link;
@@ -27,6 +27,7 @@
 |---|---|---|
 | 0.5.0 | **Object pyramid.** Millions of cells are shown as screen-sized aggregated dots, then as GPU-drawn outlines when zoomed in. There is a **server mode** (default) and a **client mode**. | Use `cached_object_layer` for big tables (§5). Choose `overlays: 'server'\|'client'\|'auto'`. |
 | 0.5.1 | **Polars reader.** `read_objects(engine='auto')` uses Polars, then pyarrow, then pandas. | `pip install "wissi-viz[polars]"`. |
+| 0.6.0 | **Integration probe + HTTP config connector.** `scripts/wissi_probe.py` smoke-tests a connector, sweeps concurrency, runs 1–16-pane viewer sessions under a hard API-call cap, and writes recommended settings. `HttpTileConnection` connects tile APIs with plain tile URLs from a JSON file. | Run the probe before go-live (§10). |
 | 0.5.2 | **Smoothness.** Adaptive resolution while moving, culled cell outlines, a batched `views` event, and frame-cost-aware redraws. | Use the `views` event, never update the page per frame (§6). `on_view_change` now comes from the batched event. |
 
 ## 1. Choose an integration path
@@ -333,6 +334,23 @@ sid = MyVendor(client).register(registry, 'image-123')   # lazy: nothing is fetc
 
 Metadata and annotation calls follow the same retry policy as tiles. A transient 503 while opening a slide no longer fails it; the simulation found that one.
 
+**What opening a slide costs the API:** 1 metadata call, plus its annotations and objects (2 calls, in the background, once per slide per server process). Every tile is then fetched at most once and cached; concurrent requests for the same tile are coalesced. If `objects()` returns large cell tables, keep it cheap or return them lazily.
+
+### No Python needed: the HTTP config connector
+
+If the service serves tiles at plain URLs, describe it in JSON instead of writing a class:
+
+```python
+from wissi_viz.connectors import HttpTileConnection
+conn = HttpTileConnection('my_api.json')        # base_url, auth headers (${ENV_VAR}), metadata fields, tile URL template
+sid = conn.register(registry, 'image-123')
+```
+
+- `scripts/probe_configs/mock_api.json` is a complete working example against the mock vendor API.
+- `halolink.example.json` and `pathcore.example.json` are **templates**. Neither vendor publishes a tile URL scheme: HALO's programmatic access is its GraphQL API (HALO 3.0+), documented in the Indica Labs customer portal, and PathcoreFlow's public manual has no REST reference.
+  - Fill them in only if your deployment exposes plain tile URLs; the connector refuses a config that still has `TODO` fields.
+  - Otherwise keep the `RemoteConnection` subclass wissi already uses, with its authenticated client.
+
 ### Verified by the simulation
 
 - **Pixels** (`tests/test_tile_api.py`):
@@ -386,7 +404,36 @@ volumes:
   - Several workers can share one cache volume.
 - **Clients without a GPU** (VDI, thin clients) work with the defaults (§6). Check `chrome://gpu` on one of them: "Software only" means the CPU path, where adaptive resolution matters most.
 
-## 10. Load testing before go-live
+## 10. Probing an integration (one command)
+
+`scripts/wissi_probe.py` checks an integration end to end and recommends its settings. Every call to the service goes through a **hard budget guard** (`--max-calls`, default 1000). Without `--yes` it only prints the plan, including how many calls each phase may make; local and mock targets run without `--yes`.
+
+```bash
+python scripts/wissi_probe.py local                                   # 2 generated SVS (24000×18000), in-process server
+python scripts/wissi_probe.py local:case1.svs,case2.svs              # your own files
+python scripts/wissi_probe.py mock                                    # the bundled mock vendor API, through a connector
+python scripts/wissi_probe.py wissi.integrations.halo:make_connection --images IMG1,IMG2 --yes   # YOUR HALO Link connector
+python scripts/wissi_probe.py wissi.integrations.pathcore:make_connection --images S-1,S-2 --yes # YOUR PathCore connector
+python scripts/wissi_probe.py http:my_api.json --images a,b --yes     # a plain-URL tile API, described in JSON
+python scripts/wissi_probe.py https://wissi.example.org/wissi-viz --slides a,b --header "Cookie: …" --yes   # a deployment
+```
+
+`module:factory` points at the connector your app already uses: a `RemoteConnection` subclass, or a function returning one (template: `scripts/probe_configs/connector_factory_example.py`; `--connector-arg key=value` is passed through). The probe then measures exactly what production will do.
+
+| Phase | API calls | What it measures |
+|---|---|---|
+| 1. smoke | ≤ 7 per image | metadata, pyramid, mpp, version, tiles at the coarsest, middle and full-resolution levels (format, size, padding / overlap), how the service signals "no tile", annotations + objects |
+| 2. direct sweep | 8 sequential + max(20, 3c) per concurrency c in `--conn` (default 5, 8, 10) | per-call latency, tiles/s, MB/s, 429 / 5xx / timeouts, on distinct full-resolution tiles with no retries |
+| 3. viewer sessions | the rest of the budget, split over `--panes` (default 1, 4, 9, 16) × `--conn` | different images per pane, each moving on its own. A cold run (fresh cache) gives view latency (time until a move is sharp), tile latency, errors, and API calls per viewer tile. A warm rerun (cache only) makes 0 calls. |
+
+**Output** (`--out`, default `./wissi-probe-<kind>`):
+- `report.md`: every number, with a "why" for each recommendation.
+- `results.json`.
+- `recommended_settings.py`: the connector's `max_concurrency`, `retries`, `timeout`, plus `configure(memory_mb=, workers=, cache_dir=)`, the HTTP/2 verdict, and how many panes open comfortably.
+
+Measured results for `local` and `mock`: `benchmarks/results-probe.md`.
+
+## 11. Load testing before go-live
 
 `scripts/wissi_loadtest.py` is a single file (httpx + numpy) that replays realistic viewer sessions against your deployment:
 - 10 → 100 users (configurable);

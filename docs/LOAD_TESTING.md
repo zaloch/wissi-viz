@@ -1,5 +1,7 @@
 # Load testing a wissi-viz deployment
 
+> **Start with the probe.** `scripts/wissi_probe.py` checks one connector or deployment first: a smoke test, the best API concurrency, and 1–16-pane sessions under a hard API-call cap, with recommended settings ([INTEGRATION.md §10](INTEGRATION.md#10-probing-an-integration-one-command)). This load test then answers how many users the result carries.
+
 `scripts/wissi_loadtest.py` is a single file you can copy to any machine: Python 3.9+, `pip install httpx numpy`, plus `h2` for `--http2`. It is also bundled in the package as `wissi-viz loadtest …`, with the same options. It drives many simulated viewer users against your server, reports what each user count did, and estimates what untested user counts would do.
 
 ## What a simulated user does

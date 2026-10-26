@@ -1,0 +1,22 @@
+{
+  "_comment": [
+    "TEMPLATE — fill every TODO from your PathcoreFlow deployment. Pathcore does not publish a tile REST API in its public manual;",
+    "ask Pathcore / your administrator for the image-tile and metadata endpoints your instance exposes.",
+    "If tiles are only reachable through an SDK or signed requests, use the connector wissi already has:",
+    "  python scripts/wissi_probe.py yourpkg.pathcore:make_connection --images ...",
+    "Secrets come from environment variables: ${PATHCORE_URL}, ${PATHCORE_TOKEN}."
+  ],
+  "kind": "pathcore",
+  "base_url": "${PATHCORE_URL}",
+  "headers": {"Authorization": "Bearer ${PATHCORE_TOKEN}"},
+  "max_concurrency": 8,
+  "timeout": 30,
+  "retries": 3,
+  "info": {
+    "path": "TODO: metadata path, e.g. /…/slides/{image}",
+    "width": "TODO", "height": "TODO", "tile_size": "TODO", "mpp": "TODO (optional)", "version": "TODO",
+    "downsamples": "TODO: field with [1, 4, 16, …] (or 'levels' + 'level_width' / 'level_height' / 'level_id')"
+  },
+  "tile": {"path": "TODO: tile path with {image} {level} {col} {row}", "empty_status": [404, 204], "retry_status": [429, 503]},
+  "annotations": {"path": "TODO (optional): GeoJSON annotations path", "format": "geojson", "units": "um"}
+}

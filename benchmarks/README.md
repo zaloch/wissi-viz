@@ -18,6 +18,7 @@ wissi-viz bench ~/wsi-samples/Aperio/CMU-1.svs ~/wsi-samples/Leica/*.scn ~/wsi-s
 
 - **Tiles from a remote API** (PathCore, HALO Link, …) instead of files: see [results-tile-api.md](results-tile-api.md) and `examples/tile_api/bench_api.py [--http2]`.
 - **Smoothness** (freezes, jank, input latency under real mouse input, 1 and 16 panes): `python benchmarks/smoothness.py --out smooth.json`. See [results-smoothness.md](results-smoothness.md).
+- **GPU pyramid build (experimental):** the client-mode object pyramid built with WebGPU compute vs the Web Worker, with a full parity check: `python benchmarks/gpu_pyramid_ab.py --headed`. See [results-gpu-pyramid.md](results-gpu-pyramid.md).
 
 ### Free sources
 

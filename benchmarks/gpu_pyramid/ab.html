@@ -1,0 +1,53 @@
+<!doctype html><title>pyramid A/B</title>
+<!-- benchmarks/gpu_pyramid_ab.py serves this page with worker.js (extracted from index.js) and the payloads -->
+<script type="module">
+import { buildPyramidGPU, gpuDevice, gpuInfo } from './gpu_pyramid.js';
+const worker = new Worker('worker.js');
+const runWorker = (buf) => new Promise((ok, bad) => { worker.onmessage = (e) => e.data.error ? bad(new Error(e.data.error)) : ok(e.data); worker.postMessage({ id: 1, buf }, [buf]); });
+function compare(W, G) {
+  const out = [];
+  for (let l = 0; l < Math.max(W.levels.length, G.levels.length); l++) {
+    const a = W.levels[l], b = G.levels[l], r = { level: l, k: a?.k, raw: a?.raw };
+    if (!a || !b || a.k !== b.k || a.raw !== b.raw) { r.levelMismatch = true; out.push(r); continue; }
+    const ta = new Map(a.tiles.map((t) => [t.tx + ',' + t.ty, t])), tb = new Map(b.tiles.map((t) => [t.tx + ',' + t.ty, t]));
+    r.tiles = [ta.size, tb.size]; r.tileSetDiff = [...ta.keys()].filter((k) => !tb.has(k)).length + [...tb.keys()].filter((k) => !ta.has(k)).length;
+    r.points = [0, 0]; r.tileNDiff = 0; r.missing = 0; r.posMax = 0; r.posDiff = 0; r.field = {};
+    const bad = (f) => { r.field[f] = (r.field[f] || 0) + 1; };
+    for (const [key, t] of ta) {
+      const u = tb.get(key); r.points[0] += t.n; if (!u) continue; r.points[1] += u.n;
+      if (t.n !== u.n) r.tileNDiff++;
+      const byOrig = new Map(); for (let i = 0; i < t.n; i++) byOrig.set(t.orig[i], i);
+      for (let j = 0; j < u.n; j++) {
+        const i = byOrig.get(u.orig[j]); if (i === undefined) { r.missing++; continue; }
+        const dx = Math.abs(t.pos[2 * i] - u.pos[2 * j]), dy = Math.abs(t.pos[2 * i + 1] - u.pos[2 * j + 1]);
+        r.posMax = Math.max(r.posMax, dx, dy); if (dx || dy) r.posDiff++;
+        if (t.col[i] !== u.col[j]) bad('col');
+        if (a.raw) {
+          if (t.size[i] !== u.size[j]) bad('size'); if (t.cls[i] !== u.cls[j]) bad('cls'); if (t.kind[i] !== u.kind[j]) bad('kind');
+          for (let q = 0; q < 4; q++) if (t.shp[4 * i + q] !== u.shp[4 * j + q]) { bad('shp'); break; }
+        } else {
+          if (t.count[i] !== u.count[j]) bad('count');
+          for (let q = 0; q < 8; q++) if (t.hist[8 * i + q] !== u.hist[8 * j + q]) { bad('hist'); break; }
+        }
+      }
+    }
+    out.push(r);
+  }
+  return out;
+}
+window.ab = async (file, reps = 3, check = true) => {
+  const buf = await (await fetch(file)).arrayBuffer();
+  const t0 = performance.now(); await gpuDevice(); const devMs = performance.now() - t0;
+  const res = { file, devMs, adapter: gpuInfo(), worker: [], gpu: [], gpuT: [] };
+  let W, G;
+  for (let r = 0; r < reps + 1; r++) {          // first round = warm-up (JIT, shader compile), not counted
+    let c = buf.slice(0), a = performance.now(); W = await runWorker(c); const wMs = performance.now() - a;
+    const tm = {}; a = performance.now(); G = await buildPyramidGPU(buf.slice(0), tm); const gMs = performance.now() - a;
+    if (r) { res.worker.push(wMs); res.gpu.push(gMs); res.gpuT.push(tm); }
+  }
+  res.pyrW = W.pyr; res.pyrG = G && G.pyr;
+  if (check && G) res.parity = compare(W, G);
+  return res;
+};
+window.ready = true;
+</script>

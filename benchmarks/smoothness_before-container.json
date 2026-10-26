@@ -1,0 +1,1436 @@
+{
+ "label": "before",
+ "viewport": "960x600",
+ "runs": [
+  {
+   "scenario": "drag-pan",
+   "seconds": 4.0,
+   "frames": 191,
+   "fps": 47.4,
+   "frame_ms": {
+    "p50": 16.7,
+    "p95": 50.0,
+    "p99": 66.6,
+    "max": 66.7
+   },
+   "frames_over_33ms_pct": 11.0,
+   "input_to_frame_ms": {
+    "p50": 6.6,
+    "p95": 16.0,
+    "max": 58.4
+   },
+   "input_events": 65,
+   "long_tasks": 12,
+   "long_task_ms_total": 727,
+   "long_task_max_ms": 82,
+   "viewer_js_ms": {
+    "p50": 0.5,
+    "p95": 2.16,
+    "max": 13.3
+   },
+   "requests": 14,
+   "trace": {
+    "wall_ms": 4083,
+    "busy_pct": 69.8,
+    "tasks_over_16ms": 67,
+    "tasks_over_50ms": 10,
+    "longest_task_ms": 72.0,
+    "gc_longest_ms": 1.4,
+    "js_ms": 206.4,
+    "raf_ms": 81.3,
+    "style_ms": 4.3,
+    "layout_ms": 19.5,
+    "paint_ms": 42.4,
+    "gc_ms": 6.4,
+    "events_ms": 22.1,
+    "timers_ms": 5.7,
+    "gpu_upload_ms": 0.0,
+    "top_events": [
+     [
+      "Commit",
+      2553.8,
+      173
+     ],
+     [
+      "v8.callFunction",
+      106.6,
+      639
+     ],
+     [
+      "FunctionCall",
+      99.6,
+      613
+     ],
+     [
+      "FireAnimationFrame",
+      81.3,
+      241
+     ],
+     [
+      "CpuProfiler::StartProfiling",
+      29.0,
+      1
+     ],
+     [
+      "EventDispatch",
+      22.1,
+      175
+     ],
+     [
+      "Layout",
+      19.5,
+      75
+     ],
+     [
+      "Paint",
+      19.5,
+      186
+     ],
+     [
+      "PrePaint",
+      11.9,
+      182
+     ],
+     [
+      "Layerize",
+      10.9,
+      174
+     ],
+     [
+      "TimerFire",
+      5.7,
+      89
+     ],
+     [
+      "HandlePostMessage",
+      5.0,
+      14
+     ]
+    ]
+   },
+   "hotspots": [
+    [
+     "(program)",
+     2681.0,
+     2480.7
+    ],
+    [
+     "texImage2D",
+     22.6,
+     20.9
+    ],
+    [
+     "(anonymous)",
+     14.2,
+     13.1
+    ],
+    [
+     "requestAnimationFrame",
+     6.0,
+     5.6
+    ],
+    [
+     "_draw index.js:1989",
+     5.7,
+     5.3
+    ],
+    [
+     "(garbage collector)",
+     5.6,
+     5.2
+    ],
+    [
+     "evaluate",
+     5.5,
+     5.1
+    ],
+    [
+     "move index.js:1559",
+     3.7,
+     3.4
+    ],
+    [
+     "close",
+     3.4,
+     3.2
+    ],
+    [
+     "pyrTiles index.js:673",
+     2.7,
+     2.5
+    ],
+    [
+     "uniform4f",
+     2.4,
+     2.3
+    ],
+    [
+     "setTimeout",
+     2.4,
+     2.3
+    ],
+    [
+     "getBoundingClientRect",
+     1.7,
+     1.6
+    ],
+    [
+     "_updateScaleBar index.js:1877",
+     1.7,
+     1.6
+    ],
+    [
+     "want index.js:2435",
+     1.6,
+     1.5
+    ]
+   ],
+   "panes": 1
+  },
+  {
+   "scenario": "wheel-zoom",
+   "seconds": 4.3,
+   "frames": 79,
+   "fps": 18.3,
+   "frame_ms": {
+    "p50": 33.4,
+    "p95": 135.1,
+    "p99": 150.0,
+    "max": 150
+   },
+   "frames_over_33ms_pct": 44.3,
+   "input_to_frame_ms": {
+    "p50": 110.3,
+    "p95": 374.8,
+    "max": 405.3
+   },
+   "input_events": 21,
+   "long_tasks": 26,
+   "long_task_ms_total": 3064,
+   "long_task_max_ms": 156,
+   "viewer_js_ms": {
+    "p50": 0.6,
+    "p95": 4.94,
+    "max": 7.5
+   },
+   "requests": 28,
+   "trace": {
+    "wall_ms": 4443,
+    "busy_pct": 95.4,
+    "tasks_over_16ms": 63,
+    "tasks_over_50ms": 24,
+    "longest_task_ms": 148.8,
+    "gc_longest_ms": 0.7,
+    "js_ms": 235.3,
+    "raf_ms": 110.5,
+    "style_ms": 2.0,
+    "layout_ms": 8.8,
+    "paint_ms": 19.6,
+    "gc_ms": 2.9,
+    "events_ms": 7.7,
+    "timers_ms": 3.4,
+    "gpu_upload_ms": 0.0,
+    "top_events": [
+     [
+      "Commit",
+      4030.9,
+      76
+     ],
+     [
+      "v8.callFunction",
+      123.5,
+      268
+     ],
+     [
+      "FunctionCall",
+      111.8,
+      245
+     ],
+     [
+      "FireAnimationFrame",
+      110.5,
+      141
+     ],
+     [
+      "CpuProfiler::StartProfiling",
+      13.0,
+      1
+     ],
+     [
+      "Layout",
+      8.8,
+      24
+     ],
+     [
+      "EventDispatch",
+      7.7,
+      45
+     ],
+     [
+      "Paint",
+      7.5,
+      71
+     ],
+     [
+      "PrePaint",
+      6.3,
+      122
+     ],
+     [
+      "Layerize",
+      5.8,
+      77
+     ],
+     [
+      "HandlePostMessage",
+      3.6,
+      28
+     ],
+     [
+      "TimerFire",
+      3.4,
+      18
+     ]
+    ]
+   },
+   "hotspots": [
+    [
+     "(program)",
+     4118.2,
+     4013.8
+    ],
+    [
+     "texImage2D",
+     12.5,
+     12.2
+    ],
+    [
+     "useProgram",
+     8.5,
+     8.2
+    ],
+    [
+     "requestAnimationFrame",
+     7.6,
+     7.4
+    ],
+    [
+     "postMessage",
+     6.7,
+     6.5
+    ],
+    [
+     "tick",
+     6.6,
+     6.4
+    ],
+    [
+     "close",
+     5.3,
+     5.2
+    ],
+    [
+     "_frameBody index.js:1795",
+     5.1,
+     5.0
+    ],
+    [
+     "_schedule index.js:2333",
+     4.8,
+     4.7
+    ],
+    [
+     "rect",
+     4.5,
+     4.4
+    ],
+    [
+     "bindTexture",
+     4.0,
+     3.9
+    ],
+    [
+     "_cover index.js:1923",
+     3.8,
+     3.7
+    ],
+    [
+     "_animate index.js:1813",
+     3.0,
+     2.9
+    ],
+    [
+     "uniform4f",
+     2.7,
+     2.7
+    ],
+    [
+     "uniform1i",
+     2.5,
+     2.4
+    ]
+   ],
+   "panes": 1
+  },
+  {
+   "scenario": "fling",
+   "seconds": 4.5,
+   "frames": 117,
+   "fps": 25.8,
+   "frame_ms": {
+    "p50": 16.7,
+    "p95": 116.7,
+    "p99": 133.4,
+    "max": 149.9
+   },
+   "frames_over_33ms_pct": 25.6,
+   "input_to_frame_ms": {
+    "p50": 10.0,
+    "p95": 14.6,
+    "max": 15.4
+   },
+   "input_events": 33,
+   "long_tasks": 30,
+   "long_task_ms_total": 3534,
+   "long_task_max_ms": 155,
+   "viewer_js_ms": {
+    "p50": 0.4,
+    "p95": 0.75,
+    "max": 0.8
+   },
+   "requests": 0,
+   "trace": {
+    "wall_ms": 4579,
+    "busy_pct": 79.6,
+    "tasks_over_16ms": 30,
+    "tasks_over_50ms": 30,
+    "longest_task_ms": 155.9,
+    "gc_longest_ms": 4.5,
+    "js_ms": 64.2,
+    "raf_ms": 19.4,
+    "style_ms": 2.6,
+    "layout_ms": 10.8,
+    "paint_ms": 18.8,
+    "gc_ms": 10.3,
+    "events_ms": 11.5,
+    "timers_ms": 5.9,
+    "gpu_upload_ms": 0.0,
+    "top_events": [
+     [
+      "Commit",
+      3499.2,
+      106
+     ],
+     [
+      "v8.callFunction",
+      34.7,
+      357
+     ],
+     [
+      "FunctionCall",
+      29.5,
+      336
+     ],
+     [
+      "FireAnimationFrame",
+      19.4,
+      136
+     ],
+     [
+      "EventDispatch",
+      11.5,
+      123
+     ],
+     [
+      "Layout",
+      10.8,
+      34
+     ],
+     [
+      "Paint",
+      9.9,
+      100
+     ],
+     [
+      "CpuProfiler::StartProfiling",
+      8.7,
+      1
+     ],
+     [
+      "V8.GCIncrementalMarking",
+      7.3,
+      22
+     ],
+     [
+      "V8.GC_MC_INCREMENTAL",
+      7.3,
+      22
+     ],
+     [
+      "PrePaint",
+      6.2,
+      133
+     ],
+     [
+      "TimerFire",
+      5.9,
+      38
+     ]
+    ]
+   },
+   "hotspots": [
+    [
+     "(program)",
+     3568.3,
+     9977.3
+    ],
+    [
+     "(garbage collector)",
+     18.3,
+     51.3
+    ],
+    [
+     "(anonymous)",
+     3.6,
+     10.0
+    ],
+    [
+     "requestAnimationFrame",
+     3.0,
+     8.3
+    ],
+    [
+     "want index.js:2435",
+     1.1,
+     3.0
+    ],
+    [
+     "getBoundingClientRect",
+     1.0,
+     2.8
+    ],
+    [
+     "move index.js:1559",
+     0.9,
+     2.4
+    ],
+    [
+     "queueLevel index.js:2352",
+     0.8,
+     2.2
+    ],
+    [
+     "_draw index.js:1989",
+     0.7,
+     2.0
+    ],
+    [
+     "_frameBody index.js:1795",
+     0.7,
+     1.9
+    ],
+    [
+     "window.__cleanupDrag",
+     0.6,
+     1.6
+    ],
+    [
+     "down index.js:1543",
+     0.5,
+     1.4
+    ],
+    [
+     "clear",
+     0.4,
+     1.3
+    ],
+    [
+     "uniform2f",
+     0.4,
+     1.2
+    ],
+    [
+     "uniform1i",
+     0.4,
+     1.2
+    ]
+   ],
+   "panes": 1
+  },
+  {
+   "scenario": "hover",
+   "seconds": 4.0,
+   "frames": 274,
+   "fps": 68.3,
+   "frame_ms": {
+    "p50": 16.7,
+    "p95": 16.7,
+    "p99": 16.8,
+    "max": 16.8
+   },
+   "frames_over_33ms_pct": 0.0,
+   "input_to_frame_ms": {
+    "p50": 6.9,
+    "p95": 7.5,
+    "max": 8
+   },
+   "input_events": 241,
+   "long_tasks": 0,
+   "long_task_ms_total": 0,
+   "long_task_max_ms": 0,
+   "viewer_js_ms": {
+    "p50": 0,
+    "p95": 0,
+    "max": 0
+   },
+   "requests": 0,
+   "trace": {
+    "wall_ms": 4038,
+    "busy_pct": 7.9,
+    "tasks_over_16ms": 0,
+    "tasks_over_50ms": 0,
+    "longest_task_ms": 7.6,
+    "gc_longest_ms": 0.0,
+    "js_ms": 56.6,
+    "raf_ms": 14.0,
+    "style_ms": 8.0,
+    "layout_ms": 26.3,
+    "paint_ms": 52.5,
+    "gc_ms": 0.0,
+    "events_ms": 27.6,
+    "timers_ms": 0.0,
+    "gpu_upload_ms": 0.0,
+    "top_events": [
+     [
+      "Commit",
+      97.7,
+      243
+     ],
+     [
+      "v8.callFunction",
+      32.5,
+      914
+     ],
+     [
+      "Paint",
+      27.8,
+      378
+     ],
+     [
+      "EventDispatch",
+      27.6,
+      558
+     ],
+     [
+      "Layout",
+      26.3,
+      188
+     ],
+     [
+      "FunctionCall",
+      24.1,
+      914
+     ],
+     [
+      "FireAnimationFrame",
+      14.0,
+      243
+     ],
+     [
+      "PrePaint",
+      13.0,
+      672
+     ],
+     [
+      "Layerize",
+      11.7,
+      243
+     ],
+     [
+      "HitTest",
+      8.4,
+      437
+     ],
+     [
+      "UpdateLayoutTree",
+      8.0,
+      191
+     ],
+     [
+      "CpuProfiler::StartProfiling",
+      7.5,
+      1
+     ]
+    ]
+   },
+   "hotspots": [
+    [
+     "(program)",
+     297.2,
+     2262.0
+    ],
+    [
+     "requestAnimationFrame",
+     5.2,
+     39.4
+    ],
+    [
+     "move index.js:1559",
+     3.4,
+     26.0
+    ],
+    [
+     "tick",
+     2.7,
+     20.7
+    ],
+    [
+     "addEventListener.capture",
+     1.1,
+     8.6
+    ],
+    [
+     "(anonymous) index.js:1614",
+     0.4,
+     3.4
+    ],
+    [
+     "_paneAt index.js:1524",
+     0.3,
+     2.0
+    ]
+   ],
+   "panes": 1
+  },
+  {
+   "scenario": "drag-pan",
+   "seconds": 4.2,
+   "frames": 61,
+   "fps": 14.4,
+   "frame_ms": {
+    "p50": 100.0,
+    "p95": 149.9,
+    "p99": 226.7,
+    "max": 316.7
+   },
+   "frames_over_33ms_pct": 73.8,
+   "input_to_frame_ms": {
+    "p50": 39.2,
+    "p95": 109.1,
+    "max": 113.8
+   },
+   "input_events": 20,
+   "long_tasks": 45,
+   "long_task_ms_total": 4778,
+   "long_task_max_ms": 323,
+   "viewer_js_ms": {
+    "p50": 3.1,
+    "p95": 9.82,
+    "max": 204.1
+   },
+   "requests": 246,
+   "trace": {
+    "wall_ms": 4392,
+    "busy_pct": 96.7,
+    "tasks_over_16ms": 41,
+    "tasks_over_50ms": 40,
+    "longest_task_ms": 323.4,
+    "gc_longest_ms": 4.3,
+    "js_ms": 810.8,
+    "raf_ms": 377.1,
+    "style_ms": 3.1,
+    "layout_ms": 16.5,
+    "paint_ms": 35.2,
+    "gc_ms": 9.9,
+    "events_ms": 16.7,
+    "timers_ms": 10.7,
+    "gpu_upload_ms": 0.0,
+    "top_events": [
+     [
+      "Commit",
+      3678.6,
+      54
+     ],
+     [
+      "v8.callFunction",
+      417.2,
+      798
+     ],
+     [
+      "FunctionCall",
+      393.3,
+      591
+     ],
+     [
+      "FireAnimationFrame",
+      377.1,
+      96
+     ],
+     [
+      "CpuProfiler::StartProfiling",
+      29.0,
+      1
+     ],
+     [
+      "Paint",
+      18.6,
+      290
+     ],
+     [
+      "EventDispatch",
+      16.7,
+      299
+     ],
+     [
+      "Layout",
+      16.5,
+      26
+     ],
+     [
+      "HandlePostMessage",
+      16.5,
+      228
+     ],
+     [
+      "TimerFire",
+      10.7,
+      162
+     ],
+     [
+      "PrePaint",
+      10.5,
+      64
+     ],
+     [
+      "Layerize",
+      6.0,
+      55
+     ]
+    ]
+   },
+   "hotspots": [
+    [
+     "(program)",
+     3834.9,
+     966.0
+    ],
+    [
+     "queueLevel index.js:2352",
+     212.6,
+     53.6
+    ],
+    [
+     "texImage2D",
+     30.8,
+     7.8
+    ],
+    [
+     "postMessage",
+     14.9,
+     3.8
+    ],
+    [
+     "_schedule index.js:2333",
+     9.3,
+     2.3
+    ],
+    [
+     "_frameBody index.js:1795",
+     8.0,
+     2.0
+    ],
+    [
+     "(garbage collector)",
+     7.0,
+     1.8
+    ],
+    [
+     "disable",
+     6.4,
+     1.6
+    ],
+    [
+     "clear",
+     5.7,
+     1.4
+    ],
+    [
+     "_draw index.js:1989",
+     5.3,
+     1.3
+    ],
+    [
+     "_key index.js:1974",
+     5.3,
+     1.3
+    ],
+    [
+     "_ready index.js:1983",
+     5.2,
+     1.3
+    ],
+    [
+     "(anonymous)",
+     5.0,
+     1.3
+    ],
+    [
+     "now index.js:13",
+     4.8,
+     1.2
+    ],
+    [
+     "setTimeout",
+     4.1,
+     1.0
+    ]
+   ],
+   "panes": 16
+  },
+  {
+   "scenario": "wheel-zoom",
+   "seconds": 4.5,
+   "frames": 53,
+   "fps": 11.8,
+   "frame_ms": {
+    "p50": 66.7,
+    "p95": 316.6,
+    "p99": 356.7,
+    "max": 400
+   },
+   "frames_over_33ms_pct": 92.5,
+   "input_to_frame_ms": {
+    "p50": 160.7,
+    "p95": 781.4,
+    "max": 872.2
+   },
+   "input_events": 17,
+   "long_tasks": 49,
+   "long_task_ms_total": 5042,
+   "long_task_max_ms": 384,
+   "viewer_js_ms": {
+    "p50": 2.35,
+    "p95": 7.66,
+    "max": 128.2
+   },
+   "requests": 81,
+   "trace": {
+    "wall_ms": 4821,
+    "busy_pct": 98.8,
+    "tasks_over_16ms": 48,
+    "tasks_over_50ms": 48,
+    "longest_task_ms": 315.0,
+    "gc_longest_ms": 126.7,
+    "js_ms": 627.6,
+    "raf_ms": 281.1,
+    "style_ms": 5.6,
+    "layout_ms": 17.9,
+    "paint_ms": 38.6,
+    "gc_ms": 152.1,
+    "events_ms": 9.1,
+    "timers_ms": 16.3,
+    "gpu_upload_ms": 0.0,
+    "top_events": [
+     [
+      "Commit",
+      4334.0,
+      51
+     ],
+     [
+      "v8.callFunction",
+      318.9,
+      540
+     ],
+     [
+      "FunctionCall",
+      308.7,
+      259
+     ],
+     [
+      "FireAnimationFrame",
+      281.1,
+      101
+     ],
+     [
+      "MinorGC",
+      131.7,
+      3
+     ],
+     [
+      "V8.GCScavenger",
+      131.5,
+      3
+     ],
+     [
+      "V8.GC_TIME_TO_SAFEPOINT",
+      125.8,
+      8
+     ],
+     [
+      "Paint",
+      21.2,
+      398
+     ],
+     [
+      "Layout",
+      17.9,
+      23
+     ],
+     [
+      "TimerFire",
+      16.3,
+      15
+     ],
+     [
+      "HandlePostMessage",
+      11.2,
+      81
+     ],
+     [
+      "CpuProfiler::StartProfiling",
+      10.3,
+      1
+     ]
+    ]
+   },
+   "hotspots": [
+    [
+     "(program)",
+     4451.6,
+     1488.7
+    ],
+    [
+     "(garbage collector)",
+     141.5,
+     47.3
+    ],
+    [
+     "texImage2D",
+     21.6,
+     7.2
+    ],
+    [
+     "dispatchEvent",
+     14.6,
+     4.9
+    ],
+    [
+     "_schedule index.js:2333",
+     11.0,
+     3.7
+    ],
+    [
+     "queueLevel index.js:2352",
+     10.5,
+     3.5
+    ],
+    [
+     "_updateScaleBar index.js:1877",
+     9.5,
+     3.2
+    ],
+    [
+     "postMessage",
+     6.9,
+     2.3
+    ],
+    [
+     "uniform1i",
+     5.4,
+     1.8
+    ],
+    [
+     "setTimeout",
+     4.8,
+     1.6
+    ],
+    [
+     "visit index.js:1925",
+     4.6,
+     1.5
+    ],
+    [
+     "_drawAnnotations index.js:2132",
+     4.5,
+     1.5
+    ],
+    [
+     "clearTimeout",
+     4.3,
+     1.5
+    ],
+    [
+     "_frameBody index.js:1795",
+     4.3,
+     1.4
+    ],
+    [
+     "_ready index.js:1983",
+     3.4,
+     1.1
+    ]
+   ],
+   "panes": 16
+  },
+  {
+   "scenario": "fling",
+   "seconds": 7.6,
+   "frames": 35,
+   "fps": 4.6,
+   "frame_ms": {
+    "p50": 299.9,
+    "p95": 365.1,
+    "p99": 400.0,
+    "max": 400
+   },
+   "frames_over_33ms_pct": 91.4,
+   "input_to_frame_ms": {
+    "p50": 285.9,
+    "p95": 347.0,
+    "max": 360.7
+   },
+   "input_events": 11,
+   "long_tasks": 31,
+   "long_task_ms_total": 9290,
+   "long_task_max_ms": 389,
+   "viewer_js_ms": {
+    "p50": 3.35,
+    "p95": 9.97,
+    "max": 10.6
+   },
+   "requests": 131,
+   "trace": {
+    "wall_ms": 9041,
+    "busy_pct": 99.7,
+    "tasks_over_16ms": 30,
+    "tasks_over_50ms": 30,
+    "longest_task_ms": 389.9,
+    "gc_longest_ms": 1.1,
+    "js_ms": 335.6,
+    "raf_ms": 153.8,
+    "style_ms": 1.7,
+    "layout_ms": 8.2,
+    "paint_ms": 22.2,
+    "gc_ms": 3.0,
+    "events_ms": 7.4,
+    "timers_ms": 9.5,
+    "gpu_upload_ms": 0.0,
+    "top_events": [
+     [
+      "Commit",
+      8737.2,
+      33
+     ],
+     [
+      "v8.callFunction",
+      175.3,
+      506
+     ],
+     [
+      "FunctionCall",
+      160.3,
+      410
+     ],
+     [
+      "FireAnimationFrame",
+      153.8,
+      65
+     ],
+     [
+      "CpuProfiler::StartProfiling",
+      16.0,
+      1
+     ],
+     [
+      "Paint",
+      14.9,
+      140
+     ],
+     [
+      "HandlePostMessage",
+      12.1,
+      141
+     ],
+     [
+      "TimerFire",
+      9.5,
+      144
+     ],
+     [
+      "Layout",
+      8.2,
+      13
+     ],
+     [
+      "EventDispatch",
+      7.4,
+      146
+     ],
+     [
+      "Layerize",
+      3.9,
+      34
+     ],
+     [
+      "PrePaint",
+      3.4,
+      44
+     ]
+    ]
+   },
+   "hotspots": [
+    [
+     "(program)",
+     8022.6,
+     5842.2
+    ],
+    [
+     "texImage2D",
+     48.2,
+     35.1
+    ],
+    [
+     "setTimeout",
+     16.2,
+     11.8
+    ],
+    [
+     "bindVertexArray",
+     6.8,
+     4.9
+    ],
+    [
+     "uniform3f",
+     6.6,
+     4.8
+    ],
+    [
+     "postMessage",
+     5.5,
+     4.0
+    ],
+    [
+     "bindTexture",
+     5.2,
+     3.8
+    ],
+    [
+     "dispatchEvent",
+     5.0,
+     3.7
+    ],
+    [
+     "queueLevel index.js:2352",
+     3.8,
+     2.7
+    ],
+    [
+     "_schedule index.js:2333",
+     3.1,
+     2.3
+    ],
+    [
+     "_ready index.js:1983",
+     2.8,
+     2.1
+    ],
+    [
+     "_drawTiles index.js:2018",
+     2.8,
+     2.1
+    ],
+    [
+     "useProgram",
+     2.7,
+     2.0
+    ],
+    [
+     "activeTexture",
+     2.7,
+     2.0
+    ],
+    [
+     "clip",
+     1.7,
+     1.2
+    ]
+   ],
+   "panes": 16
+  },
+  {
+   "scenario": "hover",
+   "seconds": 4.0,
+   "frames": 236,
+   "fps": 58.9,
+   "frame_ms": {
+    "p50": 16.7,
+    "p95": 16.8,
+    "p99": 294.2,
+    "max": 316.6
+   },
+   "frames_over_33ms_pct": 3.0,
+   "input_to_frame_ms": {
+    "p50": 6.9,
+    "p95": 7.8,
+    "max": 298.1
+   },
+   "input_events": 206,
+   "long_tasks": 7,
+   "long_task_ms_total": 1964,
+   "long_task_max_ms": 303,
+   "viewer_js_ms": {
+    "p50": 1.45,
+    "p95": 1.68,
+    "max": 1.7
+   },
+   "requests": 3,
+   "trace": {
+    "wall_ms": 4865,
+    "busy_pct": 36.1,
+    "tasks_over_16ms": 5,
+    "tasks_over_50ms": 5,
+    "longest_task_ms": 303.7,
+    "gc_longest_ms": 0.4,
+    "js_ms": 88.3,
+    "raf_ms": 31.2,
+    "style_ms": 6.5,
+    "layout_ms": 27.3,
+    "paint_ms": 69.3,
+    "gc_ms": 0.6,
+    "events_ms": 25.9,
+    "timers_ms": 0.3,
+    "gpu_upload_ms": 0.0,
+    "top_events": [
+     [
+      "Commit",
+      1477.0,
+      212
+     ],
+     [
+      "v8.callFunction",
+      51.0,
+      818
+     ],
+     [
+      "FunctionCall",
+      37.3,
+      818
+     ],
+     [
+      "FireAnimationFrame",
+      31.2,
+      217
+     ],
+     [
+      "Paint",
+      30.2,
+      312
+     ],
+     [
+      "Layout",
+      27.3,
+      154
+     ],
+     [
+      "EventDispatch",
+      25.9,
+      535
+     ],
+     [
+      "Layerize",
+      25.6,
+      212
+     ],
+     [
+      "HitTest",
+      13.8,
+      370
+     ],
+     [
+      "PrePaint",
+      13.4,
+      572
+     ],
+     [
+      "CpuProfiler::StartProfiling",
+      9.9,
+      1
+     ],
+     [
+      "UpdateLayoutTree",
+      6.5,
+      156
+     ]
+    ]
+   },
+   "hotspots": [
+    [
+     "(program)",
+     1189.4,
+     6878.1
+    ],
+    [
+     "move index.js:1559",
+     4.8,
+     27.5
+    ],
+    [
+     "requestAnimationFrame",
+     4.7,
+     27.1
+    ],
+    [
+     "(garbage collector)",
+     2.3,
+     13.1
+    ],
+    [
+     "tick",
+     1.3,
+     7.5
+    ],
+    [
+     "_paneAt index.js:1524",
+     1.0,
+     5.9
+    ],
+    [
+     "texImage2D",
+     0.8,
+     4.7
+    ],
+    [
+     "getBoundingClientRect",
+     0.7,
+     4.1
+    ],
+    [
+     "(anonymous) index.js:1614",
+     0.4,
+     2.2
+    ],
+    [
+     "_frameBody index.js:1795",
+     0.3,
+     2.0
+    ],
+    [
+     "queueLevel index.js:2352",
+     0.3,
+     2.0
+    ],
+    [
+     "(anonymous) index.js:1979",
+     0.3,
+     1.9
+    ],
+    [
+     "addEventListener.capture",
+     0.3,
+     1.9
+    ]
+   ],
+   "panes": 16
+  }
+ ]
+}

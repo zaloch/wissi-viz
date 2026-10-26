@@ -60,7 +60,19 @@
       { units: document.getElementById('gu').value, ...(m ? { magnification: +m } : {}) });
   };
   document.getElementById('fit').onclick = () => grid.fit('all');
-  grid.addEventListener('viewchange', (e) => { const d = e.detail; if (d.pane === grid.active) log(`pane ${d.pane}: ${d.x.toFixed(0)}, ${d.y.toFixed(0)} px · ${d.magnification ? d.magnification.toFixed(1) + '×' : d.zoom.toFixed(3)} · ${JSON.stringify(grid.stats())}`); });
+  // Status line: never touch the DOM per frame — layout/paint of the text competes with the WebGL frames.
+  // Coalesce to ≤4 Hz with a trailing update so the resting view is always shown.
+  let lastView = null, logTimer = 0, lastLog = 0;
+  const flushLog = () => {
+    logTimer = 0; lastLog = performance.now();
+    const d = lastView; if (!d) return;
+    log(`pane ${d.pane}: ${d.x.toFixed(0)}, ${d.y.toFixed(0)} px · ${d.magnification ? d.magnification.toFixed(1) + '×' : d.zoom.toFixed(3)} · ${JSON.stringify(grid.stats())}`);
+  };
+  grid.addEventListener('viewchange', (e) => {
+    if (e.detail.pane !== grid.active) return;
+    lastView = e.detail;
+    if (!logTimer) logTimer = setTimeout(flushLog, Math.max(0, 250 - (performance.now() - lastLog)));
+  });
   grid.addEventListener('objectclick', (e) => log(`object: ${e.detail.layer} #${e.detail.index} ${e.detail.class} ${JSON.stringify(e.detail.properties || {})}`));
   grid.addEventListener('draw', (e) => log(`drew ${e.detail.geometry.type} on pane ${e.detail.pane}`));
   window.grid = grid;

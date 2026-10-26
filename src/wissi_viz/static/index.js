@@ -22,14 +22,17 @@ const now = () => performance.now();
 //  prefetch    at rest, quietly prefetch the next finer level around the centre (next zoom step is instant)
 //  destination while a pane animates toward a known view (goTo, double-click, wheel), fetch for where it will
 //              land first; the in-between views only get spare capacity
+//  adaptive    while moving and frames are slow (> ~20 ms), render at reduced resolution (≥ 0.5×) into an offscreen
+//              buffer that the GPU stretches to the screen; full resolution again the moment motion stops
 //  decoupled   start the next request as soon as one finishes, and size GPU uploads to the real frame time,
 //              so slow frames (weak/software GPUs, many panes) don't throttle the network
 const LOD_DEFAULT = { motionBias: 2, minify: 0.5, quadtree: true, background: true, prefetch: false, decoupled: true, destination: true,
-  overlays: 'server' };  // overlays: 'server' (pyramid tiles on demand) | 'client' (download columns once, build in a worker) | 'auto'
+  overlays: 'server', adaptive: true };  // overlays: 'server' (pyramid tiles on demand) | 'client' (download columns once, build in a worker) | 'auto'
 const BG_PRIO = 4;
 const CLIENT_OVERLAY_MAX = 300_000;    // overlays: 'auto' → client mode for layers up to this many objects …
 const CLIENT_OVERLAY_TOTAL = 1_000_000; // … while the viewer's client-side total stays below this
-const LOD_LEGACY = { motionBias: 1, minify: 1, quadtree: false, background: false, prefetch: false, decoupled: false, destination: false };
+const LOD_LEGACY = { motionBias: 1, minify: 1, quadtree: false, background: false, prefetch: false, decoupled: false, destination: false,
+  adaptive: false };
 
 function hexToRgb(h) {
   h = String(h || '#ffffff').replace('#', '');
@@ -266,6 +269,35 @@ void main(){ if (v_col.a <= 0.0) discard;
   o = vec4(v_col.rgb, v_col.a * smoothstep(0.25, 0.16, d)); }`;
 
 // parametric cells (ellipse / rect from the bounding box): one instanced quad each, outline + fill by SDF
+// Instanced cell shapes (cx, cy, rx, ry) binned on a coarse grid by centre — counting sort, row-major — so a draw
+// can submit only the grid rows that intersect the view. Real GPUs shrug at thousands of off-screen instances,
+// but without one (VDI / thin clients: Chrome's SwiftShader) every instance costs ~10 µs even when clipped:
+// 12.7k instances per pane at 1:1 took ~140 ms a frame.
+function gridShapes(shp, col, kind, n) {
+  const G = Math.max(1, Math.min(32, Math.round(Math.sqrt(n / 32))));
+  if (G === 1) return { shp, col, kind, grid: null };
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, pad = 0;
+  for (let i = 0; i < n; i++) {
+    const x = shp[4 * i], y = shp[4 * i + 1];
+    if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+    const r = Math.max(shp[4 * i + 2], shp[4 * i + 3]); if (r > pad) pad = r;
+  }
+  const cw = (x1 - x0) / G || 1, ch = (y1 - y0) / G || 1;
+  const cell = new Uint16Array(n), off = new Uint32Array(G * G + 1);
+  for (let i = 0; i < n; i++) {
+    const c = Math.min(G - 1, ((shp[4 * i] - x0) / cw) | 0) + G * Math.min(G - 1, ((shp[4 * i + 1] - y0) / ch) | 0);
+    cell[i] = c; off[c + 1]++;
+  }
+  for (let c = 0; c < G * G; c++) off[c + 1] += off[c];
+  const pos = off.slice(0, G * G), s2 = new Float32Array(n * 4), c2 = new col.constructor(n), k2 = new kind.constructor(n);
+  for (let i = 0; i < n; i++) {
+    const j = pos[cell[i]]++;
+    s2[4 * j] = shp[4 * i]; s2[4 * j + 1] = shp[4 * i + 1]; s2[4 * j + 2] = shp[4 * i + 2]; s2[4 * j + 3] = shp[4 * i + 3];
+    c2[j] = col[i]; k2[j] = kind[i];
+  }
+  return { shp: s2, col: c2, kind: k2, grid: { G, x0, y0, cw, ch, off, pad } };
+}
+
 const VS_SHP = `#version 300 es
 layout(location=0) in vec4 a_shp; layout(location=1) in uint a_col; layout(location=2) in uint a_kind;
 uniform vec3 u_view; uniform vec2 u_vp; uniform float u_w;
@@ -711,9 +743,12 @@ class AnnLayer {
     if (t.raw) {
       attr(d.vao, 1, t.size, 1, gl.UNSIGNED_SHORT, false); attr(d.vao, 2, t.col, 1, gl.UNSIGNED_SHORT, true); attr(d.vao, 3, t.kind, 1, gl.UNSIGNED_BYTE, true);
       d.cpu = { pos: t.pos, size: t.size, cls: t.cls, orig: t.orig, kind: t.kind };
+      const g = gridShapes(t.shp, t.col, t.kind, t.n);
       d.vaoShp = gl.createVertexArray(); gl.bindVertexArray(d.vaoShp);
-      attr(d.vaoShp, 0, t.shp, 4, gl.FLOAT, false, false, 1); attr(d.vaoShp, 1, t.col, 1, gl.UNSIGNED_SHORT, true, false, 1);
-      attr(d.vaoShp, 2, t.kind, 1, gl.UNSIGNED_BYTE, true, false, 1);
+      attr(d.vaoShp, 0, g.shp, 4, gl.FLOAT, false, false, 1); attr(d.vaoShp, 1, g.col, 1, gl.UNSIGNED_SHORT, true, false, 1);
+      attr(d.vaoShp, 2, g.kind, 1, gl.UNSIGNED_BYTE, true, false, 1);
+      d.shpBufs = d.bufs.slice(-3);
+      d.shpGrid = g.grid;
     } else {
       attr(d.vao, 1, t.count, 1, gl.UNSIGNED_SHORT, false); attr(d.vao, 2, t.col, 1, gl.UNSIGNED_SHORT, true);
       if (t.hasHist) {
@@ -812,11 +847,13 @@ class AnnLayer {
     const sc = take(Uint16Array, S), tc = take(Uint16Array, T);
     const d = { nSeg: S, nTri: T, nShp: P, bytes: buf.byteLength, last: this.grid.frame, bufs: [] };
     if (P) {
-      const shp = take(Float32Array, P * 4), scol = take(Uint16Array, P), skind = take(Uint8Array, P);
+      const g = gridShapes(take(Float32Array, P * 4), take(Uint16Array, P), take(Uint8Array, P), P);
       d.vaoShp = gl.createVertexArray();
       gl.bindVertexArray(d.vaoShp);
-      d.bufs.push(this._attr(0, shp, 4, gl.FLOAT, false, 1), this._attr(1, scol, 1, gl.UNSIGNED_SHORT, true, 1),
-        this._attr(2, skind, 1, gl.UNSIGNED_BYTE, true, 1));
+      d.shpBufs = [this._attr(0, g.shp, 4, gl.FLOAT, false, 1), this._attr(1, g.col, 1, gl.UNSIGNED_SHORT, true, 1),
+        this._attr(2, g.kind, 1, gl.UNSIGNED_BYTE, true, 1)];
+      d.shpGrid = g.grid;
+      d.bufs.push(...d.shpBufs);
     }
     if (S) {
       d.vaoSeg = gl.createVertexArray();
@@ -1355,7 +1392,8 @@ export class WsiGrid extends HTMLElement {
       inflight: this.inflight.size, queuedUploads: this.uploads.length, frame: this.frame, budgetMB: this.budget / 2 ** 20,
       ...this.counters, maxInflight: this.maxInflight,
       overdraw: this.fx.area ? +(this.fx.fill / this.fx.area).toFixed(3) : null,
-      drawsPerFrame: this.fx.frames ? +(this.fx.draws / this.fx.frames).toFixed(1) : null, lod: { ...this.lod } };
+      drawsPerFrame: this.fx.frames ? +(this.fx.draws / this.fx.frames).toFixed(1) : null, lowresFrames: this.fx.lowres || 0,
+      backingResizes: this.fx.resizes || 0, renderScale: this._rs || 1, lod: { ...this.lod } };
   }
 
   setTextureBudget(mb) { this.budget = mb * 2 ** 20; this._evict(); }
@@ -1427,10 +1465,10 @@ export class WsiGrid extends HTMLElement {
     this.dpr = dpr;
     const W = this.$root.clientWidth, H = this.$root.clientHeight;
     const cw = Math.max(1, Math.round(W * dpr)), ch = Math.max(1, Math.round(H * dpr));
-    if (this.$canvas.width !== cw || this.$canvas.height !== ch) {
-      this.$canvas.width = this.$ov.width = cw;
-      this.$canvas.height = this.$ov.height = ch;
-    }
+    this._cw = cw;
+    this._ch = ch;
+    if (this.$canvas.width !== cw || this.$canvas.height !== ch) { this.$canvas.width = cw; this.$canvas.height = ch; }
+    if (this.$ov.width !== cw || this.$ov.height !== ch) { this.$ov.width = cw; this.$ov.height = ch; }
     const root = this.$root.getBoundingClientRect();
     for (const p of this.panes) {
       if (!p.el) continue;
@@ -1559,10 +1597,9 @@ export class WsiGrid extends HTMLElement {
     const move = (e) => {
       const hit = this._paneAt(e.clientX, e.clientY);
       if (hit?.p.view) {
-        const [ix, iy] = this._toImage(hit.p, hit.sx, hit.sy);
-        const info = hit.p.slide.info;
-        hit.p.$coords.textContent = info?.mpp ? `${(ix * info.mpp[0]).toFixed(1)}, ${(iy * info.mpp[1]).toFixed(1)} µm`
-          : `${ix.toFixed(0)}, ${iy.toFixed(0)} px`;
+        // the coordinate readout is written at most once per frame (pointer events can arrive at 120–1000 Hz)
+        this._coordsHit = hit;
+        if (!this._coordsRaf) this._coordsRaf = requestAnimationFrame(() => this._writeCoords());
         if (this._drawing && this._drawing.p === hit.p) this._drawMove(hit, e);
       }
       if (!ptrs.has(e.pointerId)) return;
@@ -1611,7 +1648,7 @@ export class WsiGrid extends HTMLElement {
     root.addEventListener('pointermove', move);
     root.addEventListener('pointerup', up);
     root.addEventListener('pointercancel', up);
-    root.addEventListener('pointerleave', () => this.panes.forEach((p) => p.$coords && (p.$coords.textContent = '')));
+    root.addEventListener('pointerleave', () => this.panes.forEach((p) => { if (p.$coords && p._coordsTxt) { p._coordsTxt = ''; p.$coords.textContent = ''; } }));
     root.addEventListener('wheel', (e) => {
       const hit = this._paneAt(e.clientX, e.clientY);
       if (!hit || !hit.p.view) return;
@@ -1643,6 +1680,16 @@ export class WsiGrid extends HTMLElement {
       else return;
       e.preventDefault();
     });
+  }
+
+  _writeCoords() {
+    this._coordsRaf = 0;
+    const hit = this._coordsHit;
+    if (!hit?.p.view || !hit.p.$coords) return;
+    const [ix, iy] = this._toImage(hit.p, hit.sx, hit.sy);
+    const info = hit.p.slide?.info;
+    const txt = info?.mpp ? `${(ix * info.mpp[0]).toFixed(1)}, ${(iy * info.mpp[1]).toFixed(1)} µm` : `${ix.toFixed(0)}, ${iy.toFixed(0)} px`;
+    if (hit.p._coordsTxt !== txt) { hit.p._coordsTxt = txt; hit.p.$coords.textContent = txt; }
   }
 
   _pinchState(ptrs) {
@@ -1782,7 +1829,7 @@ export class WsiGrid extends HTMLElement {
 
   // ---------------------------------------------------------------- frame loop
   requestRender() {
-    if (!this._raf && this.gl && this.isConnected) this._raf = requestAnimationFrame((t) => this._frame(t));
+    if (!this._raf && this.gl && this.isConnected) { this._reqAt = now(); this._raf = requestAnimationFrame((t) => this._frame(t)); }
   }
 
   _frame() {
@@ -1790,16 +1837,45 @@ export class WsiGrid extends HTMLElement {
     if (this._lost) return;
     const t = now();
     try { this._frameBody(t); } finally { if (this.jsFrameMs) { this.jsFrameMs.push(now() - t); if (this.jsFrameMs.length > 20000) this.jsFrameMs.length = 0; } }
+    this._probeCost(t);
+  }
+
+  // What a frame really costs the main thread: our JS *plus* the browser's style/paint/commit that follow the rAF
+  // callback (without a GPU, Chrome reads the whole canvas back during commit — often far more than our JS). A
+  // message posted now runs right after that work.
+  _probeCost(t) {
+    if (!this._mc) {
+      this._mc = new MessageChannel();
+      this._mc.port1.onmessage = (e) => { const c = now() - e.data; this._frameCost = this._frameCost == null ? c : 0.7 * this._frameCost + 0.3 * c; };
+    }
+    this._mc.port2.postMessage(t);
+  }
+
+  // A tile (or overlay tile) arrived. Normally: draw it on the next frame. At rest on a machine where frames are
+  // expensive (≥ 40 ms, e.g. no GPU), batch arrivals into one redraw every ~2 frame costs (≤ 250 ms) so a stream of
+  // tiles doesn't keep the main thread saturated — the user's next drag or wheel isn't stuck behind redraws.
+  _arrived() {
+    if (this._raf) return;
+    const fc = this._frameCost || 0;
+    if (fc < 40 || !this.lod.adaptive || this.panes.some((p) => p.view && this._isMoving(p))) { this.requestRender(); return; }
+    const wait = Math.min(250, 2 * fc) - (now() - (this._prevFrameAt || 0));
+    if (wait <= 0) { this.requestRender(); return; }
+    if (!this._arriveTimer) this._arriveTimer = setTimeout(() => { this._arriveTimer = 0; this.counters.coalesced = (this.counters.coalesced || 0) + 1; this.requestRender(); }, wait);
   }
 
   _frameBody(t) {
-    if (this._lastT) this._frameMs = 0.8 * (this._frameMs || 16) + 0.2 * Math.min(1000, t - this._lastT);
+    // frame cost for adaptive resolution: the interval between back-to-back frames, or — after an idle gap, e.g.
+    // input-driven frames during a drag — how long the browser took to give us the frame we asked for
+    const gap = this._prevFrameAt ? t - this._prevFrameAt : 1e9;
+    const sample = gap < 250 ? gap : this._reqAt ? t - this._reqAt : 16;
+    this._prevFrameAt = t;
+    this._frameMs = 0.75 * (this._frameMs || 16) + 0.25 * Math.min(500, Math.max(sample, 0));
     const dt = this._lastT ? Math.min(64, t - this._lastT) : 16;
     this._lastT = t;
     let again = false;
     for (const p of this.panes) if (this._animate(p, dt)) again = true;
     for (const p of this.panes) this._trackMotion(p, t);
-    if (this._processUploads()) again = true;
+    const moreUploads = this._processUploads();
     this.frame++;
     if (this._legendDirty) { this._legendDirty = false; this._legends(); }
     this._draw();
@@ -1807,7 +1883,10 @@ export class WsiGrid extends HTMLElement {
     this._evict();
     this._emitViews(t);
     if (again) this.requestRender();
-    else this._lastT = 0;
+    else {
+      this._lastT = 0;
+      if (moreUploads) this._arrived();   // back-to-back frames normally; batched at rest when frames are expensive
+    }
   }
 
   _animate(p, dt) {
@@ -1851,12 +1930,21 @@ export class WsiGrid extends HTMLElement {
     if (k !== p._viewKey) {
       p._viewKey = k;
       p.movedAt = t;
-      if (this.lod.motionBias > 1 || this.lod.prefetch) {
-        clearTimeout(p._restTimer);
-        p._restTimer = setTimeout(() => this.requestRender(), 170);
-        if (this.lod.prefetch) { clearTimeout(p._idleTimer); p._idleTimer = setTimeout(() => this.requestRender(), 420); }
-      }
+      if (this.lod.motionBias > 1 || this.lod.prefetch || this.lod.adaptive) this._wakeAt(t + (this.lod.prefetch ? 420 : 170));
     }
+  }
+
+  // One timer for the whole grid: render once more when the latest motion has settled (switch to full resolution)
+  _wakeAt(t) {
+    this._restAt = Math.max(this._restAt || 0, t);
+    if (this._restTimer) return;
+    const fire = () => {
+      const left = this._restAt - now();
+      if (left > 2) { this._restTimer = setTimeout(fire, left); return; }
+      this._restTimer = 0;
+      this.requestRender();
+    };
+    this._restTimer = setTimeout(fire, Math.max(0, this._restAt - now()));
   }
 
   _isMoving(p, t = now()) { return !!(p.target || p.vel) || t - (p.movedAt || 0) < 150; }
@@ -1864,27 +1952,36 @@ export class WsiGrid extends HTMLElement {
   _emitViews(t) {
     if (t - (this._lastEmit || 0) < 120) { if (!this._emitPending) { this._emitPending = true; setTimeout(() => { this._emitPending = false; this._emitViews(now()); }, 130); } return; }
     this._lastEmit = t;
+    let changed = false;
     for (const p of this.panes) {
       if (!p.view) continue;
       const key = `${p.view.cx.toFixed(1)}|${p.view.cy.toFixed(1)}|${p.view.scale.toPrecision(5)}|${p.rect.w}|${p.rect.h}`;
       if (key === p.lastEmit) continue;
       p.lastEmit = key;
-      this._emit('viewchange', this._viewDetail(p));
+      changed = true;
+      p._detail = this._viewDetail(p);
+      if (this._hasViewListeners !== false) this._emit('viewchange', p._detail);
       this._updateScaleBar(p);
     }
+    // one snapshot of every pane per emit: apps (NiceGUI) listen to this instead of 16 per-pane events, and a
+    // throttled snapshot can never lose a pane's latest view
+    if (changed) this._emit('views', { views: this.panes.map((p) => (p.view ? p._detail || this._viewDetail(p) : null)) });
   }
 
   _updateScaleBar(p) {
     const i = p.slide?.info;
     if (!p.$scale) return;
-    if (!i?.mpp || !p.view) { p.$scale.style.display = 'none'; return; }
+    if (!i?.mpp || !p.view) { if (p._scaleKey !== 'none') { p._scaleKey = 'none'; p.$scale.style.display = 'none'; } return; }
     const umPerPx = i.mpp[0] / p.view.scale;
     const target = 110 * umPerPx;
     const pow = Math.pow(10, Math.floor(Math.log10(target)));
     const nice = [1, 2, 5, 10].map((m) => m * pow).filter((v) => v <= target).pop() || pow;
+    const w = `${Math.round(nice / umPerPx)}px`, txt = nice >= 1000 ? `${nice / 1000} mm` : nice >= 1 ? `${nice} µm` : `${nice * 1000} nm`;
+    if (p._scaleKey === w + txt) return;           // unchanged (panning): no DOM writes, no style/layout
+    p._scaleKey = w + txt;
     p.$scale.style.display = '';
-    p.$scale.querySelector('i').style.width = `${nice / umPerPx}px`;
-    p.$scale.querySelector('span').textContent = nice >= 1000 ? `${nice / 1000} mm` : nice >= 1 ? `${nice} µm` : `${nice * 1000} nm`;
+    (p._scaleI ||= p.$scale.querySelector('i')).style.width = w;
+    (p._scaleS ||= p.$scale.querySelector('span')).textContent = txt;
   }
 
   // ---------------------------------------------------------------- tiles: geometry
@@ -1971,7 +2068,21 @@ export class WsiGrid extends HTMLElement {
     return { x0, x1, y0, y1 };
   }
 
-  _key(s, L, x, y, c) { return `${s.url}|${L}|${x}|${y}|${c ?? 'rgb'}`; }
+  // Tile key strings are made once per tile and cached by a numeric id: the scheduler and the draw loop look up
+  // thousands of tiles per frame, and building strings each time fed the garbage collector (pauses up to 127 ms)
+  _key(s, L, x, y, c) {
+    // exact in a double up to 2^53: level < 64, x / y < 65536, channel < 4095 → < 2^50
+    const n = ((L * 65536 + x) * 65536 + y) * 4096 + (c == null ? 0 : c + 1);
+    let m = s._keys;
+    if (!m) m = s._keys = new Map();
+    let k = m.get(n);
+    if (k === undefined) {
+      if (m.size > 200000) m.clear();
+      k = `${s.url}|${L}|${x}|${y}|${c ?? 'rgb'}`;
+      m.set(n, k);
+    }
+    return k;
+  }
 
   _visibleChannels(p) {
     if (p.slide.info.mode !== 'channels') return [null];
@@ -1986,11 +2097,49 @@ export class WsiGrid extends HTMLElement {
   }
 
   // ---------------------------------------------------------------- drawing
+  // Adaptive resolution: the fraction of the canvas resolution to render at this frame (1 = full). Only while
+  // something moves and frames are slower than ~20 ms; aims at ~16 ms frames (cost ∝ scale²). Snaps to 1, ¾ or ½
+  // so the backing store is only reallocated when the step changes; full resolution as soon as motion stops.
+  _renderScale() {
+    if (!this.lod.adaptive) return (this._rs = 1);
+    const t = now();
+    if (!this.panes.some((p) => p.view && this._isMoving(p, t))) { this._rsc = 1; return (this._rs = 1); }
+    // frame time from the frame clock, or the measured main-thread cost when that's worse (input-driven frames)
+    const fm = Math.max(this._frameMs || 16, this._frameCost || 0), cur = this._rsc || 1;
+    if (fm < 20 && cur >= 1) return (this._rs = 1);
+    const want = clamp(cur * Math.sqrt(16.7 / Math.max(fm, 1)), 0.5, 1);
+    const next = (this._rsc = clamp(0.6 * cur + 0.4 * want + (fm < 12 ? 0.05 : 0), 0.5, 1));   // smoothed; recovers when fast
+    return (this._rs = next >= 0.9 ? 1 : next >= 0.65 ? 0.75 : 0.5);
+  }
+
   _draw() {
-    const gl = this.gl;
-    const H = this.$canvas.height, dpr = this.dpr || 1;
+    const CW = this._cw || this.$canvas.width, CH = this._ch || this.$canvas.height, dpr0 = this.dpr || 1;
+    const rs = this._renderScale();
+    // Lower resolution = a smaller WebGL backing store, stretched by CSS. (Rendering into a small offscreen buffer
+    // and blitting up would cut our fill cost but not the browser's: without a GPU, Chrome's software compositor
+    // reads the whole drawing buffer back every frame, and that readback ∝ backing-store pixels dominated frames.)
+    const W = rs < 1 ? Math.max(1, Math.round(CW * rs)) : CW, H = rs < 1 ? Math.max(1, Math.round(CH * rs)) : CH;
+    if (this.$canvas.width !== W || this.$canvas.height !== H) {
+      this.$canvas.width = W;
+      this.$canvas.height = H;
+      this.fx.resizes = (this.fx.resizes || 0) + 1;
+    }
+    if (rs < 1) {
+      this.dpr = dpr0 * W / CW;
+      this.fx.lowres = (this.fx.lowres || 0) + 1;
+    }
+    try {
+      this._drawScene(W, H);
+    } finally {
+      this.dpr = dpr0;
+    }
+    this._drawOverlay();
+  }
+
+  _drawScene(W, H) {
+    const gl = this.gl, dpr = this.dpr || 1;
     gl.disable(gl.SCISSOR_TEST);
-    gl.viewport(0, 0, this.$canvas.width, this.$canvas.height);
+    gl.viewport(0, 0, W, H);
     gl.clearColor(0.043, 0.051, 0.063, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.enable(gl.SCISSOR_TEST);
@@ -2012,7 +2161,6 @@ export class WsiGrid extends HTMLElement {
     }
     gl.disable(gl.SCISSOR_TEST);
     this.fx.frames++;
-    this._drawOverlay();
   }
 
   _drawTiles(p) {
@@ -2216,7 +2364,7 @@ export class WsiGrid extends HTMLElement {
         gl.uniform1f(pr.u.u_fill, fo);
         gl.uniform1f(pr.u.u_alpha, alpha);
         gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, L.ctex); gl.uniform1i(pr.u.u_ctex, 0);
-        for (const d of detail) if (d.nShp) { gl.bindVertexArray(d.vaoShp); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, d.nShp); }
+        for (const d of detail) if (d.nShp) this._drawShapes(d, d.nShp, vis, p.view.scale);
       }
       // point features on top of detailed buckets
       if (!L.pyr && kindRanges.length && detail.length) {
@@ -2265,6 +2413,34 @@ export class WsiGrid extends HTMLElement {
     }
   }
 
+  // Instanced shapes of one bucket / tile: only the grid rows (column spans) that intersect the view.
+  // WebGL2 has no base-instance draw, so each row re-points the instance attributes at its first instance.
+  _drawShapes(d, n, vis, scale) {
+    const gl = this.gl, g = d.shpGrid;
+    gl.bindVertexArray(d.vaoShp);
+    const at = (a) => {    // point the instance attributes at instance a (the VAO remembers it)
+      if ((d._at || 0) === a) return;
+      const [bS, bC, bK] = d.shpBufs;
+      gl.bindBuffer(gl.ARRAY_BUFFER, bS); gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 0, a * 16);
+      gl.bindBuffer(gl.ARRAY_BUFFER, bC); gl.vertexAttribIPointer(1, 1, gl.UNSIGNED_SHORT, 0, a * 2);
+      gl.bindBuffer(gl.ARRAY_BUFFER, bK); gl.vertexAttribIPointer(2, 1, gl.UNSIGNED_BYTE, 0, a);
+      d._at = a;
+    };
+    if (!g) { if (d.shpBufs) at(0); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, n); this.fx.shapes = (this.fx.shapes || 0) + n; return; }
+    const pad = g.pad + 4 / scale, G = g.G;
+    const c0 = Math.floor((vis[0] - pad - g.x0) / g.cw), c1 = Math.floor((vis[2] + pad - g.x0) / g.cw);
+    const r0 = Math.floor((vis[1] - pad - g.y0) / g.ch), r1 = Math.floor((vis[3] + pad - g.y0) / g.ch);
+    if (c1 < 0 || r1 < 0 || c0 >= G || r0 >= G) return;
+    const a0 = Math.max(0, c0), a1 = Math.min(G - 1, c1);
+    for (let r = Math.max(0, r0); r <= Math.min(G - 1, r1); r++) {
+      const a = g.off[r * G + a0], b = g.off[r * G + a1 + 1];
+      if (b <= a) continue;
+      at(a);
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, b - a);
+      this.fx.shapes = (this.fx.shapes || 0) + (b - a);
+    }
+  }
+
   _drawLocalShapes(p, L, vis, scaleDev, alpha) {
     const gl = this.gl, st = L.style, pr = this.prog.shp;
     gl.useProgram(pr.p);
@@ -2277,14 +2453,18 @@ export class WsiGrid extends HTMLElement {
     for (const [tx, ty] of L.pyrTiles(0, vis)) {
       const t = L.ptiles.get(L.pkey(0, tx, ty));
       if (!t || !t.vaoShp || !t.n) continue;
-      gl.bindVertexArray(t.vaoShp);
-      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, t.n);
+      this._drawShapes(t, t.n, vis, p.view.scale);
     }
   }
 
   _drawOverlay() {
     const c = this.ctx2d;
     if (!c) return;
+    // nothing selected and nothing being drawn: leave the (already clear) 2-D layer alone — clearing it every frame
+    // made the compositor re-upload a full-screen canvas per frame
+    const need = !!this._drawing || this.panes.some((p) => p.selection && p.selection.cx != null);
+    if (!need && !this._ovDirty) return;
+    this._ovDirty = need;
     const dpr = this.dpr || 1;
     c.setTransform(1, 0, 0, 1, 0, 0);
     c.clearRect(0, 0, this.$ov.width, this.$ov.height);
@@ -2355,11 +2535,11 @@ export class WsiGrid extends HTMLElement {
         const lv = info.levels[L], ts = info.tile_size;
         for (let ty = rg.y0; ty <= rg.y1; ty++) for (let tx = rg.x0; tx <= rg.x1; tx++) {
           const mx = (tx + 0.5) * ts * lv.sx, my = (ty + 0.5) * ts * lv.sy;
-          const dist = Math.hypot(mx - cx, my - cy) / diag;
+          const ddx = mx - cx, ddy = my - cy, dist = Math.sqrt(ddx * ddx + ddy * ddy) / diag;
           for (const c of chans) {
             const key = this._key(s, L, tx, ty, c);
             if (this.tex.has(key)) { this.tex.get(key).last = this.frame; continue; }
-            add(key, base + dist, s.tileUrl(L, tx, ty, c), c == null ? 'image' : 'raw', { s, L, tx, ty, c }, bg);
+            add(key, base + dist, null, c == null ? 'image' : 'raw', { s, L, tx, ty, c }, bg);
           }
         }
       };
@@ -2500,7 +2680,9 @@ export class WsiGrid extends HTMLElement {
   }
 
   _start(key, w) {
-    const req = this.fetcher.load(w.url, w.kind);
+    const m = w.meta;
+    const url = w.url || m.s.tileUrl(m.L, m.tx, m.ty, m.c);
+    const req = this.fetcher.load(url, w.kind);
     this.inflight.set(key, req);
     const C = this.counters;
     C.requests++;
@@ -2515,7 +2697,7 @@ export class WsiGrid extends HTMLElement {
       this.uploads.push({ key, res, meta: w.meta });
       this.queued.add(key);
       this._pump();
-      this.requestRender();
+      this._arrived();
     }, (err) => {
       if (this.inflight.get(key) === req) this.inflight.delete(key);
       if (w.meta.ann && w.meta.bucket == null && !w.meta.ptile && !w.meta.columns && w.meta.ann.state === 'loading') w.meta.ann.state = 'error-retry';
@@ -2538,7 +2720,9 @@ export class WsiGrid extends HTMLElement {
     const gl = this.gl;
     // ms of GPU uploads per frame → no jank while panning; when frames are slow anyway (GPU-bound), spend up to
     // 20 % of the frame on uploads so the texture pipeline keeps up with the network
-    const budget = this.lod.decoupled ? Math.min(40, Math.max(6, 0.2 * (this._frameMs || 16))) : 6;
+    // (at rest with batched redraws — expensive frames, see _arrived — take everything queued, up to 40 ms)
+    const batched = this.lod.adaptive && (this._frameCost || 0) >= 40 && !this.panes.some((p) => p.view && this._isMoving(p));
+    const budget = !this.lod.decoupled ? 6 : batched ? 40 : Math.min(40, Math.max(6, 0.2 * (this._frameMs || 16)));
     const deadline = now() + budget;
     let n = 0;
     while (this.uploads.length && (n < 2 || now() < deadline)) {

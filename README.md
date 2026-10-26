@@ -326,6 +326,12 @@ On 120k cells, each analysis takes 0.01–4 s.
 - **No blank areas.** A missing tile is covered by the best coarser level already loaded.
 - **Level of detail across zoom** (`setLod`, see [Zooming through the pyramid](#zooming-through-the-pyramid-level-of-detail)). What is drawn is a 3-D frustum over (x, y, pyramid level). Each region shows the finest tile already loaded, coarse tiles fill only the holes, and each pane pixel is drawn once. While a pane moves, a level one step coarser is fetched first and full resolution follows in spare request slots. Animations fetch for where the pane will land.
 - **No stutter.** Fetching and decoding run in Web Workers (`createImageBitmap`, `DecompressionStream`). GPU uploads are capped at about 6 ms per frame.
+- **Smooth on weak or no GPU** (`lod.adaptive`, on by default; see [benchmarks/results-smoothness.md](benchmarks/results-smoothness.md)):
+  - **Adaptive resolution.** While something moves *and* frames are slow, the WebGL backing store drops to ¾ or ½ resolution, and full resolution returns on the first frame at rest. Without a GPU, Chrome reads the whole canvas back every frame, so a smaller backing store is the lever that works.
+  - **Measured frame cost.** The real per-frame cost (our JS plus the browser's commit) is measured. When it is high, tile arrivals at rest are batched into fewer redraws, so the next drag isn't stuck behind them.
+  - **Culled cell outlines.** Cell outlines are binned per bucket, and only the rows in view are drawn: 16 panes at 1:1 went from 905 ms to 57 ms of GPU work per frame in software WebGL.
+  - **No per-frame churn.** No garbage from tile keys (the longest GC fell from 127 ms to 8 ms), no per-frame DOM writes, and no per-frame 2-D canvas clears.
+  - **Measured result.** In a GPU-less container, 16-pane fling went from 4.6 to 34 fps, and 16-pane wheel-zoom input latency (p95) from 781 to 136 ms.
 - **Memory.** One texture LRU, sized by `navigator.deviceMemory` and changeable with `setTextureBudget(mb)`, is shared across panes. Rendering only happens on demand, so an idle viewer uses no CPU or GPU.
 
 **Benchmarks** (`wissi-viz bench`, see [benchmarks/](benchmarks/README.md)). Measured on a 2-vCPU cloud container with no GPU, where Chromium uses SwiftShader software WebGL:
@@ -392,7 +398,7 @@ Measured with `wissi-viz bench --zoom` (legacy vs new; 1 and 16 panes; SVS, OME-
 ## Tests
 
 ```bash
-pip install -e ".[all,dev]" && pytest -q tests                      # 79 tests
+pip install -e ".[all,dev]" && pytest -q tests                      # 86 tests
 python tests/make_test_data.py /tmp/wsi --size 16000                # synthetic SVS + 3-channel CZI + 120k cell GeoJSON
 python tests/make_analysis_data.py /tmp/wsi                         # QuPath-style multiplex cell table + ROIs
 python examples/analysis_app.py /tmp/wsi/synthetic_he.svs /tmp/wsi/synthetic_he_cells.tsv /tmp/wsi/synthetic_he_rois.geojson

@@ -63,6 +63,7 @@ def viewer():
 | events: `on_view_change`, `on_click`, `on_object_click`, `on_draw`, `on_slide_load` | Python callbacks |
 
 **Notes**
+- **Keep the main loop free:** don't update the DOM on every view event. NiceGUI's wrapper already receives one batched, throttled `views` snapshot. In plain JS, coalesce any live readout to a few Hz, because text layout competes with WebGL frames (see `benchmarks/results-smoothness.md`).
 - **Shared state:** the registry and its caches are per process and shared by all users. Use per-user slide ids if users must not see each other's annotation edits.
 - **Paths:** routes mount on NiceGUI's own FastAPI app, so there is no extra port. Reverse-proxy subpaths (`window.path_prefix`) work.
 - **Analysis:** results go into plain NiceGUI widgets, for example `ui.echart(result.plot())` and `ui.table(rows=plots.table_rows(result.table))`. See `examples/analysis_app.py`.
@@ -116,7 +117,8 @@ Then embed it in any page. This exact setup, a plain page on one origin and tile
 <script type="module">
   const v = document.getElementById('v');
   v.addEventListener('objectclick', (e) => console.log(e.detail));     // {layer, index, class, properties, x, y, …}
-  v.addEventListener('viewchange', (e) => console.log(e.detail));      // {pane, x, y, zoom, mpp, magnification, bounds}
+  v.addEventListener('views', (e) => console.log(e.detail.views));     // every pane's {pane, x, y, zoom, mpp, magnification, bounds}
+  // ('viewchange' still fires per pane; both are throttled to ≤ ~8/s with the final view always delivered)
   v.goTo('all', 1200, 800, { units: 'um', magnification: 20 });
 </script>
 ```

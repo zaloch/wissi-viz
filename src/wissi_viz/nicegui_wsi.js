@@ -1,7 +1,7 @@
 // NiceGUI (Vue) wrapper around the <wissi-viz> web component.
 import { WissiViz } from "wissi-viz";
 
-const EVENTS = ["viewchange", "paneclick", "objectclick", "draw", "activepane", "slideload"];
+const EVENTS = ["viewchange", "views", "paneclick", "objectclick", "draw", "activepane", "slideload"];
 
 export default {
   template: `<div style="position:relative"></div>`,

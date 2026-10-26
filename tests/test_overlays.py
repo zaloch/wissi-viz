@@ -310,3 +310,68 @@ def test_read_objects_engines_agree(tmp_path, ext):
         assert np.allclose(o.x, ref.x) and np.allclose(o.column('Area'), ref.column('Area')), e
     lazy = from_table(df.lazy(), units='px')            # Polars LazyFrame input
     assert len(lazy) == n and list(lazy.classes[:50]) == list(ref.classes[:50])
+
+
+@pytest.mark.parametrize('mode', ['server', 'client'])
+def test_shape_culling_draws_only_visible_rows_and_identical_pixels(mode):
+    """Cell outlines are binned on a coarse grid per bucket / tile so only rows intersecting the view are submitted
+    (thousands of off-screen instances cost ~10 µs each without a GPU) — the picture must be pixel-identical."""
+    pytest.importorskip('playwright')
+    import socket
+    import threading
+    import time
+
+    import uvicorn
+
+    from wissi_viz import Level, SlideInfo, SlideRegistry
+    from wissi_viz.server import create_app
+    from wissi_viz.sources.callback import CallbackSource
+    W, H = 24_000, 18_000          # 0.35 cells / 1000 px² — dense enough for several grid rows per bucket / tile
+    info = SlideInfo(width=W, height=H, levels=[Level(-(-W // 2**k), -(-H // 2**k), float(2**k)) for k in range(7)],
+                     tile_size=512, mpp=(0.5, 0.5))
+    reg = SlideRegistry(warm=False)
+    L, cx, cy, cls = _cells(150_000, W=W, H=H, ncls=6)
+    reg.add(CallbackSource(info, read_tile=lambda *a: np.full((512, 512, 3), 255, np.uint8)), slide_id='s0')
+    reg.add_annotations('s0', L)
+    with socket.socket() as s:
+        s.bind(('127.0.0.1', 0))
+        port = s.getsockname()[1]
+    srv = uvicorn.Server(uvicorn.Config(create_app(reg), host='127.0.0.1', port=port, log_level='warning'))
+    threading.Thread(target=srv.run, daemon=True).start()
+    while not srv.started:
+        time.sleep(0.05)
+    from playwright.sync_api import sync_playwright
+    snap = """(culled) => { const g = grid, saved = [];
+        for (const p of g.panes) for (const L of p.slide.layers.values()) for (const d of [...L.detail.values(), ...L.ptiles.values()])
+          if (d.shpGrid && !culled) { saved.push([d, d.shpGrid]); d.shpGrid = null; }
+        g.fx.shapes = 0; g._draw(); const n = g.fx.shapes;
+        for (const [d, s] of saved) d.shpGrid = s;
+        const gl = g.gl, w = gl.drawingBufferWidth, h = gl.drawingBufferHeight, px = new Uint8Array(w * h * 4);
+        gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px); return { n, grids: saved.length, px: Array.from(px) }; }"""
+    try:
+        with sync_playwright() as pw:
+            try:
+                b = pw.chromium.launch(args=['--enable-unsafe-swiftshader'])
+            except Exception as e:  # noqa: BLE001
+                pytest.skip(f'no Chromium: {e}')
+            pg = b.new_page(viewport={'width': 800, 'height': 600})
+            pg.goto(f'http://127.0.0.1:{port}/')
+            pg.wait_for_function('() => window.grid')
+            pg.evaluate(f'() => {{ grid.setAttribute("controls", "false"); grid.setLod({{overlays: "{mode}"}}); grid.setSlides(["s0", "s0"]); }}')
+            ready = ('L.client === "ready"' if mode == 'client' else 'L.state === "ready"')
+            pg.wait_for_function(f'() => grid.panes.every(p => {{ const L = p.slide && p.slide.layers.get("cells"); return L && {ready}; }})', timeout=60000)
+            for x, y, zoom in ((W / 2, H / 2, 1.0), (W * 0.31, H * 0.77, 2.0), (300, 200, 1.0)):   # incl. the slide corner
+                pg.evaluate(f'() => grid.goTo("all", {x}, {y}, {{zoom: {zoom}, animate: false}})')
+                pg.wait_for_function('() => grid.stats().inflight === 0 && grid.stats().queuedUploads === 0', timeout=30000)
+                pg.wait_for_timeout(400)
+                pg.wait_for_function('() => grid.stats().inflight === 0 && grid.stats().queuedUploads === 0', timeout=30000)
+                full, cul = pg.evaluate(snap, False), pg.evaluate(snap, True)
+                assert full['grids'] > 0 and full['n'] > 0
+                # far fewer instances submitted (client raw tiles are small already: less to gain) …
+                assert cul['n'] < full['n'] * (0.34 if mode == 'server' else 0.7), (cul['n'], full['n'])
+                a, c = np.array(full['px'], np.uint8), np.array(cul['px'], np.uint8)
+                assert (a < 250).any()                                       # (outlines are on screen)
+                assert np.array_equal(a, c), int((a != c).sum())             # … and exactly the same picture
+            b.close()
+    finally:
+        srv.should_exit = True

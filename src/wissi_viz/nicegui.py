@@ -67,6 +67,20 @@ def mount(registry: SlideRegistry, prefix: str = '/wissi-viz', allow_edit: bool 
     _mounted[prefix] = registry
 
 
+
+def merge_views(views: dict, args: Any) -> list[dict]:
+    """Merge one ``views`` snapshot from the browser into ``views`` (pane → view); return the panes whose
+    position or zoom changed."""
+    changed = []
+    for v in (args or {}).get('views') or []:
+        if not isinstance(v, dict) or 'pane' not in v:
+            continue
+        old = views.get(v['pane'])
+        if old is None or (old.get('x'), old.get('y'), old.get('zoom')) != (v.get('x'), v.get('y'), v.get('zoom')):
+            changed.append(v)
+        views[v['pane']] = v
+    return changed
+
 class WissiViz(Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'},
               default_style='width:100%;height:600px;'):
     """1–16 whole-slide images in one GPU canvas.
@@ -104,17 +118,18 @@ class WissiViz(Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'},
         if lod is not None:
             self._props['lod'] = lod
 
-        def _view(e: GenericEventArguments) -> None:
-            if isinstance(e.args, dict) and 'pane' in e.args:
-                self.views[e.args['pane']] = e.args
+        def _views(e: GenericEventArguments) -> None:
+            # one batched snapshot of every pane (≤ ~6/s, the trailing one always delivered): no per-pane event
+            # storm over the websocket, and throttling can never drop a pane's latest view
+            for v in merge_views(self.views, e.args):
+                if on_view_change:
+                    on_view_change(v)
 
         def _active(e: GenericEventArguments) -> None:
             self.active_pane = (e.args or {}).get('pane', 0)
 
-        self.on('viewchange', _view, throttle=0.1, leading_events=False)
+        self.on('views', _views, throttle=0.15, leading_events=False)
         self.on('activepane', _active)
-        if on_view_change:
-            self.on('viewchange', lambda e: on_view_change(e.args), throttle=0.2, leading_events=False)
         if on_click:
             self.on('paneclick', lambda e: on_click(e.args))
         if on_object_click:

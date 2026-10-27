@@ -32,10 +32,12 @@ jobs:
         run: uv run python scripts/make_screenshots.py slides docs/screenshots
       - name: Push to the screenshots branch
         run: |
+          fail() { echo "::error::$1: $(echo "$2" | tr '\n' ' ' | tail -c 1500)"; exit 1; }
           cp slides/index.yaml docs/screenshots/openslide-testdata-index.yaml 2>/dev/null || true
+          ls -la docs/screenshots
           git config user.name "gzeballo"
           git config user.email "gzeballo@bu.edu"
-          git checkout -b screenshots
-          git add docs/screenshots
-          git commit -m "Screenshots from real slides (OpenSlide test data, CC0)"
-          git push -f origin screenshots
+          git checkout -B screenshots
+          git add -f docs/screenshots
+          out=$(git commit -m "Screenshots from real slides (OpenSlide test data, CC0)" 2>&1) || fail "commit" "$out"
+          out=$(git push -f origin screenshots 2>&1) || fail "push" "$out"

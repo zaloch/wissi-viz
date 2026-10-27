@@ -133,7 +133,7 @@ def cells_geojson(f, path: Path, w: int, h: int, limit: int | None = None):
                   'geometry': {'type': 'Polygon', 'coordinates': [[[w * .1, h * .1], [w * .45, h * .12], [w * .5, h * .5], [w * .2, h * .45], [w * .1, h * .1]]]}})
     feats.append({'type': 'Feature', 'properties': {'classification': {'name': 'ROI'}, 'name': 'Margin'},
                   'geometry': {'type': 'LineString', 'coordinates': [[w * .55, h * .2], [w * .7, h * .35], [w * .8, h * .3], [w * .9, h * .6]]}})
-    path.write_text(json.dumps({'type': 'FeatureCollection', 'features': feats}))
+    path.write_text(json.dumps({'type': 'FeatureCollection', 'features': feats}), encoding='utf-8')
     return len(feats)
 
 

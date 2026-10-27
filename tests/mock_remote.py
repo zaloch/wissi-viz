@@ -108,7 +108,7 @@ class MockHaloLink(HaloLinkConnection):
     def objects(self, image_id):
         if not self.geojson_path:
             return []
-        feats = json.loads(Path(self.geojson_path).read_text())['features']
+        feats = json.loads(Path(self.geojson_path).read_text(encoding='utf-8'))['features']
         rows = {'XMin': [], 'XMax': [], 'YMin': [], 'YMax': [], 'Classification': [], 'Area': []}
         for f in feats:
             if f['geometry']['type'] != 'Polygon' or f['properties']['classification']['name'] == 'ROI':

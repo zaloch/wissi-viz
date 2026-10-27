@@ -52,4 +52,4 @@ for phase in ('cold', 'warm'):
 results['connector'] = conn.stats()
 print('\nconnector totals:', results['connector'])
 if a.out:
-    Path(a.out).write_text(json.dumps(results, indent=2, default=str))
+    Path(a.out).write_text(json.dumps(results, indent=2, default=str), encoding='utf-8')

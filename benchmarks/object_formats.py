@@ -354,7 +354,7 @@ def main():
                 res['ops'][f][w] = r
                 print(f, w, json.dumps(r), flush=True)
         if a.out:
-            Path(a.out).write_text(json.dumps(res, indent=1))
+            Path(a.out).write_text(json.dumps(res, indent=1), encoding='utf-8')
     finally:
         if a.postgres:
             pg_stop(d)

@@ -268,7 +268,7 @@ def demo_annotations(slide: str, cells_tsv: str | None, rois_geojson: str | None
     """Package ROIs (px → µm) and a cell table (µm) the way an analysis platform would expose them."""
     out = {}
     if rois_geojson and Path(rois_geojson).exists():
-        gj = json.loads(Path(rois_geojson).read_text())
+        gj = json.loads(Path(rois_geojson).read_text(encoding='utf-8'))
         for f in gj['features']:
             g = f['geometry']
             g['coordinates'] = [[[x * mpp, y * mpp] for x, y in ring] for ring in g['coordinates']]

@@ -131,7 +131,7 @@ def op(lib: str, name: str, d: str):
         else:
             out = [pre[c].to_numpy() for c in GEO]
     dt = time.perf_counter() - t0
-    hwm = [int(x.split()[1]) for x in open('/proc/self/status') if x.startswith('VmHWM')][0] / 1024
+    hwm = [int(x.split()[1]) for x in open('/proc/self/status', encoding='utf-8') if x.startswith('VmHWM')][0] / 1024
     return {'s': dt, 'peak_MB': round(hwm)}
 
 
@@ -165,7 +165,7 @@ def main():
                               if ok else rs[0])
         print(name, json.dumps(res[name]), flush=True)
     if a.out:
-        Path(a.out).write_text(json.dumps(res, indent=1))
+        Path(a.out).write_text(json.dumps(res, indent=1), encoding='utf-8')
 
 
 if __name__ == '__main__':

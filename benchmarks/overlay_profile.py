@@ -15,7 +15,7 @@ import numpy as np
 
 
 def rss_mb():
-    with open('/proc/self/status') as f:
+    with open('/proc/self/status', encoding='utf-8') as f:
         for line in f:
             if line.startswith('VmRSS'):
                 return int(line.split()[1]) / 1024

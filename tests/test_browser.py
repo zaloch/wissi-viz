@@ -76,7 +76,7 @@ def test_cross_origin_embed(slide, tmp_path):
 <h3>Some other app</h3>
 <script type="module" src="{tiles}/static/index.js"></script>
 <wissi-viz id="v" api="{tiles}" slides="b,b" layout="1x2" style="display:block;width:900px;height:450px"></wissi-viz>
-</body></html>''')
+</body></html>''', encoding='utf-8')
     handler = lambda *a, **k: http.server.SimpleHTTPRequestHandler(*a, directory=str(tmp_path), **k)  # noqa: E731
     httpd = http.server.ThreadingHTTPServer(('127.0.0.1', pa), handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()

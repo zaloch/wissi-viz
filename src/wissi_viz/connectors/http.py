@@ -85,7 +85,7 @@ class HttpTileConnection(RemoteConnection):
 
     def __init__(self, config: dict | str | os.PathLike):
         if not isinstance(config, dict):
-            config = json.loads(Path(config).read_text())
+            config = json.loads(Path(config).read_text(encoding='utf-8-sig'))
         raw = {k: v for k, v in config.items() if not k.startswith('_')}
         todo = [k for k, v in _flat(raw) if isinstance(v, str) and 'TODO' in v]
         if todo:

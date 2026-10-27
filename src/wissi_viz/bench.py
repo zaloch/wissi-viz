@@ -429,7 +429,7 @@ def zoom_bench(configs: Sequence[tuple[str, Sequence[str], int]], modes: Sequenc
                                    'MB': round(s3['bytes'] / 2**20, 1)}}
                     report['runs'].append(run)
                     if save_to:  # keep partial results of long sweeps
-                        Path(save_to).write_text(json.dumps(report, indent=1))
+                        Path(save_to).write_text(json.dumps(report, indent=1), encoding='utf-8')
                     zi, zo, jp = run['zoom_in'], run['zoom_out'], run['jumps']
                     log(f"{label:<14} {n:>2}p {str(mode)[:8]:<8} in: detail {zi['detail_pct']}% blank {zi['blank_pct']}% "
                         f"settle {zi['settle_ms']} ms {zi['MB']} MB req {zi['requests']} overdraw {zi['overdraw']} js {zi['js_frame_p50_ms']} | "
@@ -569,7 +569,7 @@ def fetch_samples(dest: str | Path, which: str = 'standard', max_mb: float = 200
         with urllib.request.urlopen(u, timeout=120) as r, open(tmp, 'wb') as f:
             while chunk := r.read(1 << 20):
                 f.write(chunk)
-        tmp.rename(target)
+        os.replace(tmp, target)
         got.append(target)
     return got
 
@@ -618,5 +618,5 @@ def main(args) -> None:
     md = format_report(server, browser)
     print('\n' + md)
     if args.out:
-        Path(args.out).write_text(json.dumps({'server': server, 'browser': browser}, indent=2, default=str))
-        Path(args.out).with_suffix('.md').write_text(md)
+        Path(args.out).write_text(json.dumps({'server': server, 'browser': browser}, indent=2, default=str), encoding='utf-8')
+        Path(args.out).with_suffix('.md').write_text(md, encoding='utf-8')

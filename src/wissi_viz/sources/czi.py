@@ -79,6 +79,24 @@ class _DecodeCache:
         self.store.purge(self.owner)
 
 
+def _metadata_dict(f) -> dict:
+    """Metadata as a dict on every czifile release: 2026.x has ``metadata(asdict=True)``, 2019.7.2.x (the newest on
+    Python 3.10/3.11) only XML. Both return XML from ``metadata()``; parse it with tifffile's identical xml2dict."""
+    xml = f.metadata()
+    if isinstance(xml, dict):
+        return xml
+    if not xml:
+        return {}
+    import tifffile
+    return tifffile.xml2dict(xml)
+
+
+def _dims(entry) -> tuple:
+    """Subblock dimension names: ``entry.dims`` on czifile 2026.x; ``entry.axes`` (samples as '0') on 2019.7.2.x."""
+    d = getattr(entry, 'dims', None)
+    return tuple(d) if d is not None else tuple('S' if c == '0' else c for c in entry.axes)
+
+
 class CziSource(SlideSource):
     extensions = ('.czi',)
 
@@ -98,8 +116,8 @@ class CziSource(SlideSource):
 
         f = self._file()
         entries = f.subblock_directory
-        meta = f.metadata(asdict=True)
-        dims = entries[0].dims
+        meta = _metadata_dict(f)
+        dims = _dims(entries[0])
         self._dims = dims
         iy, ix = dims.index('Y'), dims.index('X')
         ic = dims.index('C') if 'C' in dims else None
@@ -150,7 +168,7 @@ class CziSource(SlideSource):
             self._blocks[(scales.index(s), c)] = {'blocks': blocks, 'bbox': arr}
 
         ptype = entries[sel[0][0]].pixel_type
-        pname = ptype.name if hasattr(ptype, 'name') else str(ptype)
+        pname = (ptype.name if hasattr(ptype, 'name') else str(ptype)).upper()
         self._rgb = pname in RGB_TYPES
         levels = [Level(max(1, math.ceil(W / s)), max(1, math.ceil(H / s)), float(s)) for s in scales]
         if self._rgb:
@@ -180,7 +198,7 @@ class CziSource(SlideSource):
         def make():
             f = self._file()
             entry = f.subblock_directory[b.index]
-            seg = entry.read_segment_data(f)
+            seg = entry.read_segment_data(f) if hasattr(entry, 'read_segment_data') else entry.data_segment()
             a = _fast_decode(entry, seg, b)
             if a is None:  # anything unusual → czifile's own (slower) path
                 a = np.asarray(seg.data())
@@ -258,7 +276,7 @@ def _fast_decode(entry, seg, b: _Block) -> np.ndarray | None:
     try:
         import imagecodecs
         pt = entry.pixel_type
-        dt, spp = _PIXEL.get(pt.name if hasattr(pt, 'name') else str(pt), (None, None))
+        dt, spp = _PIXEL.get((pt.name if hasattr(pt, 'name') else str(pt)).upper(), (None, None))
         if dt is None:
             return None
         comp = int(entry.compression)

@@ -40,7 +40,7 @@ def main():
     from wissi_viz.sources.callback import CallbackSource
 
     def rss():
-        return int([x for x in open('/proc/self/status') if x.startswith('VmRSS')][0].split()[1]) / 1024
+        return int([x for x in open('/proc/self/status', encoding='utf-8') if x.startswith('VmRSS')][0].split()[1]) / 1024
     W, H = 100_000, 80_000
     info = SlideInfo(width=W, height=H, levels=[Level(-(-W // 2**k), -(-H // 2**k), float(2**k)) for k in range(10)],
                      tile_size=512, mpp=(0.25, 0.25))
@@ -160,7 +160,7 @@ def main():
     srv.should_exit = True
     print(json.dumps({k: v for k, v in res.items() if k != 'runs'}))
     if a.out:
-        open(a.out, 'w').write(json.dumps(res, indent=1))
+        open(a.out, 'w', encoding='utf-8').write(json.dumps(res, indent=1))
 
 
 if __name__ == '__main__':

@@ -1,0 +1,55 @@
+# Tests on Linux, Windows and macOS (Intel + Apple silicon) with uv, then builds the sdist + wheel.
+name: ci
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} · py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest, macos-13]   # macos-13 = Intel
+        python: ["3.10", "3.12", "3.13"]
+        include:
+          - os: ubuntu-24.04-arm
+            python: "3.13"
+    env:
+      UV_PYTHON: ${{ matrix.python }}
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install (locked)
+        run: uv sync --locked --extra analysis --extra io --extra polars --extra server --extra remote --extra bench --extra slideio --extra desktop
+      - name: Chromium for the browser tests
+        run: uv run playwright install --with-deps chromium
+        shell: bash
+      - name: Tests
+        run: uv run pytest -q -x --durations=15
+      - name: CLI smoke
+        shell: bash
+        run: |
+          uv run wissi-viz --help
+          uv run wissi-viz desktop --help
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv build
+      - name: Wheel installs and imports on a clean interpreter
+        run: |
+          uv venv /tmp/w && VIRTUAL_ENV=/tmp/w uv pip install dist/*.whl
+          /tmp/w/bin/python -c "import wissi_viz, wissi_viz.desktop as d; print(wissi_viz.__version__, d.icon_path('ico').exists())"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

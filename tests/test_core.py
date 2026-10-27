@@ -34,7 +34,7 @@ def data(tmp_path_factory):
         {'type': 'Feature', 'geometry': {'type': 'Point', 'coordinates': [500, 600]}, 'properties': {'class': 'Lymph'}},
         {'type': 'Feature', 'geometry': {'type': 'LineString', 'coordinates': [[0, 0], [300, 300], [600, 0]]}, 'properties': {}},
     ]}
-    (d / 'a.geojson').write_text(json.dumps(gj))
+    (d / 'a.geojson').write_text(json.dumps(gj), encoding='utf-8')
     return d
 
 
@@ -99,14 +99,14 @@ def test_aperio_and_halo_xml(tmp_path):
     ap.write_text('<Annotations><Annotation Id="1" Name="Tumor" LineColor="255"><Regions>'
                   '<Region Id="1" Type="0"><Vertices><Vertex X="1" Y="1"/><Vertex X="50" Y="1"/><Vertex X="50" Y="40"/></Vertices></Region>'
                   '<Region Id="2" Type="2"><Vertices><Vertex X="100" Y="100"/><Vertex X="140" Y="120"/></Vertices></Region>'
-                  '</Regions></Annotation></Annotations>')
+                  '</Regions></Annotation></Annotations>', encoding='utf-8')
     L = AnnotationLayer.load(ap)
     assert len(L) == 2 and L.classes['Tumor'] == '#ff0000'
     hx = tmp_path / 's.annotations'
     hx.write_text('<Annotations><Annotation Name="Layer 1" LineColor="65280"><Regions>'
                   '<Region Type="Rectangle" NegativeROA="0"><Vertices><V X="0" Y="0"/><V X="10" Y="10"/></Vertices></Region>'
                   '<Region Type="Polygon" NegativeROA="1"><Vertices><V X="0" Y="0"/><V X="5" Y="0"/><V X="5" Y="5"/></Vertices></Region>'
-                  '</Regions></Annotation></Annotations>')
+                  '</Regions></Annotation></Annotations>', encoding='utf-8')
     H = AnnotationLayer.load(hx)
     assert len(H) == 2 and 'Layer 1 (negative)' in H.classes
 

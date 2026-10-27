@@ -36,13 +36,28 @@ The slides sit next to the server, in Docker, and they are multi-GB files.
 
 ## Install
 
+Windows, macOS (Apple silicon and Intel) and Linux (x86_64, ARM), Python 3.10–3.14. Packaged with [uv](https://docs.astral.sh/uv/); `pip` works too.
+
 ```bash
-pip install -e ".[all]"      # viewer + analysis + extra formats + NiceGUI + server — all permissive
-pip install -e .             # minimal: SVS/TIFF/OME-TIFF/NDPI + CZI viewer
+uv add "wissi-viz[all]"               # in your project: viewer + analysis + extra formats + NiceGUI + server — all permissive
+uv add wissi-viz                      # minimal: SVS/TIFF/OME-TIFF/NDPI + CZI viewer
+uv tool install "wissi-viz[desktop]"  # the standalone desktop app (below)
 # extras: [analysis] scipy/shapely/scikit-image/pandas · [io] pyarrow/anndata · [slideio] VSI/ZVI/DICOM/SCN/AFI
-#         [nicegui] · [server] uvicorn · [remote] httpx · [bench] playwright/hypercorn/cryptography
+#         [nicegui] · [server] uvicorn · [remote] httpx · [desktop] pywebview · [bench] playwright/hypercorn/cryptography
 #         [lgpl] OpenSlide + libCZI (opt-in, LGPL)
 ```
+
+## Desktop app
+
+The viewer in its own native window, with its own icon, as an option next to the embedded element:
+
+```bash
+wissi-viz-app                              # File ▸ Open slides… (Ctrl/⌘+O), or drop files on the window
+wissi-viz desktop a.svs b.czi cells.csv    # open files from the command line
+wissi-viz desktop --install-shortcut       # Start menu + desktop (Windows), ~/Applications (macOS), app menu (Linux)
+```
+
+It runs the tile server in-process on 127.0.0.1 and shows it with pywebview: WebView2 on Windows, WKWebView on macOS, WebKitGTK or Qt on Linux (Linux needs GTK or Qt bindings installed separately; without them it opens a Chrome/Edge app window). Details: [docs/INTEGRATION.md §12](docs/INTEGRATION.md#12-desktop-app-path-f).
 
 > **Integrating into an app?** [docs/INTEGRATION.md](docs/INTEGRATION.md) covers every option: the NiceGUI element, a raw `<wissi-viz>` tag, mounting on any ASGI app, a separate tile server behind React, Vue, Streamlit, Dash or Django, and an iframe. It also covers auth, Docker and proxies, and how to wire a vendor tile API. **Before go-live:**
 > - `scripts/wissi_probe.py` checks a connector (HALO Link, PathCore, any tile API) or a deployment in one command, under a hard API-call cap. It smoke-tests the API, sweeps concurrency, runs 1–16-pane viewer sessions, and writes recommended settings ([§10](docs/INTEGRATION.md#10-probing-an-integration-one-command)).
@@ -405,6 +420,7 @@ Measured with `wissi-viz bench --zoom` (legacy vs new; 1 and 16 panes; SVS, OME-
 | `[io]` | Apache-2.0 / BSD-3 | pyarrow, anndata |
 | `[slideio]` | BSD-3 (bundles OpenCV Apache-2.0, DCMTK BSD-3, OpenJPEG BSD-2) | SlideIO |
 | `[nicegui]`, `[server]` | MIT / BSD-3 | NiceGUI (bundles ECharts, Apache-2.0), uvicorn |
+| `[desktop]` | BSD-3 / MIT | pywebview, pythonnet (Windows), pyobjc (macOS), bottle, proxy-tools, uvicorn. Linux's GTK/Qt bindings (LGPL/GPL) are not dependencies. |
 | **`[lgpl]` (opt-in)** | **LGPL-2.1 / LGPL-3** | OpenSlide (MRXS, BIF), pylibCZIrw (libCZI) |
 
 - **The audit test:** `tests/test_licenses.py` reads the installed metadata and fails if a core or permissive extra pulls in a GPL, LGPL, MPL or similar licence. It also checks that importing the core never loads an LGPL module.
@@ -414,7 +430,8 @@ Measured with `wissi-viz bench --zoom` (legacy vs new; 1 and 16 panes; SVS, OME-
 ## Tests
 
 ```bash
-pip install -e ".[all,dev]" && pytest -q tests                      # 98 tests
+uv sync --extra analysis --extra io --extra polars --extra server --extra remote --extra bench --extra desktop
+uv run playwright install chromium && uv run pytest -q tests         # or: pip install -e ".[all,desktop,dev]" && pytest -q
 python tests/make_test_data.py /tmp/wsi --size 16000                # synthetic SVS + 3-channel CZI + 120k cell GeoJSON
 python tests/make_analysis_data.py /tmp/wsi                         # QuPath-style multiplex cell table + ROIs
 python examples/analysis_app.py /tmp/wsi/synthetic_he.svs /tmp/wsi/synthetic_he_cells.tsv /tmp/wsi/synthetic_he_rois.geojson

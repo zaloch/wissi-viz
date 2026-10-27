@@ -42,9 +42,8 @@ a = ap.parse_args()
 
 
 def rss_mb():
-    for line in open('/proc/self/status'):
-        if line.startswith('VmRSS'):
-            return int(line.split()[1]) / 1024
+    from wissi_viz.memory import rss_bytes      # Linux, macOS and Windows
+    return rss_bytes() / 2**20
 
 
 def deep_nbytes(obj, seen=None, depth=0):
@@ -147,4 +146,4 @@ for k, sid in enumerate(ids):
 for j in range(a.revisit):
     visit(len(ids) + j, ids[j % len(ids)])
 if a.out:
-    Path(a.out).write_text(json.dumps(rows, indent=1))
+    Path(a.out).write_text(json.dumps(rows, indent=1), encoding='utf-8')

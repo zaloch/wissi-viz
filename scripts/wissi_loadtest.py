@@ -562,6 +562,12 @@ def discover(args, headers) -> list:
 
 
 def main(argv=None):
+    for s in (sys.stdout, sys.stderr):     # UTF-8 output on any OS / pipe (reports use →, ≤, µ)
+        try:
+            if (getattr(s, 'encoding', '') or '').lower().replace('-', '') != 'utf8':
+                s.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:  # noqa: BLE001
+            pass
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0], formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('target', help='wissi-viz base URL (…/wissi-viz) or a tile URL template with {image} {level} {col} {row}')
     ap.add_argument('--users', default='10,25,50,100', help='comma-separated user counts, one stage each')
@@ -596,7 +602,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
     args.think = tuple(float(v) for v in args.think.split(','))
     if args.from_json:
-        d = json.load(open(args.from_json))
+        d = json.load(open(args.from_json, encoding='utf-8-sig'))
         for k, v in d['settings'].items():
             if k not in ('from_json', 'out'):
                 setattr(args, k, tuple(v) if k == 'think' else v)
@@ -608,8 +614,8 @@ def main(argv=None):
         md = report(stages, mdl, args)
         print(md)
         if args.out:
-            json.dump({**d, 'model': mdl}, open(args.out, 'w'), indent=1)
-            open(os.path.splitext(args.out)[0] + '.md', 'w').write(md + '\n')
+            json.dump({**d, 'model': mdl}, open(args.out, 'w', encoding='utf-8'), indent=1)
+            open(os.path.splitext(args.out)[0] + '.md', 'w', encoding='utf-8').write(md + '\n')
         return stages, mdl
     args.requests = min(args.requests, MAX_REQUESTS_PER_USER)
     args.mode = 'template' if '{level}' in args.target else 'wissi'
@@ -640,9 +646,9 @@ def main(argv=None):
     md = report(stages, mdl, args)
     print('\n' + md)
     if args.out:
-        with open(args.out, 'w') as f:
+        with open(args.out, 'w', encoding='utf-8') as f:
             json.dump({'settings': {k: v for k, v in vars(args).items() if k != 'header'}, 'stages': stages, 'model': mdl}, f, indent=1)
-        with open(os.path.splitext(args.out)[0] + '.md', 'w') as f:
+        with open(os.path.splitext(args.out)[0] + '.md', 'w', encoding='utf-8') as f:
             f.write(md + '\n')
     return stages, mdl
 

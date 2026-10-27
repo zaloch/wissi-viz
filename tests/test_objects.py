@@ -55,7 +55,7 @@ def test_qupath_geojson_detections(tmp_path):
              {'type': 'Feature', 'geometry': {'type': 'Polygon', 'coordinates': [[[20, 20], [30, 20], [25, 30], [20, 20]]]},
               'properties': {'classification': {'name': 'CD3'}, 'measurements': [{'name': 'CD3 mean', 'value': 900}]}}]
     p = tmp_path / 'cells.geojson'
-    p.write_text(json.dumps({'type': 'FeatureCollection', 'features': feats}))
+    p.write_text(json.dumps({'type': 'FeatureCollection', 'features': feats}), encoding='utf-8')
     t = read_objects(p, mpp=0.25)
     assert list(t.classes) == ['Tumor', 'CD3'] and len(t.outlines) == 2
     assert t.columns['CD3 mean'][1] == 900 and np.isnan(t.columns['Nucleus: Area'][1])

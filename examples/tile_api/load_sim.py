@@ -19,6 +19,7 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -92,7 +93,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     ap.add_argument('--backend', choices=['api', 'files', 'synthetic'], default='api')
     ap.add_argument('--overlay-table', default=None, help='object table (parquet/csv/…) shown on every slide; users fetch overlays')
-    ap.add_argument('--layer-cache', default='/tmp/wissi-layer-cache', help='compiled overlay cache directory')
+    ap.add_argument('--layer-cache', default=os.path.join(tempfile.gettempdir(), 'wissi-layer-cache'), help='compiled overlay cache directory')
     ap.add_argument('--overlay-mode', choices=['server', 'client'], default='server', help='how simulated viewers get overlays')
     ap.add_argument('--files', nargs='*', default=[], help='slide files (the vendor\'s images, or served directly)')
     ap.add_argument('--users', default='10,25,50,75,100')

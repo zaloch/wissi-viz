@@ -59,6 +59,8 @@ def table_payload(path: str, mpp: float | None) -> bytes:
 
 
 def main() -> None:
+    from wissi_viz._compat import utf8_stdio
+    utf8_stdio()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--cells', default='100k,300k,1M', help='synthetic sizes (ignored with --table)')
     ap.add_argument('--table', help='use this object table instead of synthetic cells')
@@ -74,8 +76,8 @@ def main() -> None:
     try:
         shutil.copy(HERE / 'gpu_pyramid' / 'gpu_pyramid.js', work)
         shutil.copy(HERE / 'gpu_pyramid' / 'ab.html', work)
-        src = INDEX_JS.read_text()
-        (work / 'worker.js').write_text(re.search(r'const PYR_WORKER_SRC = `(.*?)`;', src, re.S).group(1))
+        src = INDEX_JS.read_text(encoding='utf-8')
+        (work / 'worker.js').write_text(re.search(r'const PYR_WORKER_SRC = `(.*?)`;', src, re.S).group(1), encoding='utf-8')
         files = []
         if a.table:
             (work / 'table.bin').write_bytes(table_payload(a.table, a.mpp))
@@ -141,7 +143,7 @@ def main() -> None:
             b.close()
         httpd.shutdown()
         if a.out:
-            Path(a.out).write_text(json.dumps(results, indent=1))
+            Path(a.out).write_text(json.dumps(results, indent=1), encoding='utf-8')
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

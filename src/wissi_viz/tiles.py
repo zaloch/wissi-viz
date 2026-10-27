@@ -234,8 +234,15 @@ class DiskCache:
         p = self._path(key).with_suffix('.' + _EXT.get(mt, 'bin'))
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_suffix(p.suffix + f'.{os.getpid()}.{threading.get_ident()}.tmp')
-        tmp.write_bytes(data)
-        os.replace(tmp, p)
+        try:
+            tmp.write_bytes(data)
+            os.replace(tmp, p)      # Windows: fails while another thread reads p — the cache is best-effort
+        except OSError:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            return
         with self._lock:
             self._writes += 1
             trim = self._writes % 2000 == 0

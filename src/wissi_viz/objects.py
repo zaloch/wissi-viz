@@ -409,8 +409,7 @@ def cached_object_layer(path: str | Path, cache_dir: str | Path, *, mpp: float |
             pass
     layer = read_objects(p, mpp=mpp, **(read_kw or {})).to_layer(**layer_kw)
     try:
-        layer.save(d)
-        return AnnotationLayer.open(d, version=version)   # serve the memory-mapped copy (frees the build memory)
+        return AnnotationLayer.open(layer.save(d), version=version)   # serve the memory-mapped copy (frees build memory)
     except (OSError, ValueError):
         return layer
 

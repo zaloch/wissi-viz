@@ -227,11 +227,13 @@ class Target:
 
 def start_mock(files: list[Path], args) -> tuple[str, subprocess.Popen]:
     import httpx
+    import tempfile
     port = free_port()
+    log = tempfile.NamedTemporaryFile('w+', suffix='.log', prefix='wissi-mock-', delete=False, encoding='utf-8')
     p = subprocess.Popen([sys.executable, str(ROOT / 'examples' / 'tile_api' / 'mock_tile_api.py'), *map(str, files),
                           '--port', str(port), '--token', 'probe', '--n', '4', '--latency', args.mock_latency,
                           '--limit', str(args.mock_limit), '--errors', str(args.mock_errors)],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                         stdout=subprocess.DEVNULL, stderr=log)   # a file, not a pipe: never blocks the child
     url = f'http://127.0.0.1:{port}'
     for _ in range(300):
         try:
@@ -240,7 +242,8 @@ def start_mock(files: list[Path], args) -> tuple[str, subprocess.Popen]:
         except Exception:  # noqa: BLE001
             pass
         if p.poll() is not None:
-            sys.exit('mock API failed to start:\n' + p.stderr.read().decode()[-2000:])
+            log.flush()
+            sys.exit('mock API failed to start:\n' + Path(log.name).read_text(encoding='utf-8', errors='replace')[-2000:])
         time.sleep(0.2)
     p.kill()
     sys.exit('mock API did not start')
@@ -980,6 +983,8 @@ def report_md(t: Target, args, budget: Budget, smoke: list, direct: dict, runs: 
 
 # ============================================================================================ main
 def main(argv=None):
+    from wissi_viz._compat import utf8_stdio
+    utf8_stdio()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('target')
     ap.add_argument('--images', default=None, help='connector targets: image ids (comma-separated; 2 is plenty)')
@@ -1065,13 +1070,13 @@ def main(argv=None):
         vendor = t.vendor_stats() if t.vendor_stats else None
         out_dir.mkdir(parents=True, exist_ok=True)
         md = report_md(t, args, budget, smoke, direct, runs, rec, vendor)
-        (out_dir / 'report.md').write_text(md)
-        (out_dir / 'recommended_settings.py').write_text(settings_py(t, rec))
+        (out_dir / 'report.md').write_text(md, encoding='utf-8')
+        (out_dir / 'recommended_settings.py').write_text(settings_py(t, rec), encoding='utf-8')
         (out_dir / 'results.json').write_text(json.dumps({
             'target': t.label, 'kind': t.kind, 'images': list(map(str, t.images)), 'settings': {k: v for k, v in vars(args).items() if k != 'header'},
             'budget': {'limit': budget.limit if t.kind != 'local' else None, 'used': budget.used, 'by_kind': budget.by_kind, 'refused': budget.refused},
             'vendor_stats': vendor, 'smoke': smoke, 'direct': direct, 'runs': runs, 'recommendation': rec,
-            'seconds': round(time.perf_counter() - t0, 1)}, indent=1, default=str))
+            'seconds': round(time.perf_counter() - t0, 1)}, indent=1, default=str), encoding='utf-8')
         print('\n' + md, flush=True)
         print(f'wrote {out_dir}/report.md, results.json, recommended_settings.py ({time.perf_counter() - t0:.0f} s)', file=sys.stderr)
         return {'budget': budget, 'smoke': smoke, 'direct': direct, 'runs': runs, 'rec': rec, 'vendor': vendor, 'out': out_dir}

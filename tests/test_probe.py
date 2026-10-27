@@ -48,7 +48,7 @@ def test_mock_api_stays_within_budget_and_reports(slides, tmp_path):
     for f in ('report.md', 'results.json', 'recommended_settings.py'):
         assert (tmp_path / 'out' / f).exists()
     assert 'max_concurrency' in r['rec']['settings']
-    compile((tmp_path / 'out' / 'recommended_settings.py').read_text(), 'settings', 'exec')
+    compile((tmp_path / 'out' / 'recommended_settings.py').read_text(encoding='utf-8'), 'settings', 'exec')
 
 
 def test_local_slides(slides, tmp_path):
@@ -65,7 +65,7 @@ def test_no_yes_sends_nothing(tmp_path, monkeypatch):
     m = _probe()
     cfg = tmp_path / 'api.json'
     cfg.write_text(json.dumps({'base_url': 'https://tiles.example.invalid', 'info': {'path': '/i/{image}'},
-                               'tile': {'path': '/t/{image}/{level}/{col}/{row}'}}))
+                               'tile': {'path': '/t/{image}/{level}/{col}/{row}'}}), encoding='utf-8')
     sent = []
     monkeypatch.setattr(httpx.Client, 'send', lambda *a, **k: sent.append(a) or (_ for _ in ()).throw(AssertionError('sent')))
     assert m.main([f'http:{cfg}', '--images', 'a,b', '--out', str(tmp_path / 'o')]) is None

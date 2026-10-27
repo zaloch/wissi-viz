@@ -3,3 +3,5 @@ __pycache__/
 .pytest_cache/
 .wissi-viz-cache/
 dist/
+.venv/
+.ruff_cache/

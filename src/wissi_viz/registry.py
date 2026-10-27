@@ -288,7 +288,8 @@ class SlideRegistry:
         if self.layer_cache_dir is None:
             return None
         v = hashlib.blake2b(f'{getattr(src, "version", "0")}|{AnnotationLayer._SAVE_FORMAT}'.encode(), digest_size=6).hexdigest()
-        return self.layer_cache_dir / re.sub(r'[^A-Za-z0-9_.\-]+', '_', e.id)[:120] / v
+        from ._compat import safe_name
+        return self.layer_cache_dir / safe_name(e.id, 40) / v     # short + valid on Windows (MAX_PATH, CON, …)
 
     @staticmethod
     def _reusable(src) -> bool:
@@ -303,13 +304,13 @@ class SlideRegistry:
             return None
         try:
             out = []
-            for it in json.loads((d / 'index.json').read_text())['layers']:
+            for it in json.loads((d / 'index.json').read_text(encoding='utf-8'))['layers']:
                 if it['kind'] == 'bulk':
                     L = AnnotationLayer.open(d / it['dir'], version=it['version'])
                     L._mapped_bytes = sum(f.stat().st_size for f in (d / it['dir']).iterdir())
                     out.append(L)
                 else:
-                    L = AnnotationLayer.parse(json.loads((d / it['file']).read_text()), fmt='geojson', name=it['name'])
+                    L = AnnotationLayer.parse(json.loads((d / it['file']).read_text(encoding='utf-8')), fmt='geojson', name=it['name'])
                     for k, v in it.get('style', {}).items():
                         setattr(L, k, v)
                     L.classes.update(it.get('classes') or {})
@@ -331,8 +332,7 @@ class SlideRegistry:
             d.mkdir(parents=True, exist_ok=True)
             for i, L in enumerate(layers):
                 if L._block is not None and not len(L._kinds) and L.compiled().n >= 1000:
-                    sub = d / f'L{i}'
-                    L.save(sub)
+                    sub = L.save(d / f'L{i}-{os.urandom(3).hex()}')   # fresh folder: old ones may still be mapped
                     M = AnnotationLayer.open(sub, version=L.version)
                     M._mapped_bytes = sum(f.stat().st_size for f in sub.iterdir())
                     c = getattr(L, '_compiled', None)
@@ -342,13 +342,18 @@ class SlideRegistry:
                     out.append(M)
                 else:
                     if self._reusable(src):
-                        (d / f'L{i}.geojson').write_text(json.dumps(L.to_geojson()))
+                        (d / f'L{i}.geojson').write_text(json.dumps(L.to_geojson()), encoding='utf-8')
                         index.append({'name': L.name, 'kind': 'geojson', 'file': f'L{i}.geojson', 'classes': dict(L.classes),
                                       'style': {k: getattr(L, k) for k in ('line_width', 'fill_opacity', 'point_size', 'visible',
                                                                            'detail_min_px', 'z', 'overview', 'pyramid')}})
                     out.append(L)
             if self._reusable(src):
-                (d / 'index.json').write_text(json.dumps({'source_version': str(getattr(src, 'version', '')), 'layers': index}))
+                (d / 'index.json').write_text(json.dumps({'source_version': str(getattr(src, 'version', '')), 'layers': index}), encoding='utf-8')
+            # sweep earlier saves no index points to (on Windows a still-mapped one fails quietly; next save retries)
+            live = {x.get('dir') for x in index}
+            for old in d.glob('L*-*'):
+                if old.is_dir() and old.name not in live:
+                    shutil.rmtree(old, ignore_errors=True)
         except Exception:  # noqa: BLE001  (disk full / read-only: keep the layers in RAM)
             return layers if len(out) < len(layers) else out
         threading.Thread(target=self._trim_layer_disk, daemon=True).start()

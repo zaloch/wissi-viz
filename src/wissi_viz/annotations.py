@@ -464,7 +464,7 @@ class AnnotationLayer:
         if ext == '.annotations':
             return cls.from_halo_xml(p, **kw)
         if ext == '.xml':
-            head = p.read_text(errors='ignore')[:4000]
+            head = p.read_text(errors='ignore', encoding='utf-8-sig')[:4000]
             return cls.from_halo_xml(p, **kw) if '<V ' in head or '<V\n' in head else cls.from_aperio_xml(p, **kw)
         raise ValueError(f'unsupported annotation file: {p.name}')
 
@@ -610,7 +610,8 @@ class AnnotationLayer:
             raise ValueError('save() supports bulk object layers (from_table / from_boxes / from_points / ObjectTable.to_layer)')
         c = self.compiled()
         d = Path(path)
-        tmp = d.with_name(d.name + '.tmp')
+        tag = f'{os.getpid()}-{os.urandom(3).hex()}'
+        tmp = d.with_name(f'{d.name}.{tag}.tmp')       # unique: several workers may build the same cache at once
         tmp.mkdir(parents=True, exist_ok=True)
         arrs = {'block_kind': self._block['kind'], 'block_bb': self._block['bb'], 'block_cls': self._block['cls'],
                 'order': c.order.astype(np.int64), 'buckets': np.asarray(c.buckets, np.float64).reshape(-1, 8),
@@ -646,18 +647,23 @@ class AnnotationLayer:
                                                         'detail_min_px', 'z', 'overview', 'pyramid')},
                 'median_size': c.median_size, 'bbox': c.bbox, 'pyr_meta': c.pyr_meta,
                 'pyr_levels': [{'k': L['k'], 'span': L['span'], 'raw': L['raw']} for L in c._pyr] if c.pyr_meta else []}
-        (tmp / 'meta.json').write_text(json.dumps(meta))
+        (tmp / 'meta.json').write_text(json.dumps(meta), encoding='utf-8')
         if d.exists():
             import shutil
-            shutil.rmtree(d)
-        tmp.rename(d)
-        return d
+            shutil.rmtree(d, ignore_errors=True)   # Windows: files still memory-mapped elsewhere can't be removed
+        try:
+            os.replace(tmp, d)
+            return d
+        except OSError:                           # d still there (mapped, or another worker won the race)
+            alt = d.with_name(f'{d.name}-{tag}')
+            os.replace(tmp, alt)
+            return alt
 
     @classmethod
     def open(cls, path: str | Path, version: int | None = None) -> 'AnnotationLayer':
         """Memory-map a layer written by ``save()``."""
         d = Path(path)
-        meta = json.loads((d / 'meta.json').read_text())
+        meta = json.loads((d / 'meta.json').read_text(encoding='utf-8'))
         if meta.get('format') != cls._SAVE_FORMAT:
             raise ValueError(f'{d}: unsupported layer format {meta.get("format")}')
         ld = lambda k: np.load(d / f'{k}.npy', mmap_mode='r', allow_pickle=False)  # noqa: E731

@@ -293,6 +293,6 @@ def create_app(registry: SlideRegistry, prefix: str = '/wissi-viz', cors: str | 
 
     @app.get('/', response_class=HTMLResponse)
     def index():
-        return (STATIC_DIR / 'demo.html').read_text().replace('__API__', prefix)
+        return (STATIC_DIR / 'demo.html').read_text(encoding='utf-8').replace('__API__', prefix)
 
     return app

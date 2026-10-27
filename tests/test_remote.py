@@ -148,7 +148,7 @@ def test_annotations_from_api(svs):
         ring = [[x, y], [x + 20, y], [x + 20, y + 15], [x, y + 15], [x, y]]
         feats.append({'type': 'Feature', 'geometry': {'type': 'Polygon', 'coordinates': [ring]},
                       'properties': {'classification': {'name': ['Tumor', 'Immune'][i % 2]}, 'area': 300.0}})
-    geo.write_text(json.dumps({'type': 'FeatureCollection', 'features': feats}))
+    geo.write_text(json.dumps({'type': 'FeatureCollection', 'features': feats}), encoding='utf-8')
     reg = SlideRegistry(warm=False)
     halo, pc = MockHaloLink(svs, geojson_path=geo), MockPathCore(svs)
     h_id, p_id = halo.register(reg, 'h'), pc.register(reg, 'p')

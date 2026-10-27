@@ -9,6 +9,7 @@ import importlib.util
 import re
 import shutil
 import socket
+import sys
 import threading
 from pathlib import Path
 
@@ -29,8 +30,8 @@ def test_gpu_pyramid_matches_worker(tmp_path):
     m = _ab()
     shutil.copy(ROOT / 'benchmarks' / 'gpu_pyramid' / 'gpu_pyramid.js', tmp_path)
     shutil.copy(ROOT / 'benchmarks' / 'gpu_pyramid' / 'ab.html', tmp_path)
-    src = (ROOT / 'src' / 'wissi_viz' / 'static' / 'index.js').read_text()
-    (tmp_path / 'worker.js').write_text(re.search(r'const PYR_WORKER_SRC = `(.*?)`;', src, re.S).group(1))
+    src = (ROOT / 'src' / 'wissi_viz' / 'static' / 'index.js').read_text(encoding='utf-8')
+    (tmp_path / 'worker.js').write_text(re.search(r'const PYR_WORKER_SRC = `(.*?)`;', src, re.S).group(1), encoding='utf-8')
     (tmp_path / 'c.bin').write_bytes(m.synthetic_payload(60_000))
     with socket.socket() as so:
         so.bind(('127.0.0.1', 0))
@@ -45,7 +46,10 @@ def test_gpu_pyramid_matches_worker(tmp_path):
     try:
         with sync_playwright() as pw:
             try:
-                b = pw.chromium.launch(args=['--enable-unsafe-swiftshader', '--enable-unsafe-webgpu', '--enable-features=Vulkan'])
+                args = ['--enable-unsafe-swiftshader', '--enable-unsafe-webgpu']
+                if sys.platform.startswith('linux'):
+                    args.append('--enable-features=Vulkan')      # headless Linux: SwiftShader WebGPU via Vulkan
+                b = pw.chromium.launch(args=args)
             except Exception as e:  # noqa: BLE001
                 pytest.skip(f'no Chromium: {e}')
             pg = b.new_page()

@@ -142,12 +142,12 @@ def test_cached_object_layer_rebuilds_when_the_file_changes(tmp_path):
 def test_delimited_reader_detects_separator_and_compacts_text(tmp_path):
     from wissi_viz import read_objects
     rows = ['Centroid X px\tCentroid Y px\tClass\tScore'] + [f'{i}\t{2 * i}\t{"T" if i % 2 else "S"}\t{i / 10}' for i in range(500)]
-    (tmp_path / 'o.txt').write_text('\n'.join(rows))
+    (tmp_path / 'o.txt').write_text('\n'.join(rows), encoding='utf-8')
     o = read_objects(tmp_path / 'o.txt', units='px')
     assert len(o) == 500 and set(o.class_names()) == {'T', 'S'}
     L = o.to_layer()
     assert L.properties(3)['Score'] == pytest.approx(0.3, abs=1e-6)
-    (tmp_path / 'o.csv').write_text('\n'.join(r.replace('\t', ';') for r in rows))
+    (tmp_path / 'o.csv').write_text('\n'.join(r.replace('\t', ';') for r in rows), encoding='utf-8')
     assert len(read_objects(tmp_path / 'o.csv', units='px')) == 500
 
 

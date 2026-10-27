@@ -104,17 +104,60 @@ def set_overlay_cache_mb(mb: float) -> None:
 
 # ------------------------------------------------------------------------------------------- telemetry
 def rss_bytes() -> int:
-    """Resident memory of this process (Linux: current VmRSS; elsewhere: the peak)."""
+    """Current resident memory of this process, on Linux, macOS and Windows (psutil when installed)."""
     try:
-        with open('/proc/self/status') as f:
-            for line in f:
-                if line.startswith('VmRSS'):
-                    return int(line.split()[1]) * 1024
-    except OSError:
+        import psutil
+        return int(psutil.Process().memory_info().rss)
+    except Exception:  # noqa: BLE001  (not installed)
         pass
-    import resource
-    r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    return int(r if sys.platform == 'darwin' else r * 1024)
+    if sys.platform.startswith('linux'):
+        try:
+            with open('/proc/self/status', encoding='utf-8') as f:
+                for line in f:
+                    if line.startswith('VmRSS'):
+                        return int(line.split()[1]) * 1024
+        except OSError:
+            pass
+    elif sys.platform == 'win32':
+        try:
+            return _win_working_set()
+        except Exception:  # noqa: BLE001
+            pass
+    elif sys.platform == 'darwin':
+        try:
+            import os
+            import subprocess
+            out = subprocess.run(['ps', '-o', 'rss=', '-p', str(os.getpid())], capture_output=True, text=True, timeout=5)
+            return int(out.stdout.strip()) * 1024
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        import resource                  # Unix fallback: the peak, not the current value
+        r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        return int(r if sys.platform == 'darwin' else r * 1024)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _win_working_set() -> int:
+    import ctypes
+    from ctypes import wintypes
+
+    class PMC(ctypes.Structure):
+        _fields_ = [('cb', wintypes.DWORD), ('PageFaultCount', wintypes.DWORD), ('PeakWorkingSetSize', ctypes.c_size_t),
+                    ('WorkingSetSize', ctypes.c_size_t), ('QuotaPeakPagedPoolUsage', ctypes.c_size_t),
+                    ('QuotaPagedPoolUsage', ctypes.c_size_t), ('QuotaPeakNonPagedPoolUsage', ctypes.c_size_t),
+                    ('QuotaNonPagedPoolUsage', ctypes.c_size_t), ('PagefileUsage', ctypes.c_size_t),
+                    ('PeakPagefileUsage', ctypes.c_size_t)]
+    k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    k32.GetCurrentProcess.restype = wintypes.HANDLE
+    k32.K32GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(PMC), wintypes.DWORD]
+    k32.K32GetProcessMemoryInfo.restype = wintypes.BOOL
+    pmc = PMC()
+    pmc.cb = ctypes.sizeof(PMC)
+    if not k32.K32GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(pmc), pmc.cb):
+        raise OSError(ctypes.get_last_error())
+    return int(pmc.WorkingSetSize)
 
 
 def rss_breakdown() -> dict:
@@ -122,7 +165,7 @@ def rss_breakdown() -> dict:
     layers and libraries — page cache the OS reclaims under pressure). Empty elsewhere."""
     out = {}
     try:
-        with open('/proc/self/status') as f:
+        with open('/proc/self/status', encoding='utf-8') as f:
             for line in f:
                 k = line.split(':')[0]
                 if k in ('RssAnon', 'RssFile', 'RssShmem'):

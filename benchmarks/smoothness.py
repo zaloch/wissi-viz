@@ -145,6 +145,8 @@ def scenario(pg, browser, cdp, name, action, seconds):
 
 
 def main():
+    from wissi_viz._compat import utf8_stdio
+    utf8_stdio()
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', default=None)
     ap.add_argument('--label', default='')
@@ -262,7 +264,7 @@ def main():
         browser.close()
     srv.should_exit = True
     if a.out:
-        Path(a.out).write_text(json.dumps(results, indent=1))
+        Path(a.out).write_text(json.dumps(results, indent=1), encoding='utf-8')
 
 
 if __name__ == '__main__':

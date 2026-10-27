@@ -24,7 +24,7 @@ def main(d: Path, mpp: float = 0.5, seed: int = 7) -> None:
     from shapely.geometry import Polygon
 
     rng = np.random.default_rng(seed)
-    gj = json.loads((d / 'synthetic_he.geojson').read_text())
+    gj = json.loads((d / 'synthetic_he.geojson').read_text(encoding='utf-8'))
     xy, rois = [], []
     for f in gj['features']:
         g = f['geometry']
@@ -84,7 +84,7 @@ def main(d: Path, mpp: float = 0.5, seed: int = 7) -> None:
         ring = np.stack([cx + r * np.cos(t), cy + r * 0.8 * np.sin(t)], 1).tolist()
         feats.append({'type': 'Feature', 'properties': {'name': name, 'classification': {'name': name}},
                       'geometry': {'type': 'Polygon', 'coordinates': [ring]}})
-    (d / 'synthetic_he_rois.geojson').write_text(json.dumps({'type': 'FeatureCollection', 'features': feats}))
+    (d / 'synthetic_he_rois.geojson').write_text(json.dumps({'type': 'FeatureCollection', 'features': feats}), encoding='utf-8')
     print(n, 'cells;', pd.Series(cls).value_counts().to_dict())
 
 

@@ -1,6 +1,7 @@
 """``wissi-viz serve`` — standalone tile + annotation server with a demo page.
 
     wissi-viz serve /data/slides --port 8010 --cache-dir /var/cache/wissi-viz
+    wissi-viz desktop slide.svs            # the viewer in its own window ("wissi-viz[desktop]")
     wissi-viz info slide.svs
 """
 from __future__ import annotations
@@ -12,7 +13,13 @@ from pathlib import Path
 
 
 def main(argv: list[str] | None = None) -> None:
+    from ._compat import utf8_stdio
+    utf8_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ['desktop']:  # the viewer in its own window (pywebview), see wissi_viz/desktop.py
+        from .desktop import main as desktop_main
+        desktop_main(argv[1:])
+        return
     if argv[:1] == ['loadtest']:  # multi-user load test (the standalone scripts/wissi_loadtest.py, bundled in the wheel)
         try:
             from . import loadtest as lt
@@ -74,7 +81,7 @@ def main(argv: list[str] | None = None) -> None:
         md = format_zoom_report(rep_)
         print('\n' + md)
         if a.out:
-            Path(a.out).with_suffix('.md').write_text(md)
+            Path(a.out).with_suffix('.md').write_text(md, encoding='utf-8')
         return
     if a.cmd == 'bench':
         from .bench import main as bench_main

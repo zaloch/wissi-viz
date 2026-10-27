@@ -1,10 +1,11 @@
 # Integrating wissi-viz
 
-*Current as of wissi-viz 0.6.1.* This guide covers how to put wissi-viz into an app: NiceGUI (wissi), other Python web frameworks, JavaScript frameworks and notebooks. It also covers:
+*Current as of wissi-viz 0.7.0.* This guide covers how to put wissi-viz into an app: NiceGUI (wissi), other Python web frameworks, JavaScript frameworks and notebooks. It also covers:
 - how to show large cell and object tables;
 - how to keep the viewer smooth, including on clients without a GPU;
 - how to connect a vendor tile API such as PathCore or HALO Link;
-- how to deploy and load-test.
+- how to deploy and load-test;
+- the standalone desktop app, and installing with uv on Windows, macOS and Linux.
 
 ```
  browser (any app)                       your server                                   storage / vendors
@@ -25,6 +26,7 @@
 
 | Version | Change | What you do |
 |---|---|---|
+| 0.7.0 | **Desktop app and platform support.** `wissi-viz-app` opens the viewer in its own native window with its own icon (pywebview), as an option next to the embedded element. Windows, macOS and Linux are supported and CI-tested; packaging moved to uv (`uv.lock`, dependency groups). Python 3.10–3.11 work again (older czifile). | Nothing for embedded use. For the app: `uv tool install "wissi-viz[desktop]"` (§12). For development: `uv sync` (§13). |
 | 0.5.0 | **Object pyramid.** Millions of cells are shown as screen-sized aggregated dots, then as GPU-drawn outlines when zoomed in. There is a **server mode** (default) and a **client mode**. | Use `cached_object_layer` for big tables (§5). Choose `overlays: 'server'\|'client'\|'auto'`. |
 | 0.5.1 | **Polars reader.** `read_objects(engine='auto')` uses Polars, then pyarrow, then pandas. | `pip install "wissi-viz[polars]"`. |
 | 0.6.1 | **Server memory stays flat.** Annotation and object layers from connectors were kept in RAM for every slide ever opened, so a PathCore-backed server grew without limit. They are now memory-mapped from the disk cache and evicted least-recently-used, every cache has a byte budget, and `/wissi-viz/stats` reports where memory is. | Set `cache_dir` (it now also holds compiled layers). Optionally tune the budgets (§6, §9). |
@@ -40,8 +42,10 @@
 | **C. Same server, any ASGI app** (FastAPI, Starlette, Litestar) | one Python service | your own endpoints | ✔ `create_router` / `create_app` |
 | **D. Separate tile server + `<wissi-viz>` in any page** (React, Vue, Svelte, Django or Flask templates, Streamlit, Dash, static HTML) | non-Python front ends, WSGI apps, or scaling tiles separately | over HTTP | ✔ cross-origin test (`tests/test_browser.py`) |
 | **E. iframe** of a viewer page | maximum isolation, minimum integration | `postMessage` | — |
+| **F. Desktop app** `wissi-viz-app` | people open local files, no web app needed | — (it is the app) | ✔ `tests/test_desktop.py` |
 
 ```bash
+uv add "wissi-viz[nicegui,polars]"            # in a uv project (or: pip install …); same extras below
 pip install "wissi-viz[nicegui,polars]"       # path A/B; add [server] for C/D, [remote] for vendor APIs, [analysis] for spatial stats
 pip install "wissi-viz[all]"                  # everything permissive (BSD/MIT/Apache); LGPL readers are opt-in: [lgpl]
 ```
@@ -381,6 +385,7 @@ sid = conn.register(registry, 'image-123')
 - **Restrict CORS:** for path D, set it to your app's origin, not `'*'`.
 - **Use opaque slide ids:** `registry.add(src, slide_id=…)`. The browser can only address registered ids; file paths are never accepted from the client.
 - **Decide on annotation editing:** `allow_edit=False` disables the annotation-append endpoint used by the drawing tools.
+- **The desktop app** listens on 127.0.0.1 only, on a random port, rejects other `Host` names (DNS rebinding) and sends no CORS headers. Its own endpoints (open a path, list recent files) also need a per-launch token that only its window has.
 
 ## 9. Deployment
 
@@ -464,3 +469,74 @@ python scripts/wissi_loadtest.py https://wissi.example.org/wissi-viz --users 10,
 - **Overlays:** `--overlays` also fetches object overlays as the viewer does. `--overlay-mode client` simulates client-mode downloads.
 
 See [LOAD_TESTING.md](LOAD_TESTING.md). A three-process simulation against the mock vendor API is in `examples/tile_api/load_sim.py`, with results in `benchmarks/results-load.md` and `benchmarks/results-overlays.md`.
+
+## 12. Desktop app (path F)
+
+The same viewer in its own window, with its own icon: for people who open local slides and cell tables without a web app around them. The embedded element is unchanged; the app is one more host for it.
+
+```bash
+uv tool install "wissi-viz[desktop]"     # isolated install, puts wissi-viz-app on PATH (or: pipx / pip install)
+wissi-viz-app                            # empty window → File ▸ Open slides…  (Ctrl/⌘+O)
+wissi-viz desktop a.svs b.czi cells.csv  # open files; tables and annotation files attach to the first slide
+wissi-viz desktop --install-shortcut     # launcher with the app icon (below); --uninstall-shortcut removes it
+uvx --from "wissi-viz[desktop]" wissi-viz-app   # try it without installing
+```
+
+- **What's in the window:**
+  - Open slides, a folder, or cells / annotations (CSV, TSV, Parquet, Feather, AnnData, GeoJSON, HALO XML) through native file dialogs, the **File** menu, or by **dropping files** onto the window.
+  - A slide list (click: show in the active pane; double-click: add a pane), 1–16 panes, sync, the drawing tools, and recent files on the start screen.
+  - Cell tables are compiled once into the cache and memory-mapped on later opens, as on the server (§5).
+- **How it works:** the tile server runs inside the app on 127.0.0.1 (random port, Host-checked, token on the app's own endpoints, §8). [pywebview](https://pywebview.flowrl.com) (BSD-3) shows it in the system web view:
+
+| | Web view | Comes with `[desktop]` | Icon |
+|---|---|---|---|
+| **Windows 10/11** | WebView2 (Edge, preinstalled) | pywebview + pythonnet (MIT) | window + taskbar (own AppUserModelID); `.lnk` in the Start menu and on the desktop |
+| **macOS 11+** | WKWebView (Safari) | pywebview + pyobjc (MIT) | Dock icon; `~/Applications/wissi-viz.app` (Launchpad, Spotlight) |
+| **Linux** | WebKitGTK or Qt WebEngine | pywebview only; **GTK or Qt bindings are installed separately** (they are LGPL/GPL, so not a dependency) | window icon; `.desktop` entry in the app menu |
+
+- **Linux GUI toolkit (pick one):**
+  - GTK from the distribution: `sudo apt install python3-gi gir1.2-webkit2-4.1` (Fedora: `python3-gobject webkit2gtk4.1`), and give the app's environment access to it: `uv tool install --python /usr/bin/python3 "wissi-viz[desktop]"` then add `include-system-site-packages = true` to the tool's `pyvenv.cfg`, or use a venv made with `--system-site-packages`.
+  - Qt from wheels: `uv tool install "wissi-viz[desktop]" --with "pywebview[qt]"` (PyQt6, GPL) or `--with "pywebview[pyside6]"` (LGPL).
+  - **Without either,** or with `--browser`, the app opens the same page as a chromeless Chrome/Edge/Chromium `--app` window, or in the default browser, with a path box instead of file dialogs.
+- **The icon** is an original design (magnifier over stained tissue on a tile grid), shipped as `wissi_viz/assets/icon.{svg,png,ico,icns}`. Redraw it with `python scripts/make_icon.py`.
+- **Where things are kept:**
+
+| | Windows | macOS | Linux |
+|---|---|---|---|
+| tile + layer cache | `%LOCALAPPDATA%\wissi-viz\Cache` | `~/Library/Caches/wissi-viz` | `~/.cache/wissi-viz` |
+| recent files, icon copy | `%APPDATA%\wissi-viz` | `~/Library/Application Support/wissi-viz` | `~/.config/wissi-viz` |
+
+  `--cache-dir`, `--memory-mb` and `--cache-gb` change the cache.
+- **A single-file app** (no Python on the target machine) can be built with PyInstaller (GPL with a bundling exception, so the output is yours): `pyinstaller --windowed --icon src/wissi_viz/assets/icon.ico --collect-data wissi_viz -n wissi-viz src/wissi_viz/desktop.py` (`icon.icns` on macOS). Not done in CI yet.
+
+## 13. Platforms and installing with uv
+
+**Supported:** Windows 10/11 (x64), macOS 11+ (Apple silicon and Intel), Linux (x86_64 and aarch64), Python 3.10–3.14. CI (`.github/workflows/ci.yml`) runs the test suite on Ubuntu (x64, ARM), Windows and macOS (ARM, Intel) on Python 3.10, 3.12 and 3.13, then builds and installs the wheel.
+
+```bash
+# use it
+uv add "wissi-viz[nicegui,server]"           # in your uv project
+uv tool install "wissi-viz[desktop]"         # the desktop app, isolated
+# develop it
+uv sync --extra analysis --extra io --extra polars --extra server --extra remote --extra bench --extra desktop
+uv run playwright install chromium           # browser tests
+uv run pytest -q
+uv build                                     # sdist + wheel in dist/
+```
+
+- **`uv.lock`** is universal: one lockfile for every OS and Python version. `[tool.uv] required-environments` makes `uv lock` fail if Windows x64, macOS ARM / Intel or Linux x64 / ARM would lose a wheel. `pip install` works as before; the `dev` extra is kept for pip, and uv uses the `dev` dependency group.
+- **Wheels for every platform** exist for the core and every permissive extra, with these gaps:
+
+| Package | Gap | Effect |
+|---|---|---|
+| czifile 2026.x | Python ≥ 3.12 | Python 3.10–3.11 get czifile 2019.7.2.x; the CZI reader supports both (tested). |
+| slideio (`[slideio]`) | no Linux ARM wheels; no macOS Intel wheel for Python 3.14 | skipped on Linux ARM by a marker; VSI/ZVI/DICOM/SCN/AFI need x86_64 Linux, Windows or macOS there. |
+| pylibCZIrw (`[lgpl]`) | no Python 3.14 wheels yet | use czifile (the default) on 3.14. |
+| proxy-tools (pulled in by pywebview) | pure-Python source package, no wheel | builds automatically in a second; only `--only-binary :all:` installs refuse it. |
+
+- **What was made cross-platform:**
+  - **Text files** are read and written as UTF-8 everywhere, and console output is UTF-8 (reports with µ, ≤, → print on Windows consoles and pipes).
+  - **Memory-mapped layer files:** Windows cannot delete or rename a file that is mapped, so layers are saved into fresh folders and old ones are swept when unmapped.
+  - **Cache file names** avoid Windows reserved names (CON, NUL, …), illegal characters and the 260-character path limit.
+  - **Process memory** (`/stats`, the memory harness) is read with psutil if present, else `/proc` (Linux), the Win32 API (Windows) or `ps` (macOS). `malloc_trim` is used only with glibc.
+  - **Benchmarks and the WebGPU test** only add Linux-specific Chromium flags on Linux.

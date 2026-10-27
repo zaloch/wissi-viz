@@ -2,8 +2,13 @@
 name: ci
 on:
   push:
+    paths-ignore: [site/**, docs/**, '*.md']
   pull_request:
   workflow_dispatch:
+
+concurrency:                      # a new push cancels the previous run on the same branch
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -12,11 +17,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest, macos-13]   # macos-13 = Intel
-        python: ["3.10", "3.12", "3.13"]
+        os: [ubuntu-latest, windows-latest, macos-latest]     # macos-latest = Apple silicon
+        python: ["3.10", "3.13"]
         include:
-          - os: ubuntu-24.04-arm
-            python: "3.13"
+          - {os: ubuntu-latest, python: "3.12"}
+          - {os: macos-15-intel, python: "3.12"}               # Intel Mac
+          - {os: ubuntu-24.04-arm, python: "3.13"}             # Linux ARM
     env:
       UV_PYTHON: ${{ matrix.python }}
       PYTHONUTF8: "1"

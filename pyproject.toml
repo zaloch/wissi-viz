@@ -9,6 +9,7 @@ description = "GPU-accelerated (WebGL2) whole-slide image viewer and spatial-ana
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "G. Zeballos", email = "gzeballo@bu.edu" }]
 # Core: permissive licences only (BSD / MIT / Apache-2.0 / ISC / HPND). Enforced by tests/test_licenses.py.
 dependencies = [
@@ -42,6 +43,11 @@ dev = ["pytest", "httpx", "playwright"]   # pip users; uv uses the dev dependenc
 
 [project.scripts]
 wissi-viz = "wissi_viz.cli:main"
+
+[project.urls]
+Homepage = "https://zaloch.github.io/wissi-viz/"
+Repository = "https://github.com/zaloch/wissi-viz"
+Documentation = "https://github.com/zaloch/wissi-viz/blob/main/docs/GUIDE.md"
 
 [project.gui-scripts]
 wissi-viz-app = "wissi_viz.desktop:gui_main"     # no console window on Windows

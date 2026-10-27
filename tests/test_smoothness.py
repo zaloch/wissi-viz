@@ -48,7 +48,7 @@ def page():
             srv.should_exit = True
             pytest.skip(f'no Chromium: {e}')
         pg = b.new_page(viewport={'width': 640, 'height': 400})
-        pg.goto(f'http://127.0.0.1:{port}/')
+        pg.goto(f'http://127.0.0.1:{port}/demo')
         pg.wait_for_function('() => window.grid')
         pg.evaluate('() => { grid.setAttribute("controls", "false"); grid.setSync("all"); grid.setSlides(["s", "s", "s", "s"]); }')
         pg.wait_for_function('() => grid.panes.every(p => p.view)', timeout=30000)

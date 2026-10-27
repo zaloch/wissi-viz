@@ -8,7 +8,7 @@ brightfield and fluorescence histology, for the browser and NiceGUI.
 * Analysis (:mod:`wissi_viz.spatial`): nearest neighbours, proximity, margins, composition, density /
   hotspots, Ripley, co-location, cellular neighbourhoods, contact graphs, Moran's I, IHC scoring,
   tissue detection, stain vectors — each with a slide overlay and an ECharts plot.
-* Front end: a dependency-free WebGL2 web component (``<wissi-viz>``) showing 1–16 slides in one GPU
+* Front end: a dependency-free WebGL2 web component (``<wissi-viz>``) showing 1–32 slides in one GPU
   context, and a NiceGUI element (:class:`wissi_viz.nicegui.WissiViz`).
 """
 from .annotations import AnnotationLayer

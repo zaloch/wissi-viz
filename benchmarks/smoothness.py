@@ -191,7 +191,7 @@ def main():
             ctx = browser.new_context(viewport={'width': vw, 'height': vh})
             pg = ctx.new_page()
             pg.add_init_script(INSTRUMENT)
-            pg.goto(f'http://127.0.0.1:{port}/')
+            pg.goto(f'http://127.0.0.1:{port}/demo')
             pg.wait_for_function('() => window.grid')
             pg.evaluate('(ids) => { grid.setAttribute("controls", "false"); grid.setSync("all"); grid.setSlides(ids); }', ids[:n])
             pg.wait_for_function('() => grid.panes.every(p => p.view) && grid.stats().inflight === 0', timeout=120000)

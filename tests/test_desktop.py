@@ -288,3 +288,44 @@ def test_page_in_browser_mode(files):
     finally:
         srv.stop()
         s.shutdown()
+
+
+def test_serve_page_lists_slides_and_opens_32_panes(files):
+    """`wissi-viz serve` serves the same app UI: slide list from the registry, no file opening, up to 32 panes."""
+    pytest.importorskip('playwright')
+    from playwright.sync_api import sync_playwright
+
+    from wissi_viz import SlideRegistry, TileService
+    from wissi_viz.server import create_app
+    reg = SlideRegistry(TileService())
+    for p in (files['a'], files['b']):
+        reg.add(p)
+    srv = D._Server(create_app(reg))
+    url = srv.start()
+    try:
+        with sync_playwright() as pw:
+            try:
+                b = pw.chromium.launch(args=['--enable-unsafe-swiftshader'])
+            except Exception as e:  # noqa: BLE001
+                pytest.skip(f'no Chromium: {e}')
+            pg = b.new_page(viewport={'width': 1400, 'height': 900})
+            errors = []
+            pg.on('pageerror', lambda e: errors.append(str(e)))
+            pg.goto(url + '/')
+            pg.wait_for_function('() => document.querySelectorAll("#slides li").length === 2')
+            assert pg.is_hidden('#b-open') and pg.is_hidden('#b-layer')
+            assert [o for o in pg.eval_on_selector_all('#n option', 'os => os.map(o => +o.value)')][-1] == 32
+            pg.select_option('#n', '32')
+            pg.wait_for_function('() => document.getElementById("grid").panes.length === 32')
+            pg.wait_for_function('() => document.getElementById("grid").panes.every(p => p.slide && p.slide.info)')
+            rects = pg.evaluate('() => document.getElementById("grid").panes.map(p => [p.rect.w, p.rect.h])')
+            assert all(w > 50 and h > 50 for w, h in rects)            # a real grid, every pane visible
+            # clicking a slide puts it in the active pane
+            pg.click('#slides li:nth-child(2)')
+            pg.wait_for_function('() => document.querySelector("#slides li:nth-child(2) .pane").textContent.length > 0')
+            assert pg.request.get(url + '/demo').ok
+            assert not errors, errors
+            b.close()
+    finally:
+        srv.stop()
+        reg.close()

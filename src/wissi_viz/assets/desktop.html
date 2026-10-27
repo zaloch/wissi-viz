@@ -111,7 +111,9 @@
 </main>
 <footer><span id="log"></span><span>v__VERSION__</span></footer>
 <script type="module">
-  const API = '__API__', TOKEN = '__TOKEN__';
+  const API = '__API__', TOKEN = '__TOKEN__', MODE = '__MODE__';   // MODE: 'desktop' (local files) | 'server' (wissi-viz serve)
+  const MAX_PANES = 32;
+  const SERVER = MODE === 'server';
   const $ = (id) => document.getElementById(id);
   const grid = $('grid');
   const isMac = navigator.platform.toUpperCase().includes('MAC');
@@ -139,7 +141,12 @@
     if (await nativeReady && native()) return native()[name](...args);
     if (name === 'open_paths') return http('/app/open', { paths: args[0], slide: args[1] });
     if (name === 'close_slide') return http('/app/close', { slide: args[0] });
-    if (name === 'state') return http('/app/state');
+    if (name === 'state') {
+      if (!SERVER) return http('/app/state');
+      const list = await (await fetch(`${API}/slides`, { cache: 'no-cache' })).json();
+      return { slides: list.map((s) => ({ ...s, path: s.name })), recent: [] };
+    }
+    if (SERVER) return null;                       // a server's slides are chosen by whoever runs it
     showPathBox(name); return null;               // dialogs need the native window
   };
 
@@ -160,7 +167,7 @@
     const opened = res.opened || [];
     if (opened.length === 1 && panes.length) panes[active] = opened[0];
     else if (opened.length) {
-      panes = opened.slice(0, 16);
+      panes = opened.slice(0, MAX_PANES);
       active = 0;
     }
     if (opened.length) apply();
@@ -207,7 +214,7 @@
       li.title = s.path;
       const name = Object.assign(document.createElement('span'), { className: 'name', textContent: s.name });
       const pane = Object.assign(document.createElement('span'), { className: 'pane', textContent: shown.join(' ') });
-      const x = Object.assign(document.createElement('button'), { textContent: '✕', title: 'Close' });
+      const x = Object.assign(document.createElement('button'), { textContent: '✕', title: 'Close', hidden: SERVER });
       x.onclick = async (e) => {
         e.stopPropagation();
         const r = await call('close_slide', s.id);
@@ -216,7 +223,7 @@
         apply();
       };
       li.onclick = () => { if (!panes.length) panes = [s.id]; else panes[active] = s.id; apply(); };
-      li.ondblclick = () => { if (panes.length < 16 && !panes.includes(s.id)) { panes.push(s.id); active = panes.length - 1; apply(); } };
+      li.ondblclick = () => { if (panes.length < MAX_PANES && !panes.includes(s.id)) { panes.push(s.id); active = panes.length - 1; apply(); } };
       li.append(name, pane, x);
       ul.append(li);
     }
@@ -241,7 +248,7 @@
 
   // ---- toolbar
   const sel = $('n');
-  for (let i = 1; i <= 16; i++) sel.add(new Option(i, i));
+  for (let i = 1; i <= MAX_PANES; i++) sel.add(new Option(i, i));
   sel.onchange = () => setPaneCount(+sel.value);
   $('sync').onchange = (e) => grid.setSync(e.target.value);
   const tb = $('tools');
@@ -279,11 +286,11 @@
   document.addEventListener('dragover', (e) => e.preventDefault());
   document.addEventListener('drop', (e) => {
     e.preventDefault(); dragDepth = 0; document.body.classList.remove('drag');
-    if (!native()) showPathBox('drop');           // a browser can't see a dropped file's path
+    if (!native() && !SERVER) showPathBox('drop');           // a browser can't see a dropped file's path
   });
 
-  /** Show these slide ids in panes (1–16), as if picked in the slide list. */
-  function showSlides(ids) { panes = ids.filter((id) => slides.some((s) => s.id === id)).slice(0, 16); active = 0; apply(); }
+  /** Show these slide ids in panes (1–32), as if picked in the slide list. */
+  function showSlides(ids) { panes = ids.filter((id) => slides.some((s) => s.id === id)).slice(0, MAX_PANES); active = 0; apply(); }
 
   window.wissiApp = { onResult, activeSlide, showSlides };
   await customElements.whenDefined('wissi-viz');
@@ -292,7 +299,13 @@
   panes = slides.slice(0, Math.min(4, slides.length)).map((s) => s.id);
   apply();
   renderRecent(st.recent);
-  if (!(await nativeReady)) log('Browser window: paste paths to open files');
+  if (SERVER) {
+    for (const id of ['b-open', 'b-folder', 'b-layer']) $(id).hidden = true;
+    document.querySelector('#empty .actions').hidden = true;
+    document.querySelector('#empty h1').textContent = slides.length ? 'Pick a slide' : 'No slides on this server';
+    document.querySelector('aside .hint').textContent = 'Click a slide to show it in the active pane; double-click to add a pane.';
+    log(`${slides.length} slide${slides.length === 1 ? '' : 's'} on this server`);
+  } else if (!(await nativeReady)) log('Browser window: paste paths to open files');
 </script>
 </body>
 </html>

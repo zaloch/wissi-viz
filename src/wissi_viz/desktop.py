@@ -171,28 +171,20 @@ class Session:
     def app(self):
         """The viewer server plus the app page (``/app``) and its token-protected endpoints."""
         from fastapi import HTTPException
-        from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+        from fastapi.responses import HTMLResponse, JSONResponse
         from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-        from .server import create_app
+        from .server import app_page, create_app
         app = create_app(self.registry, prefix=PREFIX, cors=None)
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost', 'testserver'])
-        page = (ASSETS / 'desktop.html').read_text(encoding='utf-8')
 
         def check(request: Request):
             if not secrets.compare_digest(request.headers.get('x-wissi-token', ''), self.token):
                 raise HTTPException(403, 'bad token')
 
         @app.get('/app', response_class=HTMLResponse)
-        def app_page():
-            return (page.replace('__API__', PREFIX).replace('__TOKEN__', self.token)
-                    .replace('__VERSION__', __version__))
-
-        @app.get('/app/icon.{kind}')
-        def app_icon(kind: str):
-            if kind not in ('svg', 'png'):
-                raise HTTPException(404)
-            return FileResponse(icon_path(kind), headers={'Cache-Control': 'max-age=86400'})
+        def desktop_page():
+            return app_page(PREFIX, mode='desktop', token=self.token)
 
         @app.get('/app/state')
         def app_state(request: Request):

@@ -29,7 +29,7 @@
 
 ## Features
 
-- **Fast, on the GPU.** One WebGL2 context drives 1–16 panes, with synchronised navigation, multi-channel fluorescence compositing, stain deconvolution and adaptive resolution while moving. It stays smooth on clients without a GPU.
+- **Fast, on the GPU.** One WebGL2 context drives 1–32 panes, with synchronised navigation, multi-channel fluorescence compositing, stain deconvolution and adaptive resolution while moving. It stays smooth on clients without a GPU.
 - **Formats:** SVS, CZI, OME-TIFF, NDPI, VSI, ZVI, DICOM, SCN, AFI and more, plus vendor tile APIs (PathCore, HALO Link, any HTTP tile service) through connectors.
 - **Millions of cells.** Object tables from QuPath, HALO, CellProfiler, GeoJSON, label masks or AnnData. They are shown as aggregated dots when zoomed out and as GPU-drawn outlines up close, coloured by class or by any measurement.
 - **Annotations:** ROIs and drawing tools (point, rectangle, ellipse, polygon, freehand, line), with import and export.
@@ -73,11 +73,11 @@ wissi-viz desktop --install-shortcut       # add it to the Start menu / Applicat
 
 ![Desktop app: CMU-1 with nuclei coloured by size, overview and 40×](docs/screenshots/desktop-app.jpg)
 
-**Standalone server with a demo page:**
+**Standalone server** with the same app UI (slide list, 1–32 panes) for everyone on your network:
 
 ```bash
 wissi-viz serve /data/slides --port 8010
-# open http://127.0.0.1:8010/
+# open http://127.0.0.1:8010/   (the bare element demo is at /demo)
 ```
 
 **As an HTML element in any page or framework:**

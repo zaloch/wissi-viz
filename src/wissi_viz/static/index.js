@@ -3,12 +3,13 @@
 //   <script type="module" src="/wissi-viz/static/index.js"></script>
 //   <wissi-viz api="/wissi-viz" slides="slideA,slideB,slideC,slideD"></wissi-viz>
 //
-// One WebGL2 context renders 1–16 panes (browsers cap live contexts at ~16, so one
+// One WebGL2 context renders 1–32 panes (browsers cap live contexts at ~16, so one
 // context per slide would not scale). All panes share a GPU texture LRU, a worker pool
 // that fetches + decodes off the main thread, and a priority scheduler that loads
 // coarse levels first, then the view centre-out, then a predictive margin.
 
 const MAX_CH = 8;
+export const MAX_PANES = 32;   // one WebGL2 context, scissored per pane
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const now = () => performance.now();
 
@@ -1123,9 +1124,9 @@ export class WsiGrid extends HTMLElement {
   }
 
   // ---------------------------------------------------------------- public API
-  /** Panes from slide ids / URLs / {slide|src, view, channels, layers} objects. Up to 16. */
+  /** Panes from slide ids / URLs / {slide|src, view, channels, layers} objects. Up to MAX_PANES (32). */
   setSlides(list) {
-    list = (list || []).slice(0, 16);
+    list = (list || []).slice(0, MAX_PANES);
     const n = Math.max(1, list.length);
     while (this.panes.length > n) this.panes.pop();
     while (this.panes.length < n) this.panes.push(new Pane(this, this.panes.length));

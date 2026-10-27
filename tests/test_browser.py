@@ -141,7 +141,7 @@ def test_failed_tile_is_retried_until_sharp(tmp_path):
             except Exception as e:  # noqa: BLE001
                 pytest.skip(f'no Chromium: {e}')
             pg = b.new_page(viewport={'width': 600, 'height': 400})
-            pg.goto(f'http://127.0.0.1:{port}/')
+            pg.goto(f'http://127.0.0.1:{port}/demo')
             pg.wait_for_function('() => window.grid')
             pg.evaluate('() => grid.setSlides(["flaky"])')
             pg.wait_for_function('() => grid.panes[0].view && grid.coverage().panes[0] && grid.coverage().panes[0].level === 0',
@@ -201,7 +201,7 @@ def test_quadtree_draw_matches_legacy_pixels_and_has_no_overdraw(tmp_path):
             except Exception as e:  # noqa: BLE001
                 pytest.skip(f'no Chromium: {e}')
             pg = b.new_page(viewport={'width': 640, 'height': 400})
-            pg.goto(f'http://127.0.0.1:{port}/')
+            pg.goto(f'http://127.0.0.1:{port}/demo')
             pg.wait_for_function('() => window.grid')
             pg.evaluate('() => { grid.setAttribute("controls", "false"); grid.setSlides(["q", "q"]); }')
             # views at full resolution of level 0 (with holes), and between levels

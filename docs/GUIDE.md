@@ -4,7 +4,7 @@
 
 wissi-viz is a GPU-accelerated whole-slide image viewer and spatial-analysis toolkit for brightfield and fluorescence histology. It runs in the browser.
 
-- **What it shows:** 1–16 slides at once, from SVS, CZI, OME-TIFF, NDPI, VSI, ZVI, DICOM, SCN or AFI files, or from PathCore / HALO Link through connector stubs your app fills in.
+- **What it shows:** 1–32 slides at once, from SVS, CZI, OME-TIFF, NDPI, VSI, ZVI, DICOM, SCN or AFI files, or from PathCore / HALO Link through connector stubs your app fills in.
 - **Objects and annotations:** ROIs, drawings and millions of cells, imported from QuPath, HALO, CellProfiler, GeoJSON, label masks or AnnData, and rendered on the GPU. Layers can be coloured by class or by any measurement.
 - **Spatial analysis:** nearest neighbours, proximity, invasive margins, ROI composition (part of whole), density and hotspot maps, Ripley's K/L/g, co-location enrichment, cellular neighbourhoods, contact graphs, Moran's I, IHC H-score, tissue detection and GPU stain deconvolution. Each one produces a table, a slide overlay and a chart.
 - **Where it runs:** as a plain HTML element (`<wissi-viz>`), or as a native NiceGUI element (`wissi_viz.nicegui.WissiViz`) for wissi.
@@ -13,7 +13,7 @@ wissi-viz is a GPU-accelerated whole-slide image viewer and spatial-analysis too
 ```
  Browser                                                     Python (NiceGUI / FastAPI process)
 ┌────────────────────────────────────────────────────┐      ┌──────────────────────────────────────────┐
-│ <wissi-viz> one WebGL2 context, 1–16 panes          │      │ /wissi-viz router (mounted on NiceGUI's app) │
+│ <wissi-viz> one WebGL2 context, 1–32 panes          │      │ /wissi-viz router (mounted on NiceGUI's app) │
 │  ├ scheduler: coarse → centre-out → margin/predict  │ HTTP │  ├ memory LRU  (encoded tiles)            │
 │  ├ worker pool: fetch + decode off main thread      │◀────▶│  ├ disk cache  (survives restarts)        │
 │  ├ GPU texture LRU (shared by all panes, budgeted)  │      │  ├ in-flight coalescing                    │
@@ -150,7 +150,7 @@ grid.set_slide(0, sid)
 `examples/wissi_integration.py` has both stubs with the lines to fill in marked. **`examples/tile_api/`** is a full, runnable simulation:
 - a mock vendor service (bearer auth, 16 images in 4 pyramid styles, latency, 429/503/404);
 - a ~100-line `httpx` connector;
-- a NiceGUI app showing 1–16 images;
+- a NiceGUI app showing 1–32 images;
 - a cold/warm browser benchmark. Results are in [benchmarks/results-tile-api.md](../benchmarks/results-tile-api.md).
 
 What the connector layer handles:
@@ -321,7 +321,7 @@ On 120k cells, each analysis takes 0.01–4 s.
 
 | JS (`<wissi-viz>`) | Python (`WissiViz`) | |
 |---|---|---|
-| `setSlides([...])`, `setSlide(i, ref)` | `set_slides`, `set_slide` | 1–16 panes; ref = id / URL / `{slide, view, channels, layers}` |
+| `setSlides([...])`, `setSlide(i, ref)` | `set_slides`, `set_slide` | 1–32 panes; ref = id / URL / `{slide, view, channels, layers}` |
 | `setLayout('auto'\|'4x4'\|'3x4')` | `set_layout` | |
 | `goTo(pane, x, y, {units, zoom\|magnification\|mpp\|fov\|fovUm, animate})` | `go_to(...)` | pane = index, `'active'`, `'all'`, `[i, j]` |
 | `goToBounds(pane, x0, y0, x1, y1)` | `go_to_bounds`, `go_to_object` | |

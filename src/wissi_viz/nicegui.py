@@ -95,7 +95,7 @@ def merge_views(views: dict, args: Any) -> list[dict]:
 
 class WissiViz(Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'},
               default_style='width:100%;height:600px;'):
-    """1–16 whole-slide images in one GPU canvas.
+    """1–32 whole-slide images in one GPU canvas.
 
     ``slides``: file paths, :class:`SlideSource` objects (e.g. PathCore/HALOLink adapters),
     registered slide ids, or dicts ``{'slide': ref, 'view': {...}, 'channels': [...], 'layers': {...}}``.
@@ -179,8 +179,8 @@ class WissiViz(Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'},
         return list(self._props['slides'])
 
     def set_slides(self, slides: Sequence[Any]) -> 'WissiViz':
-        """Replace all panes (1–16)."""
-        self._props['slides'] = [self._ref(s) for s in list(slides)[:16]]
+        """Replace all panes (1–32)."""
+        self._props['slides'] = [self._ref(s) for s in list(slides)[:32]]
         self.update()
         return self
 

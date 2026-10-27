@@ -25,6 +25,7 @@ from .sources.remote import RemoteError
 from .tiles import encode_rgb
 
 STATIC_DIR = Path(__file__).parent / 'static'
+ASSETS_DIR = Path(__file__).resolve().parent / 'assets'
 IMMUTABLE = 'public, max-age=31536000, immutable'
 
 
@@ -292,7 +293,28 @@ def create_app(registry: SlideRegistry, prefix: str = '/wissi-viz', cors: str | 
     app.include_router(create_router(registry, cors=cors), prefix=prefix)
 
     @app.get('/', response_class=HTMLResponse)
-    def index():
+    def index():   # the app UI: slide list, 1–32 panes, tools
+        return app_page(prefix, mode='server')
+
+    @app.get('/demo', response_class=HTMLResponse)
+    def demo():    # the minimal element demo (go-to controls, no slide list)
         return (STATIC_DIR / 'demo.html').read_text(encoding='utf-8').replace('__API__', prefix)
 
+    @app.get('/app/icon.{kind}')
+    def app_icon(kind: str):
+        from fastapi import HTTPException
+        from fastapi.responses import FileResponse
+        if kind not in ('svg', 'png'):
+            raise HTTPException(404)
+        return FileResponse(ASSETS_DIR / f'icon.{kind}', headers={'Cache-Control': 'max-age=86400'})
+
     return app
+
+
+def app_page(prefix: str = '/wissi-viz', mode: str = 'server', token: str = '') -> str:
+    """The app page (assets/desktop.html). mode='server': slides from the registry, no file opening;
+    mode='desktop': local files through the desktop window's bridge or token-protected endpoints."""
+    from . import __version__
+    page = (ASSETS_DIR / 'desktop.html').read_text(encoding='utf-8')
+    return (page.replace('__API__', prefix).replace('__TOKEN__', token).replace('__MODE__', mode)
+            .replace('__VERSION__', __version__))

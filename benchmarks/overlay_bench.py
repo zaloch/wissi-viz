@@ -98,7 +98,7 @@ def main():
         for n in panes:
             b = pw.chromium.launch(args=['--ignore-gpu-blocklist', '--enable-unsafe-swiftshader', '--enable-precise-memory-info'])
             pg = b.new_page(viewport={'width': vw, 'height': vh})
-            pg.goto(f'http://127.0.0.1:{port}/')
+            pg.goto(f'http://127.0.0.1:{port}/demo')
             pg.wait_for_function('() => window.grid')
             run = {'panes': n}
 

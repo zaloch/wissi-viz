@@ -83,7 +83,7 @@ def viewer():
 | Python call | Effect |
 |---|---|
 | `WissiViz(slides, layout=, sync=, controls=, legend=, tool=, quality=, texture_budget_mb=, lod=, on_…=)` | create a viewer. `lod` takes `'default'`, `'legacy'` or a dict of options (§6). |
-| `set_slides([...])`, `set_slide(i, ref)` | 1–16 panes. A ref is a path, a registered slide id, a `SlideSource` or `{slide, view, channels, layers}`. |
+| `set_slides([...])`, `set_slide(i, ref)` | 1–32 panes. A ref is a path, a registered slide id, a `SlideSource` or `{slide, view, channels, layers}`. |
 | `go_to(pane, x, y, units='px'\|'um', magnification=…\|zoom=…\|fov=…\|fov_um=…)`, `go_to_bounds`, `go_to_object`, `fit`, `set_active` | navigation; `pane` = index, `'active'`, `'all'` or a list |
 | `set_layout('auto'\|'RxC')`, `set_sync('none'\|'all'\|'pan'\|'zoom')`, `set_tool(tool, draw_layer=)` | grid layout, linked navigation, drawing tools |
 | `set_channel(pane, i, visible=, color=, min=, max=, gamma=)`, `set_adjust(...)`, `set_stain(pane, mode)`, `await auto_stain(pane)` | display |
@@ -484,7 +484,7 @@ uvx --from "wissi-viz[desktop]" wissi-viz-app   # try it without installing
 
 - **What's in the window:**
   - Open slides, a folder, or cells / annotations (CSV, TSV, Parquet, Feather, AnnData, GeoJSON, HALO XML) through native file dialogs, the **File** menu, or by **dropping files** onto the window.
-  - A slide list (click: show in the active pane; double-click: add a pane), 1–16 panes, sync, the drawing tools, and recent files on the start screen.
+  - A slide list (click: show in the active pane; double-click: add a pane), 1–32 panes, sync, the drawing tools, and recent files on the start screen.
   - Cell tables are compiled once into the cache and memory-mapped on later opens, as on the server (§5).
 - **How it works:** the tile server runs inside the app on 127.0.0.1 (random port, Host-checked, token on the app's own endpoints, §8). [pywebview](https://pywebview.flowrl.com) (BSD-3) shows it in the system web view:
 

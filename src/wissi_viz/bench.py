@@ -210,7 +210,7 @@ def browser_bench(paths: Sequence[str] | None = None, panes: Sequence[int] = (1,
         with sync_playwright() as pw:
             b = pw.chromium.launch(headless=not headed, args=args)
             pg = b.new_page(viewport={'width': viewport[0], 'height': viewport[1]}, ignore_https_errors=True)
-            pg.goto(f'{scheme}://127.0.0.1:{port}/')
+            pg.goto(f'{scheme}://127.0.0.1:{port}/demo')
             pg.wait_for_function('() => window.grid && customElements.get("wissi-viz")', timeout=30000)
             report['webgl_renderer'] = pg.evaluate("""() => { const gl = document.createElement('canvas').getContext('webgl2');
                 const e = gl && gl.getExtension('WEBGL_debug_renderer_info');
@@ -395,7 +395,7 @@ def zoom_bench(configs: Sequence[tuple[str, Sequence[str], int]], modes: Sequenc
                     b = pw.chromium.launch(headless=not headed, args=args)
                     try:
                         pg = b.new_page(viewport={'width': viewport[0], 'height': viewport[1]}, ignore_https_errors=True)
-                        pg.goto(f'{scheme}://127.0.0.1:{port}/')
+                        pg.goto(f'{scheme}://127.0.0.1:{port}/demo')
                         pg.wait_for_function('() => window.grid && customElements.get("wissi-viz")', timeout=30000)
                         lod = mode if mode in ('legacy', 'default') else json.loads(mode)
                         pg.evaluate("""([ids, lod]) => { grid.setAttribute('controls','false'); grid.setSync('none');

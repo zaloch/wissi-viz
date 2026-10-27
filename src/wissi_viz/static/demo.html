@@ -39,7 +39,7 @@
   const log = (m) => (document.getElementById('log').textContent = m);
   const slides = await (await fetch('__API__/slides')).json();
   const sel = document.getElementById('n');
-  for (let i = 1; i <= 16; i++) sel.add(new Option(i, i));
+  for (let i = 1; i <= 32; i++) sel.add(new Option(i, i));
   const setN = (n) => grid.setSlides(Array.from({ length: n }, (_, i) => slides[i % slides.length].id));
   sel.value = Math.min(4, Math.max(1, slides.length));
   sel.onchange = () => setN(+sel.value);

@@ -189,7 +189,7 @@ def test_sixteen_panes_with_pyramid_layers_load_draw_and_click(tmp_path):
             pg = b.new_page(viewport={'width': 800, 'height': 600})
             errs = []
             pg.on('console', lambda m: errs.append(m.text) if m.type == 'error' or 'GL_INVALID' in m.text else None)
-            pg.goto(f'http://127.0.0.1:{port}/')
+            pg.goto(f'http://127.0.0.1:{port}/demo')
             pg.wait_for_function('() => window.grid')
             pg.evaluate('() => { grid.setAttribute("controls", "false"); grid.setSlides([...Array(16).keys()].map(i => "s" + i)); }')
             pg.wait_for_function('''() => grid.panes.length === 16 && grid.panes.every(p => { const L = p.slide && p.slide.layers.get('cells');
@@ -256,7 +256,7 @@ def test_client_mode_builds_the_same_pyramid_in_the_browser(tmp_path):
             pg = b.new_page(viewport={'width': 800, 'height': 600})
             seen = []
             pg.on('request', lambda r: seen.append(r.url) if '/annotations' in r.url else None)
-            pg.goto(f'http://127.0.0.1:{port}/')
+            pg.goto(f'http://127.0.0.1:{port}/demo')
             pg.wait_for_function('() => window.grid')
             pg.evaluate('() => { grid.setAttribute("controls", "false"); grid.setLod({overlays: "client"}); grid.setSlides(["s0"]); }')
             pg.wait_for_function('() => { const L = grid.panes[0].slide && grid.panes[0].slide.layers.get("cells"); return L && L.client === "ready"; }',
@@ -355,7 +355,7 @@ def test_shape_culling_draws_only_visible_rows_and_identical_pixels(mode):
             except Exception as e:  # noqa: BLE001
                 pytest.skip(f'no Chromium: {e}')
             pg = b.new_page(viewport={'width': 800, 'height': 600})
-            pg.goto(f'http://127.0.0.1:{port}/')
+            pg.goto(f'http://127.0.0.1:{port}/demo')
             pg.wait_for_function('() => window.grid')
             pg.evaluate(f'() => {{ grid.setAttribute("controls", "false"); grid.setLod({{overlays: "{mode}"}}); grid.setSlides(["s0", "s0"]); }}')
             ready = ('L.client === "ready"' if mode == 'client' else 'L.state === "ready"')

@@ -201,6 +201,9 @@ _EXT = {'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/png': 'png', 'applicat
 _MT = {v: k for k, v in _EXT.items()}
 
 
+LAYER_DIR = '_layers'   # inside a disk cache root: memory-mapped annotation layers (see SlideRegistry)
+
+
 class DiskCache:
     """Persistent tile cache (survives restarts; essential for remote/API-backed slides).
     Trimmed to ``max_bytes`` by least-recently-*written* files."""
@@ -243,7 +246,7 @@ class DiskCache:
         files = []
         total = 0
         for p in self.root.rglob('*'):
-            if p.is_file():
+            if p.is_file() and p.relative_to(self.root).parts[0] != LAYER_DIR:   # compiled layers trim themselves
                 st = p.stat()
                 files.append((st.st_mtime, st.st_size, p))
                 total += st.st_size

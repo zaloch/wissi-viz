@@ -19,7 +19,6 @@ import os
 import struct
 import threading
 import xml.etree.ElementTree as ET
-from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -601,7 +600,7 @@ class AnnotationLayer:
         return self.compiled().bucket(i)
 
     # ------------------------------------------------------------- persistent compiled form
-    _SAVE_FORMAT = 2   # bump whenever the compiled/pyramid layout changes (old caches are rebuilt)
+    _SAVE_FORMAT = 3   # bump whenever the compiled/pyramid layout changes (old caches are rebuilt)
 
     def save(self, path: str | Path) -> Path:
         """Write the layer *and its compiled form* (buckets, object pyramid) as a folder of .npy files. ``open()``
@@ -614,17 +613,23 @@ class AnnotationLayer:
         tmp = d.with_name(d.name + '.tmp')
         tmp.mkdir(parents=True, exist_ok=True)
         arrs = {'block_kind': self._block['kind'], 'block_bb': self._block['bb'], 'block_cls': self._block['cls'],
-                'order': c.order.astype(np.int64), 'buckets': np.asarray(c.buckets, np.float64).reshape(-1, 8)}
+                'order': c.order.astype(np.int64), 'buckets': np.asarray(c.buckets, np.float64).reshape(-1, 8),
+                'size': np.asarray(c.size, np.float32), 'cx': np.asarray(c.cx, np.float32), 'cy': np.asarray(c.cy, np.float32)}
         if self._values is not None:
             arrs['values'] = np.asarray(self._values)
         cols = []
-        for i, (k, v) in enumerate(self._columns.items()):
+        for i, (k, v) in enumerate(self._columns.items()):   # each entry records its own file index
             if hasattr(v, 'codes'):
                 arrs[f'colcodes_{i}'], arrs[f'colcats_{i}'] = v.codes, np.asarray(v.categories, dtype=str)
-                cols.append([k, 'cat'])
+                cols.append([k, 'cat', i])
             elif np.asarray(v).dtype.kind in 'biuf':
                 arrs[f'col_{i}'] = np.asarray(v)
-                cols.append([k, 'num'])
+                cols.append([k, 'num', i])
+            elif np.asarray(v).dtype.kind in 'OUS':                  # text → categorical codes (kept clickable)
+                cats, codes = np.unique(np.asarray(v).astype(str), return_inverse=True)
+                arrs[f'colcodes_{i}'] = codes.astype(np.int32 if len(cats) > 32767 else np.int16)
+                arrs[f'colcats_{i}'] = cats
+                cols.append([k, 'cat', i])
         if c.pyr_meta is not None:
             for li, L in enumerate(c._pyr):
                 for name in ('x', 'y', 'feat', 'count', 'col', 'orig', 'hist'):
@@ -665,7 +670,9 @@ class AnnotationLayer:
             L._values = np.asarray(ld('values'))
         from .objects import _Categorical
         cols = {}
-        for i, (k, kind) in enumerate(meta['columns']):
+        for j, entry in enumerate(meta['columns']):
+            k, kind = entry[0], entry[1]
+            i = entry[2] if len(entry) > 2 else j
             if kind == 'cat':
                 cat = _Categorical.__new__(_Categorical)
                 cat.codes, cat.categories, cat.dtype = ld(f'colcodes_{i}'), np.load(d / f'colcats_{i}.npy'), np.dtype(object)
@@ -720,7 +727,7 @@ class _Compiled:
         nr = np.concatenate([np.asarray(layer._feat_nrings, np.int64), np.zeros(nb, np.int64)])
         self.feat_ring_off = np.zeros(n + 1, np.int64)
         np.cumsum(nr, out=self.feat_ring_off[1:])
-        self._bucket_cache: OrderedDict[int, bytes] = OrderedDict()
+        self._token = object()   # owner key in the process-wide overlay cache (wissi_viz.memory.overlay_cache)
         self._lock = threading.Lock()
         if n == 0:
             self.bb = np.zeros((0, 4), np.float32)
@@ -767,7 +774,6 @@ class _Compiled:
                                  start, len(g), float(np.median(self.size[g])), float(self.size[g].max())))
             start += len(g)
         self.median_size = float(np.median(self.size))
-        self._pyr_cache: OrderedDict = OrderedDict()
         if layer.use_pyramid(n):
             self._build_pyramid(layer)
 
@@ -853,20 +859,24 @@ class _Compiled:
         c.n = n
         c.kinds, c.cls = b['kind'], b['cls']
         c.col = layer._color_index()
-        c.radius = np.zeros(n, np.float32)
+        # everything per-feature is memory-mapped or zero-stride: a reopened layer holds almost no anonymous RAM
+        zeros = lambda dt, m: np.broadcast_to(np.zeros(1, dt), (m,))  # noqa: E731  (read-only, 0 bytes per feature)
+        c.radius = zeros(np.float32, n)
         c.ring_off = np.zeros(1, np.int64)
         c.coords = np.zeros((0, 2), np.float32)
-        c.feat_ring_off = np.zeros(n + 1, np.int64)
+        c.feat_ring_off = zeros(np.int64, n + 1)
         c.bb = b['bb']
-        c.size = np.maximum(c.bb[:, 2] - c.bb[:, 0], c.bb[:, 3] - c.bb[:, 1])
-        c.cx, c.cy = (c.bb[:, 0] + c.bb[:, 2]) / 2, (c.bb[:, 1] + c.bb[:, 3]) / 2
-        c.nverts = np.zeros(n, np.int64)
+        if (d / 'size.npy').exists():
+            c.size, c.cx, c.cy = ld('size'), ld('cx'), ld('cy')
+        else:
+            c.size = np.maximum(c.bb[:, 2] - c.bb[:, 0], c.bb[:, 3] - c.bb[:, 1])
+            c.cx, c.cy = (c.bb[:, 0] + c.bb[:, 2]) / 2, (c.bb[:, 1] + c.bb[:, 3]) / 2
+        c.nverts = zeros(np.int64, n)
         c.bbox = meta['bbox']
         c.order = ld('order')
         c.buckets = [tuple(float(v) for v in row) for row in ld('buckets')]
         c.median_size = meta['median_size']
-        c._bucket_cache = OrderedDict()
-        c._pyr_cache = OrderedDict()
+        c._token = object()
         c._lock = threading.Lock()
         c.pyr_meta = meta['pyr_meta']
         if c.pyr_meta:
@@ -912,11 +922,11 @@ class _Compiled:
                             self.cls.astype('<u2'), self.kinds.astype('u1')])
 
     def pyramid_tile(self, level: int, tx: int, ty: int) -> bytes:
-        key = (level, tx, ty)
-        with self._lock:
-            if key in self._pyr_cache:
-                self._pyr_cache.move_to_end(key)
-                return self._pyr_cache[key]
+        from .memory import overlay_cache
+        key = (self._token, 'p', level, tx, ty)
+        hit = overlay_cache().get(key)
+        if hit is not None:
+            return hit
         L = self._pyr[level]
         a, m = L['index'].get((tx, ty), (0, 0))
         sl = slice(a, a + m)
@@ -934,10 +944,7 @@ class _Compiled:
                 arrays.append(np.ascontiguousarray(L['hist'][sl]).astype('u1'))
                 meta['hist'] = True
         data = _pack(meta, arrays)
-        with self._lock:
-            self._pyr_cache[key] = data
-            while len(self._pyr_cache) > 4096:
-                self._pyr_cache.popitem(last=False)
+        overlay_cache().put(key, data)
         return data
 
     def _split(self, idx, x0, y0, x1, y1, depth, out) -> None:
@@ -969,18 +976,21 @@ class _Compiled:
         return _pack(meta, [cen, size, orig, cls, col, kinds, bt])
 
     def bucket(self, i: int) -> bytes:
-        with self._lock:
-            if i in self._bucket_cache:
-                self._bucket_cache.move_to_end(i)
-                return self._bucket_cache[i]
+        from .memory import overlay_cache
+        key = (self._token, 'b', i)
+        hit = overlay_cache().get(key)
+        if hit is not None:
+            return hit
         b = self.buckets[i]
         feats = self.order[int(b[4]):int(b[4]) + int(b[5])]
         data = self._encode_detail(feats)
-        with self._lock:
-            self._bucket_cache[i] = data
-            while len(self._bucket_cache) > 2048:
-                self._bucket_cache.popitem(last=False)
+        overlay_cache().put(key, data)
         return data
+
+    def release(self) -> None:
+        """Drop this layer's entries from the shared overlay cache (the layer was evicted or replaced)."""
+        from .memory import overlay_cache
+        overlay_cache().purge(self._token)
 
     def _encode_detail(self, feats: np.ndarray) -> bytes:
         k = self.kinds[feats]

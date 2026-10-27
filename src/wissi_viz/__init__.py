@@ -19,6 +19,6 @@ from .sources import CallbackSource, Channel, Level, SlideInfo, SlideSource, ope
 from .memory import decoded_cache, set_decoded_cache_mb
 from .tiles import TileService
 
-__version__ = '0.6.0'
+__version__ = '0.6.1'
 __all__ = ['decoded_cache', 'set_decoded_cache_mb', 'AnnotationLayer', 'ObjectTable', 'read_objects', 'cached_object_layer', 'SlideRegistry', 'create_app', 'create_router',
            'CallbackSource', 'Channel', 'Level', 'SlideInfo', 'SlideSource', 'open_slide', 'TileService']

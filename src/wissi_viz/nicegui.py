@@ -33,17 +33,29 @@ SlideRef = 'str | os.PathLike | SlideSource | dict'
 
 def configure(*, cache_dir: str | os.PathLike | None = None, memory_mb: int = 1024, disk_gb: float = 20,
               workers: int | None = None, registry: SlideRegistry | None = None, prefix: str = '/wissi-viz',
-              allow_edit: bool = True, dependencies: list | None = None) -> SlideRegistry:
+              allow_edit: bool = True, dependencies: list | None = None, annotation_memory_mb: float | None = 1024,
+              decoded_cache_mb: float | None = None, overlay_cache_mb: float | None = None,
+              layer_disk_gb: float = 20, gzip_cache_mb: float = 256, layer_mapped_mb: float | None = 2048) -> SlideRegistry:
     """Set up the shared registry (call once at startup, before creating viewers).
 
     ``cache_dir`` enables the persistent tile cache — mount it as a Docker volume so it
-    survives container restarts. ``dependencies``: FastAPI dependencies applied to every
+    survives container restarts. It also holds compiled annotation / object layers (``_layers``), memory-mapped
+    instead of kept in RAM, so a server that has opened hundreds of slides stays flat.
+
+    Memory budgets (MB): ``memory_mb`` encoded tiles · ``decoded_cache_mb`` decoded arrays (default 1024) ·
+    ``overlay_cache_mb`` overlay tiles (default 128) · ``annotation_memory_mb`` auto-loaded layers held in RAM
+    (default 1024; least-recently-used slides are dropped and reload on demand) · ``gzip_cache_mb`` gzipped overlay
+    payloads (default 256) · ``layer_mapped_mb`` memory-mapped layer files kept mapped (default 2048; their pages
+    count in RSS while mapped, the OS can reclaim them). ``layer_disk_gb`` caps ``_layers`` on disk. ``dependencies``: FastAPI dependencies applied to every
     tile/annotation route, e.g. ``[Depends(require_login)]`` to protect slides with your app's auth.
     """
     global _default
     if registry is None:
         registry = SlideRegistry(TileService(memory_bytes=memory_mb * 2**20, disk_dir=cache_dir,
-                                             disk_bytes=int(disk_gb * 2**30), workers=workers))
+                                             disk_bytes=int(disk_gb * 2**30), workers=workers),
+                                 annotation_memory_mb=annotation_memory_mb, decoded_cache_mb=decoded_cache_mb,
+                                 overlay_cache_mb=overlay_cache_mb, layer_disk_gb=layer_disk_gb,
+                                 gzip_cache_mb=gzip_cache_mb, layer_mapped_mb=layer_mapped_mb)
     _default = registry
     mount(registry, prefix, allow_edit=allow_edit, dependencies=dependencies)
     return registry

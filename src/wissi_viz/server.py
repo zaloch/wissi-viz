@@ -49,10 +49,14 @@ class _GzCache:
                 self.size -= len(old)
         return v
 
+    def stats(self) -> dict:
+        with self.lock:
+            return {'entries': len(self.d), 'bytes': self.size, 'max_bytes': self.max}
+
 
 def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: bool = True) -> APIRouter:
     r = APIRouter()
-    gz = _GzCache()
+    gz = _GzCache(int(getattr(registry, 'gzip_cache_mb', 256) * 2**20))
     tiles = registry.tiles
 
     def hdrs(cache: str | None = None, extra: dict | None = None) -> dict:
@@ -87,7 +91,9 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
 
     @r.get('/stats')
     def stats():
-        return JSONResponse(tiles.stats(), headers=hdrs('no-cache'))
+        mem = registry.memory_stats()
+        mem['gzip_cache_mb'] = round(gz.stats()['bytes'] / 2**20, 1)
+        return JSONResponse({**tiles.stats(), 'memory': mem}, headers=hdrs('no-cache'))
 
     @r.get('/slides/{sid}/info.json')
     async def info(sid: str):

@@ -18,6 +18,7 @@ wissi-viz bench ~/wsi-samples/Aperio/CMU-1.svs ~/wsi-samples/Leica/*.scn ~/wsi-s
 
 - **Tiles from a remote API** (PathCore, HALO Link, …) instead of files: see [results-tile-api.md](results-tile-api.md) and `examples/tile_api/bench_api.py [--http2]`.
 - **Smoothness** (freezes, jank, input latency under real mouse input, 1 and 16 panes): `python benchmarks/smoothness.py --out smooth.json`. See [results-smoothness.md](results-smoothness.md).
+- **Server memory over time** (many slides with large connector object tables; RSS and every cache after each slide): `python benchmarks/memory_harness.py`. See [results-memory.md](results-memory.md).
 - **Integration probe** (smoke test, concurrency sweep, 1–16-pane sessions under a hard API-call cap; local SVS, mock API, HALO-Link-style and PathCore-style connectors): `python scripts/wissi_probe.py local|mock|mock:halolink|mock:pathcore|module:factory|http:config.json`. See [results-probe.md](results-probe.md) and `probe_reports/`.
 - **GPU pyramid build (experimental):** the client-mode object pyramid built with WebGPU compute vs the Web Worker, with a full parity check: `python benchmarks/gpu_pyramid_ab.py --headed`. See [results-gpu-pyramid.md](results-gpu-pyramid.md).
 

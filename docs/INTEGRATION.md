@@ -1,6 +1,6 @@
 # Integrating wissi-viz
 
-*Current as of wissi-viz 0.6.0.* This guide covers how to put wissi-viz into an app: NiceGUI (wissi), other Python web frameworks, JavaScript frameworks and notebooks. It also covers:
+*Current as of wissi-viz 0.6.1.* This guide covers how to put wissi-viz into an app: NiceGUI (wissi), other Python web frameworks, JavaScript frameworks and notebooks. It also covers:
 - how to show large cell and object tables;
 - how to keep the viewer smooth, including on clients without a GPU;
 - how to connect a vendor tile API such as PathCore or HALO Link;
@@ -27,6 +27,7 @@
 |---|---|---|
 | 0.5.0 | **Object pyramid.** Millions of cells are shown as screen-sized aggregated dots, then as GPU-drawn outlines when zoomed in. There is a **server mode** (default) and a **client mode**. | Use `cached_object_layer` for big tables (§5). Choose `overlays: 'server'\|'client'\|'auto'`. |
 | 0.5.1 | **Polars reader.** `read_objects(engine='auto')` uses Polars, then pyarrow, then pandas. | `pip install "wissi-viz[polars]"`. |
+| 0.6.1 | **Server memory stays flat.** Annotation and object layers from connectors were kept in RAM for every slide ever opened, so a PathCore-backed server grew without limit. They are now memory-mapped from the disk cache and evicted least-recently-used, every cache has a byte budget, and `/wissi-viz/stats` reports where memory is. | Set `cache_dir` (it now also holds compiled layers). Optionally tune the budgets (§6, §9). |
 | 0.6.0 | **Integration probe + HTTP config connector.** `scripts/wissi_probe.py` smoke-tests a connector, sweeps concurrency, runs 1–16-pane viewer sessions under a hard API-call cap, and writes recommended settings. `HttpTileConnection` connects tile APIs with plain tile URLs from a JSON file. | Run the probe before go-live (§10). |
 | 0.5.2 | **Smoothness.** Adaptive resolution while moving, culled cell outlines, a batched `views` event, and frame-cost-aware redraws. | Use the `views` event, never update the page per frame (§6). `on_view_change` now comes from the batched event. |
 
@@ -266,7 +267,12 @@ The defaults are tuned for both GPU desktops and GPU-less clients. Without a GPU
 | browser textures (shared by all panes) | `texture_budget_mb=` / `setTextureBudget(mb)` | from `navigator.deviceMemory` |
 | server encoded-tile memory cache | `configure(memory_mb=)` / `TileService(memory_bytes=)` | 1 GB |
 | server disk tile cache | `configure(cache_dir=, disk_gb=)` | 20 GB |
-| server decoded arrays (virtual levels, CZI subblocks), process-wide | `SlideRegistry(decoded_cache_mb=)` / `wissi_viz.set_decoded_cache_mb()` | 1 GB |
+| server decoded arrays (virtual levels, CZI subblocks), process-wide | `configure(decoded_cache_mb=)` / `SlideRegistry(decoded_cache_mb=)` | 1 GB |
+| server overlay tiles (object pyramid tiles, outline buckets), process-wide | `configure(overlay_cache_mb=)` | 128 MB |
+| server gzipped overlay payloads | `configure(gzip_cache_mb=)` | 256 MB |
+| annotation / object layers loaded with slides, held in RAM | `configure(annotation_memory_mb=)` | 1 GB: least-recently-used slides' layers are dropped and reload on demand |
+| memory-mapped layer files kept mapped | `configure(layer_mapped_mb=)` | 2 GB: beyond it, least-recently-used slides are unmapped (reopen in ms) |
+| compiled layers on disk (`<cache_dir>/_layers`) | `configure(layer_disk_gb=)` | 20 GB |
 | resolution at rest | `quality=` (device px per texel allowed, 0.25–4; above 1 fetches coarser tiles and less data, below 1 sharper and more) | 1.0 |
 
 **Monitoring in the field:** `grid.stats()` returns these fields:
@@ -397,7 +403,15 @@ volumes:
 
 - **HTTP/2 matters for many panes.** Browsers open only 6 HTTP/1.1 connections per host. Over HTTP/2 the viewer detects multiplexing and keeps up to 24 tile requests in flight. Measurements are in `benchmarks/results-tile-api.md`.
 - **Cache volumes:** the disk tile cache survives restarts. That matters most for API-backed slides, where every cache miss is a network round-trip. The compiled object layers on the same volume make restarts and extra workers start in milliseconds instead of re-parsing tables.
-- **Memory:** plan for the tile memory cache (`memory_mb`) + the decoded-array budget (`decoded_cache_mb`, 1 GB) + up to about 225 MB per open 1M-cell layer. Layers opened from the compiled cache are memory-mapped, so workers share those pages.
+- **Memory: every cache has a byte budget,** so a long-running server stays flat however many slides it serves.
+  - **Anonymous memory is at most the sum of the budgets:** tiles (`memory_mb`) + decoded arrays (`decoded_cache_mb`) + overlay tiles (`overlay_cache_mb`) + gzipped overlays (`gzip_cache_mb`) + layers held in RAM (`annotation_memory_mb`), plus about 150 MB of Python. The defaults sum to about 3.6 GB.
+  - **With `cache_dir` set, large object layers are memory-mapped.** Each is about 0.3 MB of RAM per 300k cells instead of 90 MB, and their file pages (≤ `layer_mapped_mb`) are page cache the OS can reclaim.
+  - **Watch it live:** `GET /wissi-viz/stats` → `memory` gives RSS (anonymous vs file-backed), every cache's size and cap, layers in RAM vs mapped, evictions, and disk reopen hits.
+- **API-backed slides (PathCore, HALO Link):** opening a slide fetches its `annotations()` and `objects()` once.
+  - Before 0.6.1 those layers then stayed in RAM forever. Measured: about 120 MB of growth per slide for a 300k-cell table, which extrapolates to about 400 MB per slide at 1M cells. A server that had opened 40–50 such cases could reach 20 GB.
+  - Now each layer is saved once in compiled form under `<cache_dir>/_layers`, keyed by the image's `version`. Reopening a case maps it back in milliseconds, with **no API calls and no re-parse**.
+  - Without `cache_dir`, layers beyond `annotation_memory_mb` are dropped and fetched again when a viewer needs them.
+  - Measured: `benchmarks/results-memory.md`.
 - **Scaling:**
   - One NiceGUI process serves the UI, tiles and overlays.
   - If tile decoding saturates the CPU, move it to a separate tile server (path D) and scale that alone. The viewer only needs `api=` pointed at it.

@@ -328,6 +328,12 @@ On 120k cells, each analysis takes 0.01–4 s.
 - **CZI.** The reader decodes only the subblocks that intersect a tile, straight from their raw bytes through imagecodecs (zstd, JPEG-XR, JPEG, LZW). The CZI's own pyramid subblocks become native levels. Decoded subblocks are kept in an LRU, so the ~16 tiles inside one 2048² subblock decode it once (cold tile ~15–30 ms, cached tile ~0.1 ms). It is pixel-identical to libCZI on every tile tested.
 - **Pyramid gaps.** `PyramidSlide` inserts virtual 2× levels wherever native levels are more than 4× apart (`max_level_step`, default 4), and below the coarsest level. Each virtual tile is a box-filtered 2×2 mosaic of the level beneath, memoised. A slide with *no* pyramid therefore zooms out by touching each pixel once.
 - **Memory.** Decoded arrays (virtual-level inputs, CZI subblocks) share **one process-wide budget**, `decoded_cache_mb`, default 1 GB. Busy slides get more of it, and closing a slide frees its share. (Per-slide caches let a 16-pane run grow past 5 GB and get killed for running out of memory.)
+- **Memory stays flat over time.** Every server cache has a byte budget: tiles, decoded arrays, overlay tiles, gzipped overlays, and annotation layers.
+  - Annotation and object layers that come with a slide (e.g. PathCore / HALO `objects()`) are saved once in compiled form under `cache_dir` and memory-mapped. That's ~0.3 MB of RAM per 300k cells instead of 90 MB.
+  - Reopening a case costs no API calls.
+  - Layers beyond `annotation_memory_mb` / `layer_mapped_mb` are dropped least-recently-used and reload on demand.
+  - Before 0.6.1 these layers stayed in RAM for every slide ever opened, which is how a long-running PathCore server could reach ~20 GB.
+  - `GET /wissi-viz/stats` → `memory` shows where RAM is. See [benchmarks/results-memory.md](benchmarks/results-memory.md).
 - **Warming.** The coarse levels are pre-rendered in the background, pausing whenever an interactive request is in flight.
 - **Fluorescence data.** Raw uint16 tiles (zlib) are sent, never 8-bit JPEGs, so contrast, gamma and colour are applied exactly on the GPU.
 
@@ -408,7 +414,7 @@ Measured with `wissi-viz bench --zoom` (legacy vs new; 1 and 16 panes; SVS, OME-
 ## Tests
 
 ```bash
-pip install -e ".[all,dev]" && pytest -q tests                      # 92 tests
+pip install -e ".[all,dev]" && pytest -q tests                      # 98 tests
 python tests/make_test_data.py /tmp/wsi --size 16000                # synthetic SVS + 3-channel CZI + 120k cell GeoJSON
 python tests/make_analysis_data.py /tmp/wsi                         # QuPath-style multiplex cell table + ROIs
 python examples/analysis_app.py /tmp/wsi/synthetic_he.svs /tmp/wsi/synthetic_he_cells.tsv /tmp/wsi/synthetic_he_rois.geojson

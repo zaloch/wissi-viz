@@ -89,7 +89,7 @@ def main(path, shape='auto'):
         sizes.append(sum(len(d) for d in data))
         gzs.append(sum(len(gzip.compress(d, 3)) for d in data))
         nb.append(len(hit))
-        c._bucket_cache.clear()
+        c.release()
     out['view10x_buckets'] = float(np.mean(nb))
     out['view10x_detail_MB'] = round(float(np.mean(sizes)) / 2**20, 2)
     out['view10x_detail_gzip_MB'] = round(float(np.mean(gzs)) / 2**20, 2)

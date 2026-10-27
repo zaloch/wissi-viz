@@ -123,6 +123,8 @@ def test_views_event_is_batched_and_throttled_with_trailing_snapshot(page):
         pg.mouse.move(box[0] + (k % 60) * 2, box[1] + (k % 40))
         time.sleep(0.008)
     pg.mouse.up()
+    # wait for any fling (inertia) to finish — slow CI machines glide for longer — then for the trailing snapshot
+    pg.wait_for_function('() => grid.panes.every(p => !p.vel && !p.target)', timeout=10_000)
     time.sleep(0.5)
     ev = pg.evaluate('() => __ev')
     final = pg.evaluate('() => grid.panes.map(p => [p.view.cx, p.view.cy])')

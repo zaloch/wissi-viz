@@ -21,8 +21,8 @@ jobs:
       UV_PYTHON: ${{ matrix.python }}
       PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Install (locked)
@@ -31,7 +31,8 @@ jobs:
         run: uv run playwright install --with-deps chromium
         shell: bash
       - name: Tests
-        run: uv run pytest -q -x --durations=15
+        # failures are posted as annotations on the run (readable without the full log)
+        run: uv run --with pytest-github-actions-annotate-failures pytest -q -rfE --durations=15
       - name: CLI smoke
         shell: bash
         run: |
@@ -42,8 +43,8 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
       - run: uv build
       - name: Wheel installs and imports on a clean interpreter
         run: |

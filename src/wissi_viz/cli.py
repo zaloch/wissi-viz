@@ -63,6 +63,16 @@ def main(argv: list[str] | None = None) -> None:
                    help='zoom benchmark instead: continuous zoom in/out + jump zooms, each slide alone and all together')
     b.add_argument('--lod', default='legacy,default', help='--zoom: viewer LOD policies to compare (or JSON dicts, ";"-separated)')
     b.add_argument('--zoom-rate', type=float, default=4.0, help='--zoom: zoom speed, × per second')
+    c = sub.add_parser('convert', help='convert annotations: GeoParquet, GeoJSON/QuPath, HALO, Aperio, CSV, COCO, mask')
+    c.add_argument('src')
+    c.add_argument('dst')
+    c.add_argument('--from', dest='src_fmt', default='auto', help='input format (default: by extension)')
+    c.add_argument('--to', dest='dst_fmt', default='auto',
+                   help='geoparquet | geojson | qupath | halo | aperio | csv | coco | mask (default: by extension)')
+    c.add_argument('--slide', default=None, help='the slide: mask size, µm/px and COCO image name')
+    c.add_argument('--downsample', type=float, default=1.0, help='mask: level-0 px per mask px')
+    c.add_argument('--by', default='feature', choices=['feature', 'class'], help='mask: label per feature or per class')
+    c.add_argument('--wkt', action='store_true', help='csv: add a WKT geometry column')
     f = sub.add_parser('fetch-samples', help='download public whole-slide test images')
     f.add_argument('dest')
     f.add_argument('--set', default='standard', choices=['small', 'standard', 'full'])
@@ -91,6 +101,16 @@ def main(argv: list[str] | None = None) -> None:
         from .bench import fetch_samples
         for p in fetch_samples(a.dest, a.set, a.max_mb, a.url):
             print(p)
+        return
+
+    if a.cmd == 'convert':
+        import time
+
+        from .annio import convert
+        t0 = time.perf_counter()
+        out = convert(a.src, a.dst, src_fmt=a.src_fmt, dst_fmt=a.dst_fmt, slide=a.slide, downsample=a.downsample,
+                      by=a.by, wkt=a.wkt)
+        print(f'{a.src} → {out}  ({out.stat().st_size / 2**20:.1f} MB, {time.perf_counter() - t0:.1f} s)')
         return
 
     if a.cmd == 'info':

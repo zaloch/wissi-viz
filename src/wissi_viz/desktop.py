@@ -35,8 +35,8 @@ from ._compat import user_dir, utf8_stdio
 ASSETS = Path(__file__).resolve().parent / 'assets'
 APP_NAME = 'wissi-viz'
 BUNDLE_ID = 'org.wissiviz.desktop'
-ANNOTATION_EXTS = ('.geojson', '.json', '.xml', '.annotations')
-TABLE_EXTS = ('.csv', '.tsv', '.txt', '.parquet', '.pq', '.feather', '.arrow', '.ipc', '.h5ad')
+ANNOTATION_EXTS = ('.geojson', '.json', '.xml', '.annotations', '.geoparquet', '.coco.json')
+TABLE_EXTS = ('.csv', '.tsv', '.txt', '.parquet', '.pq', '.feather', '.arrow', '.ipc', '.h5ad')   # .parquet: GeoParquet if it has geometry
 PREFIX = '/wissi-viz'
 
 
@@ -121,7 +121,14 @@ class Session:
         """Attach an annotation file (GeoJSON / HALO XML / …) or a cell table (CSV / Parquet / AnnData) to a slide.
         Tables are compiled once into the cache and memory-mapped on later opens."""
         p = Path(path)
-        if _kind(p) == 'table' or (p.suffix.lower() == '.json' and _looks_like_table(p)):
+        from . import annio
+        try:
+            fmt = annio.detect_format(p)
+        except ValueError:
+            fmt = None
+        if fmt == 'coco' or (fmt == 'geoparquet' and _is_geoparquet(p)):
+            layer = annio.load(p)
+        elif _kind(p) == 'table' or (p.suffix.lower() == '.json' and _looks_like_table(p)):
             from .objects import cached_object_layer
             mpp = (self.registry.info(slide).get('mpp') or [None])[0]
             layer = cached_object_layer(p, self.cache_dir / 'objects', mpp=mpp, name=p.stem)
@@ -205,6 +212,15 @@ class Session:
             return self.close((await request.json()).get('slide'))
 
         return app
+
+
+def _is_geoparquet(p: Path) -> bool:
+    """A .parquet file with GeoParquet metadata (annotations), as opposed to a plain cell table."""
+    try:
+        import pyarrow.parquet as pq
+        return b'geo' in (pq.read_schema(p).metadata or {})
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _looks_like_table(p: Path) -> bool:

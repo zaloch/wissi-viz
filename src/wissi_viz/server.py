@@ -249,6 +249,29 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
     def ann_geojson(sid: str, layer_name: str = Query(alias='layer')):
         return JSONResponse(_jsonable(layer(sid, layer_name).to_geojson()), headers=hdrs('no-cache'))
 
+    EXPORT_EXT = {'geoparquet': '.parquet', 'geojson': '.geojson', 'qupath': '.geojson', 'halo': '.annotations',
+                  'aperio': '.xml', 'csv': '.csv', 'coco': '.coco.json'}
+
+    @r.get('/slides/{sid}/annotations/export')
+    def ann_export(sid: str, layer_name: str = Query(alias='layer'), fmt: str = 'geoparquet'):
+        """Download a layer as GeoParquet (default), GeoJSON, QuPath GeoJSON, HALO XML, Aperio XML, CSV or COCO."""
+        import tempfile
+
+        from fastapi.responses import FileResponse
+        from starlette.background import BackgroundTask
+        if fmt not in EXPORT_EXT:
+            raise HTTPException(400, f'fmt must be one of {", ".join(EXPORT_EXT)}')
+        L = layer(sid, layer_name)
+        e, pyr = registry.get(sid)
+        from . import annio
+        tmpdir = Path(tempfile.mkdtemp(prefix='wissi-export-'))
+        fname = f'{e.name.rsplit(".", 1)[0]} - {layer_name}{EXPORT_EXT[fmt]}'.replace('/', '_').replace('\\', '_')
+        out = annio.export(L, tmpdir / 'out', fmt, mpp=(pyr.info.mpp or (None,))[0], slide=e.name,
+                           width=pyr.info.width, height=pyr.info.height)
+        import shutil
+        return FileResponse(out, filename=fname, headers=hdrs('no-cache'),
+                            background=BackgroundTask(shutil.rmtree, tmpdir, True))
+
     if allow_edit:
         @r.post('/slides/{sid}/annotations/add')
         async def ann_add(sid: str, request: Request, layer_name: str = Query(alias='layer')):

@@ -407,23 +407,17 @@ class AnnotationLayer:
         for ann in root.iter('Annotation'):
             aname = ann.get('Name') or ann.get('Id') or 'annotation'
             color = _colorref(ann.get('LineColor'))
+            regions = []
             for reg in ann.iter('Region'):
                 v = np.array([[float(e.get('X')), float(e.get('Y'))] for e in reg.iter('Vertex')], np.float32)
                 if len(v) == 0:
                     continue
                 t = reg.get('Type', '0')
                 props = {k: reg.get(k) for k in ('Id', 'Text', 'Area', 'Length') if reg.get(k)}
-                cname = aname + (' (negative)' if reg.get('NegativeROA') == '1' else '')
-                if t == '2' and len(v) >= 2:  # ellipse given by its bounding box corners
-                    (x0, y0), (x1, y1) = v.min(0), v.max(0)
-                    layer.add_ellipse((x0 + x1) / 2, (y0 + y1) / 2, (x1 - x0) / 2, (y1 - y0) / 2, cls=cname,
-                                      color=color, props=props)
-                elif t in ('3', '4') or len(v) == 2:
-                    layer.add_polyline(v, cls=cname, color=color, props=props)
-                elif len(v) == 1:
-                    layer.add_point(*v[0], cls=cname, color=color, props=props)
-                else:
-                    layer.add_polygon(v, cls=cname, color=color, props=props)
+                kind = ('ellipse' if t == '2' and len(v) >= 2 else 'line' if t in ('3', '4') or len(v) == 2
+                        else 'point' if len(v) == 1 else 'polygon')
+                regions.append((kind, v, props, reg.get('NegativeROA') == '1'))
+            _add_regions(layer, regions, aname, color)
         return layer
 
     @classmethod
@@ -434,31 +428,29 @@ class AnnotationLayer:
         for ann in root.iter('Annotation'):
             aname = ann.get('Name') or 'annotation'
             color = _colorref(ann.get('LineColor'))
+            regions = []
             for reg in ann.iter('Region'):
                 v = np.array([[float(e.get('X')), float(e.get('Y'))] for e in reg.iter('V')], np.float32)
                 if len(v) == 0:
                     continue
                 t = (reg.get('Type') or 'Polygon').lower()
-                cname = aname + (' (negative)' if reg.get('NegativeROA') == '1' else '')
-                if t == 'rectangle' and len(v) >= 2:
-                    (x0, y0), (x1, y1) = v.min(0), v.max(0)
-                    layer.add_rect(x0, y0, x1 - x0, y1 - y0, cls=cname, color=color)
-                elif t == 'ellipse' and len(v) >= 2:
-                    (x0, y0), (x1, y1) = v.min(0), v.max(0)
-                    layer.add_ellipse((x0 + x1) / 2, (y0 + y1) / 2, (x1 - x0) / 2, (y1 - y0) / 2, cls=cname, color=color)
-                elif t in ('ruler', 'line', 'polyline') or len(v) == 2:
-                    layer.add_polyline(v, cls=cname, color=color)
-                elif t in ('pin', 'point') or len(v) == 1:
-                    layer.add_point(*v[0], cls=cname, color=color)
-                else:
-                    layer.add_polygon(v, cls=cname, color=color)
+                kind = ('rect' if t == 'rectangle' and len(v) >= 2 else 'ellipse' if t == 'ellipse' and len(v) >= 2
+                        else 'line' if t in ('ruler', 'line', 'polyline') or len(v) == 2
+                        else 'point' if t in ('pin', 'point') or len(v) == 1 else 'polygon')
+                regions.append((kind, v, None, reg.get('NegativeROA') == '1'))
+            _add_regions(layer, regions, aname, color)
         return layer
 
     @classmethod
     def load(cls, path: str | Path, **kw) -> 'AnnotationLayer':
-        """Load by extension: .geojson/.json, .annotations (HALO), .xml (Aperio or HALO)."""
+        """Load by extension: .geojson/.json, .annotations (HALO), .xml (Aperio or HALO), .parquet (GeoParquet),
+        .coco.json (COCO). See ``wissi_viz.annio`` for every format and for writing them."""
         p = Path(path)
         ext = p.suffix.lower()
+        low = p.name.lower()
+        if ext in ('.parquet', '.geoparquet') or low.endswith('.coco.json'):
+            from . import annio
+            return annio.load(p, name=kw.pop('name', None))
         if ext in ('.geojson', '.json'):
             return cls.from_geojson(p, **kw)
         if ext == '.annotations':
@@ -467,6 +459,12 @@ class AnnotationLayer:
             head = p.read_text(errors='ignore', encoding='utf-8-sig')[:4000]
             return cls.from_halo_xml(p, **kw) if '<V ' in head or '<V\n' in head else cls.from_aperio_xml(p, **kw)
         raise ValueError(f'unsupported annotation file: {p.name}')
+
+    def export(self, path: str | Path, fmt: str = 'auto', **kw) -> Path:
+        """Write this layer as GeoParquet (.parquet, the efficient default), GeoJSON / QuPath, HALO or Aperio XML,
+        CSV, COCO or a label-mask TIFF — by extension or ``fmt``. See :func:`wissi_viz.annio.export`."""
+        from . import annio
+        return annio.export(self, path, fmt, **kw)
 
     def to_geojson(self) -> dict:
         c = self.compiled()
@@ -1135,6 +1133,44 @@ def _box_rings(xmin, ymin, xmax, ymax, shape: str = 'ellipse') -> list[np.ndarra
         xs = np.stack([x0, x1, x1, x0], 1)
         ys = np.stack([y0, y0, y1, y1], 1)
     return list(np.stack([xs, ys], 2).astype(np.float32))
+
+
+def _add_regions(layer: 'AnnotationLayer', regions: list, aname: str, color) -> None:
+    """Add one HALO / Aperio annotation's regions. Negative regions (``NegativeROA``) become holes of the positive
+    polygon that contains them (how both tools store holes); a negative region inside nothing stays a feature of
+    class '<name> (negative)'."""
+    pos = [i for i, r in enumerate(regions) if r[0] == 'polygon' and not r[3]]
+    holes: dict[int, list] = {}
+    rest = []
+    for i, (kind, v, props, neg) in enumerate(regions):
+        if neg and kind == 'polygon':
+            host = next((j for j in pos if _point_in_ring(v[0], regions[j][1])), None)
+            if host is not None:
+                holes.setdefault(host, []).append(v)
+                continue
+        rest.append(i)
+    for i in rest:
+        kind, v, props, neg = regions[i]
+        cname = aname + (' (negative)' if neg else '')
+        (x0, y0), (x1, y1) = v.min(0), v.max(0)
+        if kind == 'ellipse':
+            layer.add_ellipse((x0 + x1) / 2, (y0 + y1) / 2, (x1 - x0) / 2, (y1 - y0) / 2, cls=cname, color=color, props=props)
+        elif kind == 'rect':
+            layer.add_rect(x0, y0, x1 - x0, y1 - y0, cls=cname, color=color, props=props)
+        elif kind == 'line':
+            layer.add_polyline(v, cls=cname, color=color, props=props)
+        elif kind == 'point':
+            layer.add_point(*v[0], cls=cname, color=color, props=props)
+        else:
+            layer.add_polygon(v, holes=holes.get(i, ()), cls=cname, color=color, props=props)
+
+
+def _point_in_ring(pt, ring) -> bool:
+    x, y = float(pt[0]), float(pt[1])
+    xs, ys = ring[:, 0], ring[:, 1]
+    xj, yj = np.roll(xs, 1), np.roll(ys, 1)
+    cross = ((ys > y) != (yj > y)) & (x < (xj - xs) * (y - ys) / np.where(yj - ys == 0, 1e-12, yj - ys) + xs)
+    return bool(cross.sum() % 2)
 
 
 def _xml_root(src: Any) -> tuple[ET.Element, str]:

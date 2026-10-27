@@ -4,7 +4,7 @@ name: pages
 on:
   push:
     branches: [main]
-    paths: [site/**, docs/*.png, src/wissi_viz/assets/icon.svg, .github/workflows/pages.yml]
+    paths: [site/**, docs/screenshots/**, src/wissi_viz/assets/icon.svg, .github/workflows/pages.yml]
   workflow_dispatch:
 
 permissions:
@@ -28,7 +28,7 @@ jobs:
         run: |
           mkdir -p _site/img
           cp -r site/. _site/
-          cp docs/*.png _site/img/
+          cp docs/screenshots/*.jpg docs/screenshots/*.png _site/img/
           cp src/wissi_viz/assets/icon.svg src/wissi_viz/assets/icon.png _site/
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

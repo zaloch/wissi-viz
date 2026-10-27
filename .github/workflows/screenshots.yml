@@ -2,10 +2,7 @@
 # and pushes them to the `screenshots` branch for review. Run it from the Actions tab.
 name: screenshots
 on:
-  workflow_dispatch:
-  push:
-    branches: [main]
-    paths: [scripts/make_screenshots.py, .github/workflows/screenshots.yml]
+  workflow_dispatch:          # Actions tab → screenshots → Run workflow
 
 permissions:
   contents: write

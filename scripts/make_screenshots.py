@@ -230,6 +230,20 @@ def analysis_shot(slide: Path, cells: Path, out: Path, port: int = 8093) -> None
             proc.kill()
 
 
+def finish(out: Path) -> None:
+    """Photos as JPEG (a fifth of the size), the analysis view cropped to its content."""
+    from PIL import Image
+    for n in ('hero', 'desktop-app', 'stain-deconvolution'):
+        p = out / f'{n}.png'
+        Image.open(p).convert('RGB').save(out / f'{n}.jpg', quality=88, optimize=True, progressive=True)
+        p.unlink()
+    p = out / 'analysis-density.png'
+    im = Image.open(p).convert('RGB')
+    a = np.asarray(im)
+    rows = np.where((a < 245).any(axis=(1, 2)))[0]
+    im.crop((0, 0, im.width, min(a.shape[0], int(rows.max()) + 24))).save(p, optimize=True)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument('slides_dir')
@@ -248,10 +262,11 @@ def main() -> None:
     print('close-up at', spot, flush=True)
     app_shots(slides, cells, out, spot)
     analysis_shot(slides[0], cells, out)
+    finish(out)
     meta = {'slides': [p.name for p in slides], 'nuclei': sum(1 for _ in open(cells, encoding='utf-8')) - 1,
             'source': 'OpenSlide test data (Aperio), CC0 1.0: https://openslide.cs.cmu.edu/download/openslide-testdata/Aperio/'}
     (out / 'SOURCES.json').write_text(json.dumps(meta, indent=1), encoding='utf-8')
-    for p in sorted(out.glob('*.png')):
+    for p in sorted(out.glob('*.*g')):
         print(p, p.stat().st_size)
 
 

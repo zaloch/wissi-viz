@@ -7,7 +7,7 @@
 <meta name="description" content="GPU whole-slide image viewer and spatial-analysis toolkit for brightfield and fluorescence histology. Embed it in any web app, use it in NiceGUI, or run it as a desktop app.">
 <meta property="og:title" content="wissi-viz">
 <meta property="og:description" content="GPU whole-slide image viewer and spatial-analysis toolkit for histology.">
-<meta property="og:image" content="img/16-panes-synced.png">
+<meta property="og:image" content="img/hero.jpg">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <style>
   :root {
@@ -74,9 +74,10 @@
   .panel pre { margin: 0; padding: 18px 20px; overflow-x: auto; font-size: 14px; line-height: 1.65; }
   .c { color: #6f7f99; } .k { color: #c792ea; } .s { color: #a5e07a; } .t { color: var(--cyan); }
 
-  .gallery { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+  .gallery { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; align-items: start; }
+  figure.wide { grid-column: 1 / -1; }
   figure { margin: 0; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
-  figure img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 10; object-fit: cover; object-position: top left; }
+  figure img { display: block; width: 100%; height: auto; }
   figcaption { padding: 12px 16px; color: var(--dim); font-size: 14.5px; }
   figcaption b { color: var(--text); font-weight: 600; }
 
@@ -136,7 +137,7 @@
         View on GitHub</a>
     </div>
     <div class="install"><code id="cmd">uv tool install "wissi-viz[desktop]"</code><button class="copy" data-copy="cmd">Copy</button></div>
-    <div class="shot"><img src="img/16-panes-synced.png" alt="Sixteen synchronised slide panes" width="1400" height="900"></div>
+    <div class="shot"><img src="img/hero.jpg" alt="Three real H&amp;E slides and a 20× close-up with detected nuclei" width="1600" height="1000"></div>
   </div>
 </header>
 
@@ -210,12 +211,11 @@ wissi-viz serve /data/slides --port 8010 --cache-dir /var/cache/wissi-viz
 <section id="gallery">
   <div class="wrap">
     <h2>See it in action</h2>
-    <p class="sub">Screenshots from the test suite and benchmarks.</p>
+    <p class="sub">Real slides from the <a href="https://openslide.cs.cmu.edu/download/openslide-testdata/Aperio/">OpenSlide test data</a> (CC0 1.0).</p>
     <div class="gallery">
-      <figure><img src="img/desktop-app.png" alt="Desktop app with an H&amp;E slide and a fluorescence CZI" loading="lazy"><figcaption><b>Desktop app.</b> An H&amp;E slide with 64k classified cells next to a multiplex fluorescence CZI.</figcaption></figure>
-      <figure><img src="img/stain-deconvolution.png" alt="Stain deconvolution" loading="lazy"><figcaption><b>Stain deconvolution.</b> Haematoxylin, eosin or DAB, unmixed on the GPU.</figcaption></figure>
-      <figure><img src="img/analysis-density-hotspots.png" alt="Density and hotspot analysis" loading="lazy"><figcaption><b>Spatial analysis.</b> Cell density and hotspots as an overlay and a chart.</figcaption></figure>
-      <figure><img src="img/local-vs-halolink-vs-pathcore.png" alt="Local file, HALO Link and PathCore side by side" loading="lazy"><figcaption><b>Connectors.</b> The same slide from a local file, HALO Link and PathCore, side by side.</figcaption></figure>
+      <figure class="wide"><img src="img/desktop-app.jpg" alt="Desktop app showing CMU-1 with detected nuclei" loading="lazy"><figcaption><b>Desktop app.</b> 148k nuclei detected on a real H&amp;E slide, coloured by size: aggregated far out, outlines at 40×.</figcaption></figure>
+      <figure><img src="img/stain-deconvolution.jpg" alt="Stain deconvolution" loading="lazy"><figcaption><b>Stain deconvolution.</b> The same field as RGB and as haematoxylin only, unmixed on the GPU.</figcaption></figure>
+      <figure><img src="img/analysis-density.png" alt="Density and hotspot analysis" loading="lazy"><figcaption><b>Spatial analysis.</b> Nuclei density and Getis-Ord hotspots as an overlay, with the distribution.</figcaption></figure>
     </div>
   </div>
 </section>

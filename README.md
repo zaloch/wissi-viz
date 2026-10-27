@@ -23,7 +23,9 @@
   <a href="benchmarks/README.md">Benchmarks</a>
 </p>
 
-![16 slides, synchronised](docs/16-panes-synced.png)
+![Three real H&E slides and a 20× close-up with detected nuclei](docs/screenshots/hero.jpg)
+
+<sub>Screenshots use real slides from the [OpenSlide test data](https://openslide.cs.cmu.edu/download/openslide-testdata/Aperio/) (CMU-1, CMU-2, CMU-3; CC0 1.0). The 148k nuclei were detected on CMU-1 by `scripts/make_screenshots.py`.</sub>
 
 ## Features
 
@@ -69,7 +71,7 @@ wissi-viz desktop slide.svs cells.csv      # or open files from the command line
 wissi-viz desktop --install-shortcut       # add it to the Start menu / Applications / app menu
 ```
 
-![Desktop app](docs/desktop-app.png)
+![Desktop app: CMU-1 with nuclei coloured by size, overview and 40×](docs/screenshots/desktop-app.jpg)
 
 **Standalone server with a demo page:**
 
@@ -99,6 +101,11 @@ def index():
 
 ui.run()
 ```
+
+**Stain deconvolution and spatial analysis:**
+
+![Haematoxylin unmixed on the GPU](docs/screenshots/stain-deconvolution.jpg)
+![Density and Getis-Ord hotspots of detected nuclei](docs/screenshots/analysis-density.png)
 
 ## Documentation
 

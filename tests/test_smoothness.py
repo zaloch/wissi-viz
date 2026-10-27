@@ -111,7 +111,8 @@ def test_views_event_is_batched_and_throttled_with_trailing_snapshot(page):
     pg = page
     _settle(pg)
     pg.evaluate("""() => { window.__ev = { views: [], viewchange: 0 };
-        grid.addEventListener('views', (e) => __ev.views.push(e.detail.views));
+        window.__evt = [];
+        grid.addEventListener('views', (e) => { __ev.views.push(e.detail.views); __evt.push(performance.now()); });
         grid.addEventListener('viewchange', () => __ev.viewchange++); }""")
     box = pg.evaluate('() => { const r = grid.getBoundingClientRect(), p = grid.panes[0].rect; return [r.left + p.x + p.w / 2, r.top + p.y + p.h / 2]; }')
     pg.mouse.move(*box)
@@ -128,7 +129,9 @@ def test_views_event_is_batched_and_throttled_with_trailing_snapshot(page):
     time.sleep(0.5)
     ev = pg.evaluate('() => __ev')
     final = pg.evaluate('() => grid.panes.map(p => [p.view.cx, p.view.cy])')
-    assert 2 <= len(ev['views']) <= 14, len(ev['views'])          # ≤ ~8/s, not one per frame
+    times = pg.evaluate('() => __evt')
+    gaps = np.diff(times)
+    assert len(ev['views']) >= 2 and gaps.min() >= 100, gaps      # throttled to ≤ ~8/s, not one per frame
     assert all(len(v) == 4 for v in ev['views'])                   # every pane in each snapshot
     last = ev['views'][-1]
     for v, (cx, cy) in zip(last, final):                           # the trailing snapshot is the resting view

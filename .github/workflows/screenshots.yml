@@ -1,0 +1,41 @@
+# Regenerates the README / website screenshots from real slides (OpenSlide test data, Aperio, CC0 1.0)
+# and pushes them to the `screenshots` branch for review. Run it from the Actions tab.
+name: screenshots
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [scripts/make_screenshots.py, .github/workflows/screenshots.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  shots:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - name: Install
+        run: |
+          uv sync --locked --extra analysis --extra io --extra nicegui --extra server --extra bench --extra desktop
+          uv run playwright install --with-deps chromium
+      - name: Real slides
+        run: |
+          mkdir -p slides
+          base=https://openslide.cs.cmu.edu/download/openslide-testdata/Aperio
+          for f in CMU-1.svs CMU-2.svs CMU-3.svs; do curl -fsSL --retry 3 -o slides/$f $base/$f; done
+          curl -fsSL -o slides/index.yaml https://openslide.cs.cmu.edu/download/openslide-testdata/index.yaml || true
+          ls -la slides
+      - name: Screenshots
+        run: uv run python scripts/make_screenshots.py slides docs/screenshots
+      - name: Push to the screenshots branch
+        run: |
+          cp slides/index.yaml docs/screenshots/openslide-testdata-index.yaml 2>/dev/null || true
+          git config user.name "gzeballo"
+          git config user.email "gzeballo@bu.edu"
+          git checkout -b screenshots
+          git add docs/screenshots
+          git commit -m "Screenshots from real slides (OpenSlide test data, CC0)"
+          git push -f origin screenshots

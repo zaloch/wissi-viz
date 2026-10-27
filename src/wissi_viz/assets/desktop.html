@@ -282,7 +282,10 @@
     if (!native()) showPathBox('drop');           // a browser can't see a dropped file's path
   });
 
-  window.wissiApp = { onResult, activeSlide };
+  /** Show these slide ids in panes (1–16), as if picked in the slide list. */
+  function showSlides(ids) { panes = ids.filter((id) => slides.some((s) => s.id === id)).slice(0, 16); active = 0; apply(); }
+
+  window.wissiApp = { onResult, activeSlide, showSlides };
   await customElements.whenDefined('wissi-viz');
   const st = await call('state');
   slides = st.slides || [];

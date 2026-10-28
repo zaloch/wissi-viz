@@ -400,6 +400,21 @@ def run_demo(which: str = 'quick', directory: str | None = None, model: str = 'a
     return s
 
 
+def publish(d: Path) -> str:
+    """Checksums for the segmented cells, and the command that shares them (a GitHub release this package reads):
+    after one GPU run, every other machine downloads these cells instead of segmenting."""
+    ld = d / 'layers'
+    files = sorted(ld.glob('*.cells.parquet'))
+    if not files:
+        raise SystemExit('no segmented cells yet: run `wissi-viz pack segment` first')
+    lines = [f'{hashlib.sha256(f.read_bytes()).hexdigest()}  {f.name}' for f in files]
+    (ld / 'SHA256SUMS').write_text('\n'.join(lines) + '\n')
+    tag = RESULTS_RELEASE.rsplit('/', 1)[-1]
+    return (f'{len(files)} cell layers, {_human(sum(f.stat().st_size for f in files))}. To share them:\n'
+            f'  cd "{ld}"\n  gh release create {tag} --repo zaloch/wissi-viz --title "Sample pack cells" '
+            f'--notes "Cells of the public sample pack" *.cells.parquet SHA256SUMS')
+
+
 def status(directory: str | None = None) -> dict:
     d = pack_dir(directory)
     out = {}
@@ -416,7 +431,7 @@ def status(directory: str | None = None) -> dict:
 def main(argv: list[str]) -> None:
     import argparse
     ap = argparse.ArgumentParser(prog='wissi-viz pack')
-    ap.add_argument('step', choices=['status', 'download', 'prepare', 'segment', 'analyze', 'open', 'all'])
+    ap.add_argument('step', choices=['status', 'download', 'prepare', 'segment', 'analyze', 'open', 'publish', 'all'])
     ap.add_argument('--set', default='quick', choices=['quick', 'full'])
     ap.add_argument('--dir', default=None, help='where the pack lives (default: the user cache, or $WISSI_PACK_DIR)')
     ap.add_argument('--model', default='auto', choices=['auto', 'cellpose', 'classpose', 'classic'])
@@ -436,6 +451,8 @@ def main(argv: list[str]) -> None:
         segment(sel, d, a.model)
     elif a.step == 'analyze':
         analyze(sel, d)
+    elif a.step == 'publish':
+        print(publish(d))
     elif a.step == 'open':
         from .desktop import main as desktop_main
         desktop_main(['--session', str(session(sel, d))] + (['--browser'] if a.browser else []))

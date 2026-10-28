@@ -602,6 +602,9 @@ def _tile_objects(svc, impl, rgb, x, y, ds, d_img, amin, amax, O, edges, geom, j
     pk = peak_local_max(sal, min_distance=max(2, int(d_img / 2)), threshold_abs=float(np.percentile(sal, 60)),
                         exclude_border=False, num_peaks=4000)  # fmt: skip
     pk = pk[np.argsort(-sal[pk[:, 0], pk[:, 1]])]
+    if impl.name != 'classic':  # a model click costs ~35 ms on a CPU: the most distinct seeds, then a sparse grid
+        grid = grid[:: max(1, len(grid) // 64)]
+        pk = pk[:192]
     pts = np.concatenate([pk[:, ::-1].astype(float), grid]) if len(pk) else grid
     covered = np.zeros((h, w), bool)
     out = []

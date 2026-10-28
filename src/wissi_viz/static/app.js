@@ -1343,8 +1343,10 @@ async function samStatus() {
   samChecked = true;
   try {
     const st = await (await fetch(`${API}/sam/status`)).json();
-    $('a-sam-status').textContent = st.loaded ? `SAM: ${st.backend} on ${st.device}`
-      : `SAM backends: ${st.available.join(', ')}${st.available.length === 1 ? ' (no model installed: the classic colour fill; pip install "wissi-viz[sam]" for SAM 2.1)' : ' (loads on first click)'}`;
+    $('a-sam-status').textContent = st.loaded ? `SAM: ${st.model || st.backend} · ${st.backend} on ${st.device}`
+      : st.available.includes('torch') ? 'SAM 2.1 (PyTorch) · loads on the first click'
+        : st.available.includes('onnx') ? 'SAM 2.1 tiny (bundled, ONNX) · loads on the first click'
+          : 'SAM: the classic colour fill (ONNX Runtime is not installed on this platform)';
   } catch (_) { $('a-sam-status').textContent = 'SAM: not available on this server'; }
 }
 grid.addEventListener('samstart', () => log('SAM: segmenting…'));
@@ -1353,7 +1355,8 @@ grid.addEventListener('sam', (e) => {
   if (d.error) { log(`SAM: ${d.error}`, true); return; }
   log(`SAM (${d.backend}): ${d.polygons.length} region${d.polygons.length === 1 ? '' : 's'}, score ${(d.score ?? 0).toFixed(2)}`
       + (d.encode_ms != null ? `, encoded in ${d.encode_ms} ms` : '') + `, ${d.decode_ms} ms — Enter to accept, Esc to discard`);
-  $('a-sam-status').textContent = `SAM: ${d.backend}`;
+  samChecked = false;   // show the loaded model next time
+  if (tab === 'draw') samStatus();
 });
 grid.addEventListener('draw', (e) => {
   toast({ kind: 'good', title: `Saved to ${e.detail?.layer || $('a-layer').value || 'Annotations'}`, sub: $('a-class').value || '', ms: 3000 });

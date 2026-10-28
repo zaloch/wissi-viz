@@ -22,6 +22,11 @@ dependencies = [
   "pillow>=10",             # MIT-CMU (HPND)
   "mapbox-earcut>=1.0",     # ISC
   "truststore>=0.10",       # MIT (--system-certs: the OS certificate store for downloads)
+  # MIT: SAM 2.1 (bundled, int8 ONNX) for click / box annotation and segment everything; no wheels for Intel Macs on
+  # Python ≥ 3.14 (SAM falls back to the classic fill there)
+  "onnxruntime>=1.20; sys_platform != 'darwin' or platform_machine != 'x86_64' or python_version < '3.14'",
+  "scipy>=1.11",            # BSD-3: masks → outlines (SAM), classic fallback
+  "scikit-image>=0.22",     # BSD-3
 ]
 
 [project.optional-dependencies]
@@ -43,7 +48,7 @@ desktop = ["pywebview>=5", "uvicorn>=0.29"]
 sam = ["torch>=2.2; sys_platform != 'darwin' or platform_machine != 'x86_64'",
        "torchvision>=0.17; sys_platform != 'darwin' or platform_machine != 'x86_64'",
        "transformers>=4.56", "scipy>=1.11", "scikit-image>=0.22"]
-sam-onnx = ["onnxruntime>=1.17", "scipy>=1.11", "scikit-image>=0.22"]
+sam-onnx = ["onnxruntime>=1.20", "scipy>=1.11", "scikit-image>=0.22"]   # now in the core install; kept for old commands
 all = ["wissi-viz[analysis,io,slideio,nicegui,server,polars]"]
 # everything `wissi-viz --demo` / `--benchmark` use (add [sam] or [sam-onnx] for SAM 2.1, cellpose for Cellpose-SAM)
 demo = ["wissi-viz[analysis,io,server,desktop,bench]"]

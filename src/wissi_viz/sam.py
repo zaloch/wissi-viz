@@ -11,14 +11,16 @@ Backends (all permissive):
 
 * ``torch``   — Hugging Face ``transformers`` Sam2Model + ``facebook/sam2.1-hiera-*`` weights (Apache-2.0).
                ``pip install "wissi-viz[sam]"``; CUDA / Apple MPS / CPU. Best quality, ~10–50 ms per click on an RTX.
-* ``onnx``    — the same SAM 2.1 weights exported to ONNX (``scripts/export_sam_onnx.py``; downloaded once from this
-               project's GitHub release), run by ONNX Runtime (MIT): CUDA, DirectML (any Windows GPU) or CPU.
-               ``pip install "wissi-viz[sam-onnx]"`` (or onnxruntime-gpu / onnxruntime-directml).
+* ``onnx``    — the same SAM 2.1 weights exported to ONNX, run by ONNX Runtime (MIT, a core dependency): CUDA,
+               DirectML (any Windows GPU) or CPU. **SAM 2.1 tiny ships inside wissi-viz** (int8, 33 MB,
+               ``models/sam2.1-tiny-int8``; ``scripts/bundle_sam.py``), so it works offline with the plain install;
+               ``WISSI_SAM_MODEL=small`` (or ``tiny-fp32``) downloads a larger float32 export once from this
+               project's GitHub release. For a GPU, replace onnxruntime with onnxruntime-gpu / onnxruntime-directml.
 * ``classic`` — no model: a colour flood fill from the click / Otsu inside the box. Always available, so the tool
                works without extra installs; masks are rougher.
 
 Environment: ``WISSI_SAM_BACKEND`` (auto | torch | onnx | classic), ``WISSI_SAM_MODEL`` (tiny | small | base-plus |
-large; default small), ``WISSI_SAM_DEVICE`` (auto | cuda | mps | cpu), ``WISSI_SAM_ONNX_DIR`` (pre-downloaded files).
+large; default: the bundled tiny for onnx, small for torch), ``WISSI_SAM_DEVICE`` (auto | cuda | mps | cpu), ``WISSI_SAM_ONNX_DIR`` (pre-downloaded files).
 """
 
 from __future__ import annotations
@@ -53,6 +55,7 @@ MODELS = {
     'large': 'facebook/sam2.1-hiera-large',
 }
 ONNX_RELEASE = 'https://github.com/zaloch/wissi-viz/releases/download/sam2.1-onnx-v1'
+BUNDLED = Path(__file__).resolve().parent / 'models' / 'sam2.1-tiny-int8'  # shipped with the package
 MEAN = np.array([0.485, 0.456, 0.406], np.float32)
 STD = np.array([0.229, 0.224, 0.225], np.float32)
 
@@ -166,6 +169,7 @@ class _Onnx:
         import onnxruntime as ort
 
         d = _onnx_files(model)
+        self.files = d
         avail = ort.get_available_providers()
         want = {'cuda': ['CUDAExecutionProvider'], 'dml': ['DmlExecutionProvider'], 'cpu': []}.get(device)
         if want is None:  # auto: best available
@@ -173,8 +177,10 @@ class _Onnx:
                 p for p in ('CUDAExecutionProvider', 'DmlExecutionProvider', 'CoreMLExecutionProvider') if p in avail
             ]
         providers = [p for p in want if p in avail] + ['CPUExecutionProvider']
-        self.enc = ort.InferenceSession(str(d / 'encoder.onnx'), providers=providers)
-        self.dec = ort.InferenceSession(str(d / 'decoder.onnx'), providers=providers)
+        so = ort.SessionOptions()
+        so.log_severity_level = 3  # errors only (the int8 graph logs harmless shape-merge warnings)
+        self.enc = ort.InferenceSession(str(d / 'encoder.onnx'), so, providers=providers)
+        self.dec = ort.InferenceSession(str(d / 'decoder.onnx'), so, providers=providers)
         self.device = self.enc.get_providers()[0].replace('ExecutionProvider', '').lower()
 
     def embed(self, rgb: np.ndarray):
@@ -209,12 +215,16 @@ class _Onnx:
         return up > 0, float(iou[0, k])
 
 
-def _onnx_files(model: str) -> Path:
-    """Directory with encoder.onnx / decoder.onnx for ``model``: WISSI_SAM_ONNX_DIR, else the user cache (downloaded
-    once from this project's GitHub release, checked against its published SHA-256 sums)."""
+def _onnx_files(model: str | None) -> Path:
+    """Directory with encoder.onnx / decoder.onnx for ``model``: WISSI_SAM_ONNX_DIR; the bundled int8 tiny (no model
+    asked for, or ``tiny``); else the user cache (downloaded once from this project's GitHub release, checked against
+    its published SHA-256 sums)."""
     env = os.environ.get('WISSI_SAM_ONNX_DIR')
     if env:
         return Path(env)
+    if model in (None, '', 'tiny', 'tiny-int8', 'bundled') and (BUNDLED / 'encoder.onnx').exists():
+        return BUNDLED
+    model = 'tiny' if model == 'tiny-fp32' else model
     d = user_dir('cache') / 'sam' / f'sam2.1-{model}-onnx'
     if (d / 'encoder.onnx').exists() and (d / 'decoder.onnx').exists():
         return d
@@ -249,7 +259,7 @@ class SamService:
         cache: int = 32,
     ) -> None:
         self.want = (backend or os.environ.get('WISSI_SAM_BACKEND') or 'auto').lower()
-        self.model_name = (model or os.environ.get('WISSI_SAM_MODEL') or 'small').lower()
+        self.model_name = (model or os.environ.get('WISSI_SAM_MODEL') or '').lower() or None  # None: the default
         self.device_pref = (device or os.environ.get('WISSI_SAM_DEVICE') or 'auto').lower()
         self.size = size
         self._impl = None
@@ -272,7 +282,7 @@ class SamService:
         for b in order:
             try:
                 if b == 'torch':
-                    self._impl = _Torch(self.model_name, self.device_pref)
+                    self._impl = _Torch(self.model_name or 'small', self.device_pref)
                 elif b == 'onnx':
                     self._impl = _Onnx(self.model_name, self.device_pref)
                 else:
@@ -288,7 +298,7 @@ class SamService:
         return {
             'backend': impl.name if impl else None,
             'requested': self.want,
-            'model': self.model_name,
+            'model': _model_label(impl, self.model_name),
             'device': getattr(impl, 'device', None),
             'loaded': impl is not None,
             'notes': self._error,
@@ -409,6 +419,14 @@ def _polygons(mask: np.ndarray, min_area_px: float) -> list[np.ndarray]:
             out.append(c)
     out.sort(key=lambda p: -len(p))
     return out
+
+
+def _model_label(impl, model: str | None) -> str | None:
+    if impl is None or impl.name == 'classic':
+        return model
+    if impl.name == 'onnx' and Path(getattr(impl, 'files', '')) == BUNDLED:
+        return 'sam2.1-tiny (int8, bundled)'
+    return f'sam2.1-{model or ("small" if impl.name == "torch" else "tiny")}'
 
 
 def _available() -> list[str]:

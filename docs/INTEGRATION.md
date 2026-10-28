@@ -1,6 +1,6 @@
 # Integrating wissi-viz
 
-*Current as of wissi-viz 0.10.0.* This guide covers how to put wissi-viz into an app: NiceGUI (wissi), other Python web frameworks, JavaScript frameworks and notebooks. It also covers:
+*Current as of wissi-viz 0.11.0.* This guide covers how to put wissi-viz into an app: NiceGUI (wissi), other Python web frameworks, JavaScript frameworks and notebooks. It also covers:
 - how to show large cell and object tables;
 - how to keep the viewer smooth, including on clients without a GPU;
 - how to connect a vendor tile API such as PathCore or HALO Link;
@@ -31,6 +31,7 @@
 | 0.9.0 | **Inspector.** The app's Layers / Analyze / Measure / Draw inspector, object cards with percentiles, hover tips, a radial menu and keyboard shortcuts (§12). Spatial analyses from the app and `wissi_viz.analyses` (§16). Layer summaries, colour-by and removal over HTTP. NiceGUI: `WissiApp` / `mount_app` (the whole app in a page), `on_object_hover` / `on_context` / `on_layers`, `flash_layer`, `summary`, `run_analysis`, and `analyses.echarts_option` for `ui.echart` (§2). **Connect…** and `--connect` for tile APIs (§7); `serve --allow-open` with an in-page file picker and `--key` (§8). | The app page's logic moved to `static/app.js`. The per-pane ⚙ menu is off in the app (its controls are in the inspector); the element keeps it. New viewer events: `objecthover`, `panecontext` (opt-in: `grid.hoverEvents`, `grid.contextEvents`) and `layers`; new methods `hitAt()` and `flashLayer()`. NiceGUI handlers now run once per event (they also ran a second time without the event's data). |
 | 0.9.1 | `--system-certs` / `WISSI_VIZ_SYSTEM_CERTS=1`: downloads trust the operating system's certificates, for networks that inspect HTTPS (§13). | Nothing; use the flag where downloads fail with `CERTIFICATE_VERIFY_FAILED`. `truststore` (MIT) is a new core dependency. |
 | 0.10.0 | **Find all, image tools, projects.** Annotate tab: examples (SAM, drawing, picked objects) → find all like them: similar objects, segment everything (SAM / classic) or areas (pixel classifier), in the view, a region or the whole slide, as background jobs with progress, cancel and a live strictness slider (§12, `wissi_viz.findall`, §16). Image tab: histograms of the whole image, the view or a CZI scene, with draggable windows, auto, link, solo. View bar on the slide (zoom, 1:1, 2.5–40×, overview map, scale bar, snapshot, full screen) and an FPS readout. Layers: nested / by source / flat views and source badges (`origin`, saved with layers). Slide list: projects and folder groups. In-page file picker with places, a path bar, multi-select and Open this folder (also in a browser window). `--demo` asks quick or full. | `scikit-learn` (BSD-3) joins the `analysis` extra. Layers you draw are tagged drawn / sam. The scale bar now shows after a pane change (it stayed hidden). Channel auto-contrast reads a finer level (bright structures saturated before). In the in-page picker a click selects; double-click or Open opens. The Draw tab is now Annotate (same key, `D`). |
+| 0.11.0 | **SAM 2.1 built in.** SAM 2.1 tiny (int8 ONNX, 33 MB) ships inside the package and ONNX Runtime is a core dependency: click / box annotation and *segment everything* use SAM without extras, downloads or a GPU (§15). | ONNX Runtime, SciPy and scikit-image are now core dependencies (all permissive; ~24 MB wheel). `WISSI_SAM_MODEL` defaults to the bundled tiny on onnx (`small` / `tiny-fp32` download float32 exports). Intel Macs on Python 3.14 have no ONNX Runtime wheel and keep the classic fill. On a GPU, replace onnxruntime with onnxruntime-gpu. |
 | 0.7.0 | **Desktop app and platform support.** `wissi-viz-app` opens the viewer in its own native window with its own icon (pywebview), as an option next to the embedded element. Windows, macOS and Linux are supported and CI-tested; packaging moved to uv (`uv.lock`, dependency groups). Python 3.10–3.11 work again (older czifile). | Nothing for embedded use. For the app: `uv tool install "wissi-viz[desktop]"` (§12). For development: `uv sync` (§13). |
 | 0.5.0 | **Object pyramid.** Millions of cells are shown as screen-sized aggregated dots, then as GPU-drawn outlines when zoomed in. There is a **server mode** (default) and a **client mode**. | Use `cached_object_layer` for big tables (§5). Choose `overlays: 'server'\|'client'\|'auto'`. |
 | 0.5.1 | **Polars reader.** `read_objects(engine='auto')` uses Polars, then pyarrow, then pandas. | `pip install "wissi-viz[polars]"`. |
@@ -707,6 +708,7 @@ uv build                                     # sdist + wheel in dist/
 | czifile 2026.x | Python ≥ 3.12 | Python 3.10–3.11 get czifile 2019.7.2.x; the CZI reader supports both (tested). |
 | slideio (`[slideio]`) | no Linux ARM wheels; no macOS Intel wheel for Python 3.14 | skipped on Linux ARM by a marker; VSI/ZVI/DICOM/SCN/AFI need x86_64 Linux, Windows or macOS there. |
 | pylibCZIrw (`[lgpl]`) | no Python 3.14 wheels yet | use czifile (the default) on 3.14. |
+| onnxruntime (core, SAM 2.1) | no Intel-Mac wheel for Python 3.14 | left out there by a marker; SAM uses the classic fill on that one combination. |
 | proxy-tools (pulled in by pywebview) | pure-Python source package, no wheel | builds automatically in a second; only `--only-binary :all:` installs refuse it. Some web filters block it (403 Forbidden) because of its name: `uv sync … --no-install-package proxy-tools`, then copy `proxy_tools` from another environment, or install once on another network (uv keeps it). |
 
 - **Networks that inspect HTTPS** (most corporate networks) re-sign connections with their own certificate, which
@@ -764,7 +766,12 @@ Over HTTP: `GET {prefix}/slides/{id}/annotations/export?layer=…&fmt=geoparquet
 
 ## 15. SAM 2.1 click annotation
 
-In the app (desktop or `wissi-viz serve`), the SAM tool (key 8, or **Draw → SAM tool**), or `grid.setTool('sam')` on the element:
+**SAM 2.1 comes with every install:** SAM 2.1 tiny, quantized to int8 (33 MB, median mask IoU 0.96 against
+float32 on clicked nuclei), ships inside the package and runs on ONNX Runtime, now a core dependency. No download,
+no extra, works offline. The only gap: Intel Macs on Python ≥ 3.14 (no ONNX Runtime wheels yet), which get the
+classic fill.
+
+In the app (desktop or `wissi-viz serve`), the SAM tool (key 8, or **Annotate → SAM**), or `grid.setTool('sam')` on the element:
 
 - **click** an object to include it, **shift/alt-click** to exclude a part, **drag** a box;
 - the cyan outline updates after each prompt; **Enter / double-click / Accept** saves it to the draw layer with the chosen class (`setDrawLayer`, `setDrawClass`); **Esc** discards it;
@@ -772,11 +779,11 @@ In the app (desktop or `wissi-viz serve`), the SAM tool (key 8, or **Draw → SA
 
 | Backend | Install | Runs on | Notes |
 |---|---|---|---|
-| `torch` | `[sam]` (transformers + torch) | CUDA, Apple MPS, CPU | `facebook/sam2.1-hiera-*` from Hugging Face; fastest on a GPU (`--benchmark` reports your click latency) |
-| `onnx` | `[sam-onnx]` (ONNX Runtime; `onnxruntime-gpu` / `-directml` for GPUs) | CUDA, DirectML (any Windows GPU), CoreML, CPU | SAM 2.1 tiny / small exported by this project's CI and checked against PyTorch (mask IoU ≥ 0.9998); downloaded once, SHA-256 verified |
-| `classic` | nothing | CPU | colour flood fill / Otsu in the box; always available, rougher masks |
+| `onnx` (default) | nothing: ONNX Runtime and the bundled tiny model come with wissi-viz (`onnxruntime-gpu` / `-directml` in its place for GPUs) | CUDA, DirectML (any Windows GPU), CoreML, CPU | the bundled SAM 2.1 tiny int8 (`models/sam2.1-tiny-int8`, built by `scripts/bundle_sam.py`); `WISSI_SAM_MODEL=small` or `tiny-fp32` downloads that float32 export once (exported by this project's CI, checked against PyTorch: mask IoU ≥ 0.9998; SHA-256 verified). ~1–3 s to encode a view and ~35 ms per click on a laptop CPU |
+| `torch` | `[sam]` (transformers + torch) | CUDA, Apple MPS, CPU | `facebook/sam2.1-hiera-*` from Hugging Face; preferred when installed; fastest on a GPU (`--benchmark` reports your click latency) |
+| `classic` | nothing | CPU | colour flood fill / Otsu in the box; the fallback, rougher masks |
 
-`WISSI_SAM_BACKEND` = auto | torch | onnx | classic, `WISSI_SAM_MODEL` = tiny | small | base-plus | large, `WISSI_SAM_DEVICE` = auto | cuda | mps | dml | cpu. All weights are Apache-2.0 (commercial use allowed). Endpoints: `GET {prefix}/sam/status`, `POST {prefix}/slides/{id}/sam` with `{rect, points, labels, box}` → polygons in level-0 px.
+`WISSI_SAM_BACKEND` = auto (torch if installed, else onnx, else classic) | torch | onnx | classic, `WISSI_SAM_MODEL` = tiny | tiny-fp32 | small | base-plus | large (default: the bundled tiny on onnx, small on torch), `WISSI_SAM_DEVICE` = auto | cuda | mps | dml | cpu. All weights are Apache-2.0 (commercial use allowed). Endpoints: `GET {prefix}/sam/status`, `POST {prefix}/slides/{id}/sam` with `{rect, points, labels, box}` → polygons in level-0 px.
 
 ## 16. Measuring regions and objects
 

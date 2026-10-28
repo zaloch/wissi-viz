@@ -30,8 +30,10 @@ STDLIB = set(sys.stdlib_module_names) | {'__future__'}
 PLATFORM_ONLY = {'resource', 'fcntl', 'termios', 'pwd', 'grp', 'winreg', 'msvcrt', '_winapi'}
 # import names of the core dependencies (pyproject `dependencies`) and what fastapi always brings along
 CORE = {'numpy', 'fastapi', 'starlette', 'anyio', 'pydantic', 'tifffile', 'zarr', 'imagecodecs', 'czifile', 'PIL'}
-CORE |= {'mapbox_earcut', 'truststore'}
-DIST_TO_IMPORT = {'pillow': 'PIL', 'mapbox-earcut': 'mapbox_earcut'}
+CORE |= {'mapbox_earcut', 'truststore', 'onnxruntime', 'scipy', 'skimage'}
+# core, but heavy to import: may be imported where they are used, so `import wissi_viz` stays fast
+LAZY_CORE = {'onnxruntime', 'scipy', 'skimage'}
+DIST_TO_IMPORT = {'pillow': 'PIL', 'mapbox-earcut': 'mapbox_earcut', 'scikit-image': 'skimage'}
 # modules that require an extra anyway may import that extra at the top
 EXTRA_AT_TOP = {
     'metrics.py': {'scipy', 'shapely', 'skimage', 'pandas'},
@@ -69,7 +71,7 @@ def _allowed(node: ast.Import | ast.ImportFrom, path: Path) -> bool:
             return True
         return any((here, t) in CYCLES for t in targets)
     top = (node.names[0].name if isinstance(node, ast.Import) else node.module).split('.')[0]
-    if top in PLATFORM_ONLY:
+    if top in PLATFORM_ONLY or top in LAZY_CORE:
         return True
     if top in STDLIB or top in CORE or top == 'wissi_viz':
         return False

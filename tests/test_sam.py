@@ -50,6 +50,45 @@ def test_classic_click_and_box(slide):
     assert 2.5 < info3['downsample'] < 3.2 and _area(polys3[0]) == pytest.approx(math.pi * 60**2, rel=0.2)
 
 
+def test_bundled_sam_by_default_offline(slide, monkeypatch):
+    """The plain install segments with SAM 2.1 (the int8 tiny model inside the package), without any download."""
+    pytest.importorskip('onnxruntime')
+    import urllib.request
+
+    from wissi_viz import sam
+
+    def no_network(*a, **k):
+        raise AssertionError('the bundled model must not download anything')
+
+    monkeypatch.setattr(urllib.request, 'urlopen', no_network)
+    monkeypatch.delenv('WISSI_SAM_BACKEND', raising=False)
+    monkeypatch.delenv('WISSI_SAM_MODEL', raising=False)
+    monkeypatch.delenv('WISSI_SAM_ONNX_DIR', raising=False)
+    assert (sam.BUNDLED / 'encoder.onnx').exists() and (sam.BUNDLED / 'LICENSE-Apache-2.0.txt').exists()
+    svc = SamService()
+    if 'torch' in sam._available():  # an install with the [sam] extra prefers PyTorch: ask for onnx
+        svc = SamService(backend='onnx')
+    polys, info = svc.segment(slide, rect=(700, 700, 1500, 1500), points=[(1000, 1000)], labels=[1], key='b')
+    st = svc.status()
+    assert info['backend'] == 'onnx' and st['model'] == 'sam2.1-tiny (int8, bundled)', st
+    assert len(polys) >= 1 and _area(polys[0]) == pytest.approx(math.pi * 40**2, rel=0.2)
+    c = polys[0].mean(0)
+    assert abs(c[0] - 1000) < 6 and abs(c[1] - 1000) < 6
+    # a box prompt on the same view reuses the encoding
+    polys2, info2 = svc.segment(slide, rect=(700, 700, 1500, 1500), box=(1160, 1010, 1240, 1090), key='b')
+    assert info2['cached'] and _area(polys2[0]) == pytest.approx(math.pi * 25**2, rel=0.25)
+
+
+def test_bundled_model_checksums():
+    import hashlib
+
+    from wissi_viz import sam
+
+    for ln in (sam.BUNDLED / 'SHA256SUMS').read_text().splitlines():
+        digest, name = ln.split()
+        assert hashlib.sha256((sam.BUNDLED / name).read_bytes()).hexdigest() == digest, name
+
+
 def test_negative_click_removes_a_part(slide):
     svc = SamService(backend='classic')
     polys, _ = svc.segment(

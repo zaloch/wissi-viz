@@ -132,9 +132,13 @@ def test_find_objects_needs_examples_and_candidates_in_scope(session):
 
 
 # ------------------------------------------------------------------------------------------------ segment everything
-def test_segment_everything_classic(session):
+@pytest.mark.parametrize('backend, recall', [('classic', 0.9), ('onnx', 0.8)])  # onnx: the bundled SAM 2.1
+def test_segment_everything(session, monkeypatch, backend, recall):
     from wissi_viz import annio, findall
+    from wissi_viz.sam import SamService
 
+    svc = SamService(backend=backend)
+    monkeypatch.setattr(findall, 'sam_service', lambda: svc)
     s, sid = session
     reg = s.registry
     rect = [200, 200, 900, 900]
@@ -149,7 +153,8 @@ def test_segment_everything_classic(session):
     polys = shapely.polygons([shapely.linearrings(G.rings(i)[0]) for i in range(len(G))])
     hit = shapely.union_all(polys)
     found = shapely.contains_xy(hit, inside[:, 0], inside[:, 1]).mean()
-    assert found > 0.9, (found, out)  # (almost) every nucleus outlined
+    assert found > recall, (found, out)  # (almost) every nucleus outlined
+    assert svc.status()['backend'] == backend and out['note'].startswith(backend)
     assert reg.layer(sid, out['layer']).origin == 'found' and out['layer'] == 'Segmented objects'
     # with examples: only the big ones
     cls = _classes(reg, sid, 'cells')

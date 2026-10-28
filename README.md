@@ -32,7 +32,7 @@
 - **Fast, on the GPU.** One WebGL2 context drives 1–32 panes, with synchronised navigation, multi-channel fluorescence compositing, stain deconvolution and adaptive resolution while moving. It stays smooth on clients without a GPU.
 - **Formats:** SVS, CZI, OME-TIFF, NDPI, VSI, ZVI, DICOM, SCN, AFI and more, plus vendor tile APIs (PathCore, HALO Link, any HTTP tile service) through connectors.
 - **Millions of cells.** Object tables from QuPath, HALO, CellProfiler, GeoJSON, label masks or AnnData. They are shown as aggregated dots when zoomed out and as GPU-drawn outlines up close, coloured by class or by any measurement.
-- **Annotations with SAM 2.1.** Click an object or drag a box in any of the 32 panes and Segment Anything outlines it; pick a class and accept. Runs on PyTorch (CUDA / Apple / CPU) or ONNX Runtime (CUDA / DirectML / CPU), with a model-free fallback. Drawing tools too (point, rectangle, ellipse, polygon, freehand, line).
+- **Annotations with SAM 2.1, built in.** Click an object or drag a box in any of the 32 panes and Segment Anything outlines it; pick a class and accept. SAM 2.1 tiny (int8, 33 MB) ships with wissi-viz and runs on ONNX Runtime (CPU, CUDA, DirectML): no extra, no download, offline. PyTorch with the larger models is optional (`[sam]`). Drawing tools too (point, rectangle, ellipse, polygon, freehand, line).
 - **Find all like these.** Mark a few examples (SAM, drawing, or picking objects) and find every similar one in the
   view, a region or the whole slide: similar objects of a cell layer, *segment everything* with SAM and keep the
   similar, or a pixel classifier for areas (tumour, stroma, …). Background jobs with progress, cancel and a live
@@ -77,7 +77,7 @@ uv run wissi-viz --benchmark         # report → ./wissi-viz-benchmark.md
 | `slideio` | VSI, ZVI, DICOM, SCN, AFI |
 | `remote` | HTTP client for vendor tile APIs |
 | `desktop` | the native desktop window (pywebview) |
-| `sam` / `sam-onnx` | SAM 2.1 click annotation on PyTorch / ONNX Runtime (Apache-2.0 weights) |
+| `sam` | SAM 2.1 on PyTorch with the larger models (the bundled tiny model on ONNX Runtime needs no extra) |
 | `all` | everything permissive above, except `desktop` |
 | `lgpl` | opt-in: OpenSlide (MRXS, BIF) and libCZI |
 

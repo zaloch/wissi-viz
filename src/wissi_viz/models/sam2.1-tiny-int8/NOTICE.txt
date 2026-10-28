@@ -1,0 +1,1 @@
+SAM 2.1 model weights and code by Meta Platforms, Inc., licensed under the Apache License 2.0 (https://github.com/facebookresearch/sam2). These ONNX files are a format conversion of those weights, distributed under the same licence.

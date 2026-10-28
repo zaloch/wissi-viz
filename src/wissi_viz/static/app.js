@@ -428,8 +428,11 @@ const openPaths = async (list) => {
   if (res && !(res.errors || []).length) closePicker();
   onResult(res);
 };
+let browseSeq = 0;
 async function browse(dir) {
+  const seq = ++browseSeq;
   const res = await call('browse', dir);
+  if (seq !== browseSeq) return;   // a later folder was asked for meanwhile (a slow listing must not overwrite it)
   if (!res || res.errors) { if (res) { log(res.errors.join(' · '), true); $('pk-info').textContent = res.errors[0]; } return; }
   pk.dir = res.dir; pk.parent = res.parent; pk.entries = res.entries; pk.sel.clear();
   $('browser').dataset.dir = res.dir;

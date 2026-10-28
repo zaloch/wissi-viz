@@ -200,6 +200,8 @@ def _empty_and_picker(w, data, s):
     # the file picker: open slides / open folder / places / up / filter-path / cancel
     _open_picker(w, '#empty button[data-act=open]')
     w.check('#pk-places button', '() => document.querySelector("#pk-places button.on")')
+    # a folder asked for while another is still listing wins (the slow Home listing must not overwrite it)
+    pg.click('#pk-places button')
     pg.fill('#pk-filter', str(data))
     pg.keyboard.press('Enter')
     pg.wait_for_selector('#browser a:has-text("he.svs")')

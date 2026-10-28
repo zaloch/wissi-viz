@@ -64,9 +64,10 @@ class _Classic:
             x0, y0, x1, y1 = [int(round(v)) for v in box]
             x0, y0, x1, y1 = max(0, x0), max(0, y0), min(w, x1), min(h, y1)
             if x1 - x0 > 2 and y1 - y0 > 2:
-                from skimage.filters import threshold_otsu
+                from ._compat import otsu
                 dark = 255 - rgb[y0:y1, x0:x1].astype(np.float64).mean(-1)
-                fg = dark > threshold_otsu(dark) if dark.max() > dark.min() else np.ones_like(dark, bool)
+                t = otsu(dark)
+                fg = dark > t if t is not None else np.ones_like(dark, bool)
                 lab_, n = ndi.label(ndi.binary_opening(fg, iterations=1))
                 if n:
                     cy, cx = (y1 - y0) // 2, (x1 - x0) // 2

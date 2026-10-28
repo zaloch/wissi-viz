@@ -21,14 +21,12 @@ GrandQC (non-commercial).
 """
 from __future__ import annotations
 
-import math
 import os
 import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 
@@ -59,8 +57,8 @@ def _tissue_tiles(src, tile_l0: int, overlap_l0: int) -> list[tuple[int, int, in
         tissue = ((rgb.max(-1) - rgb.min(-1)) > 0.06) & (rgb.mean(-1) < 0.9)
     else:
         a = np.asarray(src.read_region(lv, 0, 0, L.width, L.height, 0), np.float32)
-        from skimage.filters import threshold_otsu
-        tissue = a > (threshold_otsu(a) * 0.5 if a.max() > a.min() else 0)
+        from ._compat import otsu
+        tissue = a > (otsu(a, 0.0) * 0.5)
     ds = L.downsample
     out = []
     for y in range(0, info.height, tile_l0):
@@ -216,7 +214,7 @@ def segment_slide(slide: str | Path, out: str | Path, model: str = 'auto', targe
     t0 = time.time()
     parts = []
     if model == 'classic':
-        from skimage.filters import threshold_otsu
+        from ._compat import otsu
         rng = np.random.default_rng(0)
         samp = [tiles[i] for i in rng.choice(len(tiles), min(10, len(tiles)), replace=False)] if tiles else []
         vals = []
@@ -225,7 +223,7 @@ def segment_slide(slide: str | Path, out: str | Path, model: str = 'auto', targe
             v = (_stain_od(im)['hematoxylin'][~_background(im)] if rgb else im[..., 0].ravel())[::5]
             vals.append(v)
         v = np.concatenate(vals) if vals else np.zeros(1)
-        thr = float(threshold_otsu(v)) if v.max() > v.min() else 0.0
+        thr = otsu(v, 0.0)
         if rgb:
             thr = max(thr, 0.15)              # haematoxylin OD of a nucleus is well above 0.15
         from concurrent.futures import ProcessPoolExecutor
@@ -295,12 +293,12 @@ def classify(props: dict, rgb: bool, names: list[str]) -> np.ndarray:
     if rgb:
         a = props['area_um2']
         return np.where(a < 25, 'Small nucleus', np.where(a < 50, 'Medium nucleus', 'Large nucleus')).astype(object)
-    from skimage.filters import threshold_otsu
+    from ._compat import otsu
     markers = [nm for nm in names[1:]] or names
     z = []
     for nm in markers:
         v = props[f'{nm}_mean'].astype(np.float64)
-        t = threshold_otsu(v) if v.max() > v.min() else np.inf
+        t = otsu(v, np.inf)
         z.append((v - t) / (v.std() + 1e-9))
     z = np.stack(z, 1)
     best = z.argmax(1)

@@ -203,9 +203,11 @@ def _stats(prefix: str, v: np.ndarray, px_area_um2: float, positive: bool = True
     q10, q50, q90 = np.percentile(v, [10, 50, 90])
     d = {f'{prefix}_mean': v.mean(), f'{prefix}_sd': v.std(), f'{prefix}_median': q50, f'{prefix}_p10': q10,
          f'{prefix}_p90': q90, f'{prefix}_integrated': v.sum() * px_area_um2}
-    if positive and v.max() > v.min():
-        from skimage.filters import threshold_otsu
-        d[f'{prefix}_pos_frac'] = float((v > threshold_otsu(v)).mean())
+    if positive:
+        from ._compat import otsu
+        t = otsu(v)
+        if t is not None:
+            d[f'{prefix}_pos_frac'] = float((v > t).mean())
     return d
 
 

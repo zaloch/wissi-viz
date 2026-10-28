@@ -51,3 +51,21 @@ def user_dir(kind: str, app: str = 'wissi-viz'):
         base = Path(os.environ.get(env) or home / default) / app
     base.mkdir(parents=True, exist_ok=True)
     return base
+
+
+def otsu(values, default=None):
+    """Otsu threshold that never raises: nearly constant data (where numpy cannot make 256 finite histogram bins —
+    seen on some platforms with float32 data) returns ``default``."""
+    import numpy as np
+    v = np.asarray(values, np.float64).ravel()
+    v = v[np.isfinite(v)]
+    if v.size < 2:
+        return default
+    lo, hi = float(v.min()), float(v.max())
+    if not hi - lo > 1e-9 * max(1.0, abs(hi), abs(lo)):
+        return default
+    try:
+        from skimage.filters import threshold_otsu
+        return float(threshold_otsu(v))
+    except ValueError:
+        return default

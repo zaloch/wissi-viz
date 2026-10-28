@@ -33,6 +33,7 @@ from starlette.background import BackgroundTask
 from . import annio, summary
 from ._version import __version__
 from .annotations import AnnotationLayer, _add_geometry, _class_from_props
+from .jobs import JobRunner
 from .registry import SlideRegistry
 from .sources.remote import RemoteError
 from .tiles import encode_rgb
@@ -72,6 +73,9 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
     r = APIRouter()
     gz = _GzCache(int(getattr(registry, 'gzip_cache_mb', 256) * 2**20))
     tiles = registry.tiles
+    jobs = getattr(registry, 'jobs', None)
+    if jobs is None:  # one runner per registry: every router on it sees the same jobs
+        jobs = registry.jobs = JobRunner()
 
     def hdrs(cache: str | None = None, extra: dict | None = None) -> dict:
         h = {}
@@ -122,6 +126,69 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
             d = await asyncio.to_thread(registry.info, sid)
         except Exception as e:
             raise HTTPException(500, str(e)) from e
+        return JSONResponse(d, headers=hdrs('no-cache'))
+
+    @r.get('/slides/{sid}/histogram')
+    async def histogram(sid: str, rect: str | None = None, bins: int = 256, max_pixels: int = 4_000_000):
+        """Per-channel (fluorescence) or R, G, B (brightfield) histograms of the whole slide or ``rect``
+        (x0,y0,x1,y1 in level-0 px), read at the level where that is ≤ ``max_pixels``: {channels: [{name, counts,
+        lo, hi, zeros, p: {0.1, 1, 50, 99, 99.9}}], level, domain}. Zero pixels (unscanned mosaic area) are counted
+        apart, so they don't skew the percentiles."""
+        e, pyr = entry(sid)
+        src = e.source
+        info = src.info
+        bins = max(16, min(int(bins), 1024))
+        if rect:
+            x0, y0, x1, y1 = (float(v) for v in rect.split(','))
+        else:
+            x0, y0, x1, y1 = 0.0, 0.0, float(info.width), float(info.height)
+        x0, y0 = max(0.0, x0), max(0.0, y0)
+        x1, y1 = min(float(info.width), x1), min(float(info.height), y1)
+        if x1 - x0 < 1 or y1 - y0 < 1:
+            raise HTTPException(400, 'empty rectangle')
+
+        def make():
+            lv = len(info.levels) - 1  # the finest level where the rectangle is ≤ max_pixels
+            for i, L in enumerate(info.levels):
+                if (x1 - x0) * (y1 - y0) / L.downsample**2 <= max_pixels:
+                    lv = i
+                    break
+            L = info.levels[lv]
+            ds = L.downsample
+            lx, ly = int(x0 / ds), int(y0 / ds)
+            w = max(1, min(L.width - lx, int(math.ceil((x1 - x0) / ds))))
+            h = max(1, min(L.height - ly, int(math.ceil((y1 - y0) / ds))))
+            if info.mode == 'rgb':
+                a = np.asarray(src.read_region(lv, lx, ly, w, h))[..., :3]
+                planes = [('red', a[..., 0]), ('green', a[..., 1]), ('blue', a[..., 2])]
+                top = 255
+            else:
+                planes = [
+                    (c.name or f'channel {i + 1}', np.asarray(src.read_region(lv, lx, ly, w, h, i)))
+                    for i, c in enumerate(info.channels)
+                ]
+                top = 255 if info.dtype == 'uint8' else 65535
+            out = []
+            for name, v in planes:
+                v = v.ravel()
+                nz = v[v > 0]
+                zeros = int(v.size - nz.size)
+                vals = nz if nz.size > 100 else v
+                hi = int(vals.max()) if vals.size else top
+                hi = max(hi, 1)
+                counts, _ = np.histogram(vals, bins=bins, range=(0, hi + 1))
+                ps = np.percentile(vals, [0.1, 1, 50, 99, 99.9]) if vals.size else [0] * 5
+                out.append({
+                    'name': name, 'counts': counts.tolist(), 'lo': 0, 'hi': hi + 1, 'zeros': zeros,
+                    'min': int(vals.min()) if vals.size else 0, 'max': hi,
+                    'p': dict(zip(('0.1', '1', '50', '99', '99.9'), (float(x) for x in ps))),
+                })  # fmt: skip
+            return {'channels': out, 'level': lv, 'domain': top, 'rect': [x0, y0, x1, y1], 'pixels': int(w * h)}
+
+        try:
+            d = await asyncio.to_thread(make)
+        except Exception as ex:
+            raise HTTPException(500, f'histogram: {ex}') from ex
         return JSONResponse(d, headers=hdrs('no-cache'))
 
     @r.get('/slides/{sid}/tiles/{level}/{tx}/{ty}')
@@ -452,14 +519,23 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
             body = await request.json()
             layers = registry.layers(sid)
             L = layers.get(layer_name)
-            new = AnnotationLayer.from_geojson(body, name=layer_name)
+            feats = body.get('features') or [body]
+            # where the shapes came from: SAM masks carry source=sam, the drawing tools source=drawn
+            srcs = {str((f.get('properties') or {}).get('source') or 'drawn') for f in feats}
+            origin = 'sam' if srcs == {'sam'} else 'drawn' if srcs <= {'drawn'} else 'drawn+sam'
             if L is None:
+                new = AnnotationLayer.from_geojson(body, name=layer_name)
+                new.origin = origin
                 registry.add_annotations(sid, new)
             else:
-                for f in body.get('features') or [body]:
+                for f in feats:
                     props = f.get('properties') or {}
                     cn, col = _class_from_props(props)
                     _add_geometry(L, f.get('geometry') or f, cn, col, props or None)
+                if L.origin in ('drawn', 'sam', 'drawn+sam'):
+                    L.origin = L.origin if L.origin == origin else 'drawn+sam'
+                elif not L.origin:
+                    L.origin = origin
                 registry.changed(sid, layer_name)
             return JSONResponse({'ok': True}, headers=hdrs('no-cache'))
 
@@ -504,7 +580,67 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
                 raise HTTPException(500, f'{type(ex).__name__}: {ex}') from ex
             return JSONResponse(_jsonable(out), headers=hdrs('no-cache'))
 
+        @r.post('/slides/{sid}/find')
+        async def find_start(sid: str, request: Request):
+            """Find all like the examples, in the background: {mode: objects | segment | areas, examples: {layer,
+            classes, picks}, candidates, training, classes, scope: {kind: view | region | slide, rect, layer},
+            strictness, object_um, detail, name} → the job (poll ``GET /jobs/{id}``)."""
+            findall = _findall()
+            body = await request.json()
+            entry(sid)
+            titles = {'objects': 'Find similar objects', 'segment': 'Segment everything', 'areas': 'Find areas'}
+            job = jobs.submit(
+                'find', lambda job: _jsonable(findall.run(registry, sid, body, job)), slide=sid,
+                title=titles.get(body.get('mode'), 'Find all'),
+            )  # fmt: skip
+            return JSONResponse(job.to_dict(), headers=hdrs('no-cache'))
+
+        @r.post('/slides/{sid}/find/threshold')
+        async def find_threshold(sid: str, request: Request):
+            """Apply another strictness to a finished result: {result, strictness} → {layer, count, of}."""
+            findall = _findall()
+            body = await request.json()
+            try:
+                out = await anyio.to_thread.run_sync(
+                    lambda: findall.rethreshold(registry, body.get('result') or '', float(body.get('strictness', 0.5)))
+                )
+            except ValueError as ex:
+                raise HTTPException(400, str(ex)) from ex
+            return JSONResponse(out, headers=hdrs('no-cache'))
+
+        @r.post('/jobs/{jid}/cancel')
+        def job_cancel(jid: str):
+            job = jobs.get(jid)
+            if job is None:
+                raise HTTPException(404, 'no such job')
+            job.cancel()
+            return JSONResponse(job.to_dict(), headers=hdrs('no-cache'))
+
+    @r.get('/find/capabilities')
+    def find_caps():
+        """What finding can use here: the SAM backend, whether area classification (scikit-learn) is installed."""
+        return JSONResponse({**_findall().capabilities(), 'edit': allow_edit}, headers=hdrs('no-cache'))
+
+    @r.get('/jobs/{jid}')
+    def job_status(jid: str):
+        job = jobs.get(jid)
+        if job is None:
+            raise HTTPException(404, 'no such job (the server restarted?)')
+        return JSONResponse(job.to_dict(), headers=hdrs('no-cache'))
+
+    @r.get('/slides/{sid}/jobs')
+    def slide_jobs(sid: str):
+        return JSONResponse([j.to_dict() for j in jobs.list(sid)], headers=hdrs('no-cache'))
+
     return r
+
+
+def _findall():
+    try:
+        from . import findall
+    except ImportError as ex:
+        raise HTTPException(501, f'finding needs: pip install "wissi-viz[analysis]" ({ex.name})') from ex
+    return findall
 
 
 def _jsonable(o):

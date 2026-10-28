@@ -112,7 +112,10 @@ class Session:
         self._connections: list[RemoteConnection] = []
         self._lock = threading.Lock()
         self._recent_file = user_dir('config') / 'recent.json'
+        self._projects_file = user_dir('config') / 'projects.json'
         self.show: list[str] = []  # slide ids to show in panes on load (a session)
+        #: the user's own groups of slides: [{'name', 'slides': [path, …]}] (paths, so they survive restarts)
+        self.projects: list[dict] = self._load_projects()
 
     # -- permissions
     @property
@@ -194,6 +197,8 @@ class Session:
             layer = cached_object_layer(p, self.cache_dir / 'objects', mpp=mpp, name=p.stem)
         else:
             layer = AnnotationLayer.load(p)
+        if not layer.origin:
+            layer.origin = 'imported'
         name = layer.name or p.stem
         if name in self.registry.layers(slide):
             name = f'{name} ({p.name})'
@@ -227,7 +232,13 @@ class Session:
             except OSError:
                 continue
             if k:
-                entries.append({'name': c.name, 'path': str(c), 'kind': k})
+                e = {'name': c.name, 'path': str(c), 'kind': k}
+                if k != 'folder':
+                    try:
+                        e['size'] = c.stat().st_size
+                    except OSError:
+                        pass
+                entries.append(e)
             if len(entries) >= 2000:
                 break
         if self.roots is None:
@@ -236,7 +247,38 @@ class Session:
             parent = '' if len(self.roots) > 1 else None
         else:
             parent = str(base.parent)
-        return {'dir': str(base), 'parent': parent, 'entries': entries}
+        return {'dir': str(base), 'parent': parent, 'entries': entries, 'places': self.places()}
+
+    def places(self) -> list[dict]:
+        """Shortcuts for the file picker: home and its usual folders, mounted volumes and the folders of recent
+        files (desktop); the allowed folders (server)."""
+        if self.roots is not None:
+            return [{'name': r.name or str(r), 'path': str(r), 'group': 'Folders'} for r in self.roots]
+        home = Path.home()
+        out = [{'name': 'Home', 'path': str(home), 'group': 'Places'}]
+        for n in ('Desktop', 'Documents', 'Downloads', 'Pictures'):
+            if (home / n).is_dir():
+                out.append({'name': n, 'path': str(home / n), 'group': 'Places'})
+        for vol in (Path('/Volumes'), Path('/media') / home.name, Path('/mnt')):
+            try:
+                for v in sorted(vol.iterdir()) if vol.is_dir() else []:
+                    if v.is_dir() and not v.name.startswith('.'):
+                        out.append({'name': v.name, 'path': str(v), 'group': 'Drives'})
+            except OSError:
+                pass
+        if os.name == 'nt':
+            for d in 'CDEFGH':
+                if Path(f'{d}:/').exists():
+                    out.append({'name': f'{d}:', 'path': f'{d}:\\', 'group': 'Drives'})
+        seen = set()
+        for f in self.recent():
+            d = str(Path(f).parent) if not Path(f).is_dir() else f
+            if d not in seen:
+                seen.add(d)
+                out.append({'name': Path(d).name or d, 'path': d, 'group': 'Recent'})
+            if len(seen) >= 6:
+                break
+        return out
 
     # -- tile APIs
     def connect(self, spec: Any, images: Any = None, *, trusted: bool = False, **factory_kwargs: Any) -> dict:
@@ -306,10 +348,17 @@ class Session:
             for lp in e.get('layers', []):
                 try:
                     layer = annio.load(lp)
+                    layer.origin = layer.origin or _origin_from_name(lp)
                     self.registry.add_annotations(sid, layer, name=layer.name)
                 except Exception as ex:  # noqa: BLE001  (reported; the other layers still load)
                     errors.append(f'{Path(lp).name}: {ex}')
         self.show = [ids[k] for k in doc.get('show', []) if k in ids][:32] or list(ids.values())[:32]
+        if doc.get('projects'):  # session projects name slides by their session id: store their paths
+            paths = {k: self._paths.get(v) for k, v in ids.items()}
+            self.add_projects(
+                [{'name': p.get('name'), 'slides': [paths[s] for s in p.get('slides', []) if paths.get(s)]}
+                 for p in doc['projects']]
+            )  # fmt: skip
         for m in errors:
             log(f'wissi-viz: {m}')
         return {'slides': self.slides(), 'errors': errors}
@@ -322,7 +371,44 @@ class Session:
         ]
 
     def state(self) -> dict:
-        return {'slides': self.slides(), 'recent': self.recent(), 'version': __version__, 'show': self.show}
+        return {
+            'slides': self.slides(),
+            'recent': self.recent(),
+            'version': __version__,
+            'show': self.show,
+            'projects': self.projects,
+        }
+
+    # -- projects (the slide list's own groups)
+    def _load_projects(self) -> list[dict]:
+        if not self.remember:
+            return []
+        try:
+            return _clean_projects(json.loads(self._projects_file.read_text(encoding='utf-8')))
+        except (OSError, ValueError):
+            return []
+
+    def set_projects(self, projects: Any) -> dict:
+        """Replace the projects: [{'name': str, 'slides': [path, …]}] (names unique, order kept)."""
+        self.projects = _clean_projects(projects)
+        if self.remember:
+            with self._lock:
+                try:
+                    self._projects_file.write_text(json.dumps(self.projects, ensure_ascii=False), encoding='utf-8')
+                except OSError:
+                    pass
+        return {'projects': self.projects}
+
+    def add_projects(self, projects: Any) -> None:
+        """Merge projects (a session file's): new names are appended, existing ones gain the slides."""
+        cur = {p['name']: p for p in self.projects}
+        for p in _clean_projects(projects):
+            if p['name'] in cur:
+                cur[p['name']]['slides'] += [s for s in p['slides'] if s not in cur[p['name']]['slides']]
+            else:
+                self.projects.append(p)
+                cur[p['name']] = p
+        self.set_projects(self.projects)
 
     def recent(self) -> list[str]:
         if not self.remember:
@@ -459,6 +545,13 @@ def create_session_app(
         body = await request.json()
         return await run(lambda: session.connect(body.get('spec'), body.get('images')))
 
+    @app.post('/app/projects')
+    async def app_projects(request: Request):
+        """Replace the slide list's projects: {projects: [{name, slides: [path, …]}]}."""
+        check(request, needs_key=mode == 'server')
+        body = await request.json()
+        return await run(lambda: session.set_projects(body.get('projects')))
+
     @app.post('/app/close')
     async def app_close(request: Request):
         check(request)
@@ -467,6 +560,35 @@ def create_session_app(
         return session.close((await request.json()).get('slide'))
 
     return app
+
+
+#: sample-pack layer files written before layers recorded their origin: <id>.<what>.parquet
+_PACK_ORIGINS = {
+    'cells': 'detected',
+    'cells-10x': 'detected',
+    'tissue': 'detected',
+    'density': 'analysis',
+    'hotspots': 'analysis',
+}
+
+
+def _clean_projects(projects: Any) -> list[dict]:
+    out, seen = [], set()
+    for p in projects if isinstance(projects, list) else []:
+        if not isinstance(p, dict):
+            continue
+        name = str(p.get('name') or '').strip()[:120]
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        slides = [str(s) for s in p.get('slides') or [] if isinstance(s, str)]
+        out.append({'name': name, 'slides': list(dict.fromkeys(slides))[:5000]})
+    return out[:200]
+
+
+def _origin_from_name(path: str | os.PathLike) -> str:
+    parts = Path(path).name.split('.')
+    return _PACK_ORIGINS.get(parts[-2] if len(parts) >= 3 else '', 'imported')
 
 
 def _is_geoparquet(p: Path) -> bool:

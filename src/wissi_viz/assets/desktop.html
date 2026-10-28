@@ -74,7 +74,6 @@
   #side { width: 232px; border-right: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
   #side.hidden { display: none; }
   #side .lbl { margin: 12px 12px 6px; }
-  #slides { list-style: none; margin: 0; padding: 0 8px 8px; overflow: auto; flex: 1; display: flex; flex-direction: column; gap: 4px; }
   #slides li { display: flex; align-items: center; gap: 9px; padding: 5px; border-radius: 10px; cursor: pointer; border: 1px solid transparent;
                transition: background var(--t-hover) ease-out, border-color var(--t-hover) ease-out; }
   #slides li:hover { background: var(--raise); }
@@ -123,7 +122,7 @@
   #keyflash .kc { font-size: 12px; color: #fff; background: var(--accent-deep); border-color: var(--accent); }
 
   #empty { position: absolute; inset: 0; display: grid; place-items: center; background: var(--bg); z-index: 4; }
-  #empty .card { text-align: center; max-width: 540px; padding: 24px; }
+  #empty .card { text-align: center; max-width: 640px; width: 100%; padding: 24px; }
   #empty img { width: 104px; height: 104px; }
   #empty h1 { font-size: 20px; font-weight: 600; margin: 14px 0 6px; }
   #empty p { color: var(--dim); margin: 0 0 18px; line-height: 1.5; }
@@ -134,17 +133,9 @@
   #recent a { display: block; color: var(--text); text-decoration: none; padding: 5px 8px; border-radius: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #recent a:hover { background: var(--raise); }
   #recent a span { color: var(--dim); margin-left: 6px; font-size: 12px; }
-  #pathbox { display: none; margin-top: 16px; text-align: left; }
-  #pathbox textarea { width: 100%; height: 70px; resize: vertical; }
+  #pathbox { display: none; margin-top: 10px; text-align: left; }
+  #pathbox textarea { width: 100%; height: 54px; resize: vertical; }
   #pathbox .row { justify-content: flex-end; margin-top: 6px; }
-  #browser { display: none; text-align: left; border: 1px solid var(--line); border-radius: 8px; max-height: 280px; overflow: auto; margin-bottom: 8px; }
-  #browser .cwd { position: sticky; top: 0; background: var(--panel); padding: 5px 8px; color: var(--dim); font-size: 12px; border-bottom: 1px solid var(--line);
-                  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #browser .none { padding: 8px; color: var(--dim); font-size: 12px; }
-  #browser a { display: flex; gap: 8px; padding: 4px 8px; color: var(--text); text-decoration: none; }
-  #browser a:hover { background: var(--raise); }
-  #browser a .k { color: var(--dim); font-size: 11px; width: 78px; flex: none; }
-  #browser a .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   body.drag main::after { content: "Drop slides, folders, cell tables or annotation files"; position: absolute; inset: 10px; z-index: 9;
                           border: 2px dashed var(--accent); border-radius: 12px; display: grid; place-items: center;
                           background: rgba(11,13,16,.82); font-size: 16px; color: var(--accent); pointer-events: none; }
@@ -153,12 +144,16 @@
   #insp { width: 384px; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
   #insp.hidden { display: none; }
   #tabs { display: flex; gap: 4px; padding: 10px; border-bottom: 1px solid var(--line); }
-  #tabs button { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; border-radius: 8px; padding: 7px 4px;
+  #tabs { gap: 2px; padding: 8px; }
+  #tabs button { flex: 1; display: flex; align-items: center; justify-content: center; gap: 4px; border-radius: 8px; padding: 7px 2px; font-size: 12px;
                  font-weight: 600; background: transparent; border: 1px solid transparent; color: var(--dim);
                  transition: background var(--t-hover) ease-out, color var(--t-hover) ease-out, box-shadow var(--t-hover) ease-out; }
   #tabs button:hover { background: var(--raise); color: var(--text); }
   #tabs button[aria-selected=true] { background: var(--raise2); border-color: var(--line3); color: #fff; box-shadow: inset 0 -2px 0 var(--accent); }
   #tabs button[aria-selected=true][data-tab=analyze] { box-shadow: inset 0 -2px 0 var(--violet); }
+  #tabs button[aria-selected=true][data-tab=draw] { box-shadow: inset 0 -2px 0 var(--amber); }
+  #tabs .kc { display: none; }
+  @media (min-width: 1500px) { #insp { width: 420px; } #tabs .kc { display: inline; } }
   .pane-body { flex: 1; overflow: auto; padding: 12px; display: none; flex-direction: column; gap: 10px; }
   .pane-body.on { display: flex; }
   .panel-note { color: var(--dim); font-size: 12px; line-height: 1.45; }
@@ -265,6 +260,126 @@
            font: 11px var(--mono); color: var(--dim); min-height: 22px; }
   footer #log { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   footer .err { color: var(--danger); }
+  /* ---- slide groups */
+  .side-head { display: flex; align-items: center; gap: 6px; margin: 10px 8px 6px 12px; }
+  .side-head .lbl { margin: 0; }
+  #s-filter-box { margin: 0 8px 6px; padding: 4px 8px; }
+  #slides { list-style: none; margin: 0; padding: 0 8px 8px; overflow: auto; flex: 1; display: flex; flex-direction: column; gap: 6px; }
+  #slides ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+  .sgroup { border-radius: 10px; }
+  .sgroup.drop { outline: 2px dashed var(--accent); outline-offset: 2px; }
+  .ghead { display: flex; align-items: center; gap: 6px; padding: 3px 4px; color: var(--dim); font-size: 12px; user-select: none; }
+  .ghead .tw { width: 18px; height: 18px; border: 0; background: none; color: var(--dim); padding: 0; display: inline-flex; align-items: center; justify-content: center;
+               transition: transform var(--t-hover) ease-out; }
+  .sgroup.closed .ghead .tw { transform: rotate(-90deg); }
+  .sgroup.closed ul { display: none; }
+  .ghead .gn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--soft); cursor: pointer; }
+  .ghead .gk { font-size: 10px; letter-spacing: .6px; text-transform: uppercase; color: var(--faint); }
+  .ghead button.more { visibility: hidden; }
+  .ghead:hover button.more { visibility: visible; }
+  #slides li .more { padding: 0 4px; }
+
+  /* ---- layer view modes and source badges */
+  .lmodes { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .chips { display: flex; gap: 4px; flex-wrap: wrap; }
+  .fchip { font-size: 11px; border-radius: 999px; padding: 2px 9px; background: var(--raise); border: 1px solid var(--line2); color: var(--dim); }
+  .fchip[aria-pressed=true] { background: var(--accent-deep); border-color: var(--accent); color: #fff; }
+  .fchip .n { font: 10px var(--mono); margin-left: 4px; opacity: .8; }
+  .src { font-size: 10px; font-weight: 600; letter-spacing: .5px; text-transform: uppercase; border-radius: 6px; padding: 2px 6px; white-space: nowrap; }
+  .src.drawn, .src.sam, .src.drawn\+sam { color: #9be3ff; background: #12324a; }
+  .src.found { color: #ffd59a; background: var(--amber-deep); }
+  .src.detected { color: #a8f0c6; background: #123a2a; }
+  .src.analysis { color: var(--violet-text); background: var(--violet-deep); }
+  .src.imported { color: var(--soft); background: var(--raise2); }
+  .lgroup-h { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+  .lgroup-h .lbl { font-size: 10px; }
+  .lflat { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 8px; border: 1px solid transparent; }
+  .lflat:hover { background: var(--raise); border-color: var(--line2); }
+  .lflat .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lflat .eye { width: 24px; height: 24px; }
+
+  /* ---- image tab: histograms */
+  .hist { border: 1px solid var(--line); border-radius: 12px; background: var(--well); padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+  .hist.off { opacity: .6; }
+  .hist .hh { display: flex; align-items: center; gap: 8px; }
+  .hist .hh b { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hist canvas { width: 100%; height: 64px; display: block; border-radius: 6px; background: #0b0d10; cursor: ew-resize; touch-action: none; }
+  .hist .nums { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+  .hist .nums label { display: flex; flex-direction: column; gap: 2px; font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .5px; }
+  .hist .nums input { width: 100%; font: 12px var(--mono); padding: 3px 6px; }
+  .img-tools { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+
+  /* ---- annotate: examples → find all */
+  .step { border: 1px solid var(--line); border-radius: 12px; background: var(--well); padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+  .step > .sh { display: flex; align-items: center; gap: 8px; }
+  .step > .sh .num { width: 20px; height: 20px; border-radius: 50%; background: var(--accent-deep); border: 1px solid var(--accent); color: #fff; font: 11px var(--mono);
+                     display: inline-flex; align-items: center; justify-content: center; flex: none; }
+  .step > .sh b { font-weight: 600; }
+  .step.find > .sh .num { background: var(--amber-deep); border-color: var(--amber); }
+  .ex-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .exc { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; border-radius: 999px; padding: 2px 4px 2px 8px; background: var(--raise); border: 1px solid var(--line2); }
+  .exc.neg { border-color: #6b2b2b; color: #ffb3b3; }
+  .exc button { border: 0; background: none; color: var(--dim); padding: 0 4px; }
+  .modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .mode { text-align: left; border-radius: 10px; padding: 7px 8px; border: 1px solid var(--line); background: var(--raise); display: flex; flex-direction: column; gap: 2px; }
+  .mode b { font-weight: 600; font-size: 12px; }
+  .mode span { font-size: 10.5px; color: var(--dim); line-height: 1.3; }
+  .mode[aria-pressed=true] { border-color: var(--amber); background: var(--amber-deep); box-shadow: 0 0 14px rgba(255,180,84,.2); }
+  .mode:disabled { opacity: .45; cursor: default; }
+  .run.find { background-color: var(--amber-deep); border-color: var(--amber); box-shadow: 0 0 18px rgba(255,180,84,.25); }
+  .prog { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+  .prog > span { display: block; height: 100%; background: var(--amber); width: 0; transition: width 200ms ease-out; }
+  .slot.pick.on { border-color: var(--amber); background: var(--amber-deep); box-shadow: 0 0 14px rgba(255,180,84,.4); }
+  body.picking wissi-viz { cursor: crosshair; }
+
+  /* ---- file picker */
+  #picker { display: none; margin-top: 16px; text-align: left; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); overflow: hidden; }
+  #picker.on { display: grid; grid-template-columns: 150px 1fr; grid-template-rows: auto 1fr auto; height: 360px; }
+  #pk-places { grid-row: 1 / 4; border-right: 1px solid var(--line); padding: 8px 6px; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
+  #pk-places .lbl { margin: 6px 6px 2px; font-size: 10px; }
+  #pk-places button { text-align: left; border: 0; background: none; padding: 4px 8px; border-radius: 6px; color: var(--soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #pk-places button:hover { background: var(--raise); }
+  #pk-places button.on { background: var(--accent-deep); color: #fff; }
+  #pk-bar { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--line); min-width: 0; }
+  #pk-crumbs { flex: 1; min-width: 0; display: flex; gap: 2px; overflow: hidden; white-space: nowrap; font-size: 12px; }
+  #pk-crumbs button { border: 0; background: none; color: var(--dim); padding: 2px 4px; border-radius: 4px; }
+  #pk-crumbs button:hover { background: var(--raise); color: var(--text); }
+  #pk-crumbs button:last-child { color: var(--text); font-weight: 600; }
+  #pk-filter { width: 170px; font-size: 12px; padding: 3px 7px; }
+  #browser { overflow: auto; min-height: 0; }
+  #browser a { display: grid; grid-template-columns: 16px 44px 1fr auto; gap: 6px; align-items: center; padding: 4px 10px; color: var(--text); text-decoration: none; }
+  #browser a:hover { background: var(--raise); }
+  #browser a.sel { background: var(--accent-deep); }
+  #browser a .k { color: var(--dim); font-size: 10px; text-transform: uppercase; }
+  #browser a .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #browser a .z { color: var(--faint); font: 11px var(--mono); }
+  #browser a input { margin: 0; }
+  #browser .none { padding: 12px; color: var(--dim); font-size: 12px; }
+  #pk-foot { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+  #pk-foot .grow { font-size: 12px; color: var(--dim); min-width: 160px; }
+  #pk-foot .btn { white-space: nowrap; }
+
+  /* ---- view tools on the slide */
+  #vtools { right: 10px; top: 50%; transform: translateY(-50%); padding: 5px; display: flex; flex-direction: column; gap: 3px; align-items: stretch; }
+  #vtools button { width: 38px; height: 30px; border-radius: 8px; border: 1px solid transparent; background: transparent; color: var(--soft);
+                   display: flex; align-items: center; justify-content: center; padding: 0; font: 11px var(--mono);
+                   transition: background var(--t-hover) ease-out, border-color var(--t-hover) ease-out, transform 80ms ease-out; }
+  #vtools button:hover { background: var(--raise2); border-color: var(--line2); }
+  #vtools button:active { transform: scale(.95); }
+  #vtools button.on, #vtools button[aria-pressed=true] { background: var(--accent-deep); border-color: var(--accent); color: #fff; }
+  #vtools hr { border: 0; height: 1px; background: var(--line); margin: 2px 4px; }
+  #vtools .vmag { font: 10px var(--mono); color: var(--accent); text-align: center; padding: 2px 0 3px; }
+  #minimap { left: 10px; bottom: 44px; padding: 4px; line-height: 0; cursor: crosshair; }
+  #minimap img { max-width: 220px; max-height: 170px; border-radius: 6px; display: block; }
+  #minimap canvas { position: absolute; left: 4px; top: 4px; pointer-events: none; }
+  #empty.picking { background: rgba(11,13,16,.9); }
+  #empty.picking .card { max-width: 900px; }
+  #picker.on { height: min(460px, calc(100vh - 260px)); }
+  #empty.picking img, #empty.picking h1, #empty.picking .card > p, #empty.picking .actions, #empty.picking #recent { display: none; }
+  /* ---- performance HUD */
+  #perf { position: absolute; left: 10px; top: 10px; z-index: 5; display: none; padding: 4px 9px; border-radius: 8px; font: 11px var(--mono); pointer-events: none; }
+  #fps { cursor: pointer; }
+  #fps.hot { color: var(--good); }
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: opacity 120ms !important; } }
   @media (max-width: 900px) { #side { width: 180px; } #insp { width: 320px; } #crumb { display: none; } }
 </style>
@@ -295,8 +410,11 @@
 </header>
 
 <aside id="side">
-  <h2 class="lbl">Slides</h2>
-  <ul id="slides"></ul>
+  <div class="side-head"><h2 class="lbl">Slides</h2><span class="grow"></span><span class="dim mono" id="s-count" style="font-size: 11px"></span>
+    <button id="s-newproj" class="btn icon ghost" title="New project: your own group of slides (drag slides onto it)" aria-label="New project">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M3 7h6l2 2h10v10H3zM15 14h6M18 11v6"></path></svg></button></div>
+  <label class="search" id="s-filter-box"><input id="s-filter" placeholder="Filter slides" aria-label="Filter slides"></label>
+  <div id="slides" role="list"></div>
   <div class="hint">Click a slide to show it in the active pane; double-click adds a pane. Drop files anywhere to open them.</div>
 </aside>
 
@@ -315,6 +433,26 @@
     <button data-r="hide" style="left: -6px; top: 58px">Hide layer <span class="kc">H</span></button>
   </div>
   <div id="keyflash" class="hud"></div>
+  <div id="perf" class="hud" aria-live="off"></div>
+  <div id="vtools" class="hud" role="toolbar" aria-label="View tools" aria-orientation="vertical">
+    <span id="v-mag" class="vmag" title="Current magnification">–</span>
+    <button data-v="in" title="Zoom in (+)" aria-label="Zoom in"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button>
+    <button data-v="out" title="Zoom out (−)" aria-label="Zoom out"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"></path></svg></button>
+    <button data-v="fit" title="Fit the slide (F)" aria-label="Fit"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"></path></svg></button>
+    <button data-v="one" title="1:1 — one image pixel per screen pixel" aria-label="Actual pixels" class="txt">1:1</button>
+    <hr>
+    <button data-v="mag" data-m="2.5" class="txt" title="2.5× objective">2.5×</button>
+    <button data-v="mag" data-m="5" class="txt" title="5× objective">5×</button>
+    <button data-v="mag" data-m="10" class="txt" title="10× objective">10×</button>
+    <button data-v="mag" data-m="20" class="txt" title="20× objective">20×</button>
+    <button data-v="mag" data-m="40" class="txt" title="40× objective">40×</button>
+    <hr>
+    <button data-v="map" title="Overview map (O)" aria-label="Overview map" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2z"></path><path d="M9 4v14M15 6v14"></path></svg></button>
+    <button data-v="scale" title="Scale bar" aria-label="Scale bar" aria-pressed="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M3 16h18M3 12v4M21 12v4M12 14v2M7.5 14v2M16.5 14v2"></path></svg></button>
+    <button data-v="snap" title="Save a picture of this pane (PNG, with the scale bar)" aria-label="Snapshot"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"></path><circle cx="12" cy="13" r="3.5"></circle></svg></button>
+    <button data-v="full" title="Full screen" aria-label="Full screen"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"></path></svg></button>
+  </div>
+  <div id="minimap" class="hud" hidden><img alt=""><canvas></canvas></div>
   <div id="empty">
     <div class="card">
       <img src="__BASE__/app/icon.svg" alt="">
@@ -326,8 +464,17 @@
         <button class="btn" data-act="folder">Open folder…</button>
         <button class="btn" data-act="connect" hidden>Connect to a tile API…</button>
       </div>
+      <div id="picker" role="dialog" aria-label="Pick slides or a folder">
+        <nav id="pk-places" aria-label="Places"></nav>
+        <div id="pk-bar"><button id="pk-up" class="btn icon ghost" title="Up one folder" aria-label="Up one folder">↑</button><div id="pk-crumbs"></div>
+          <input id="pk-filter" placeholder="Filter, or type a path ↵" aria-label="Filter this folder, or type a path and press Enter"></div>
+        <div id="browser" role="list"></div>
+        <div id="pk-foot"><span class="grow" id="pk-info"></span>
+          <button id="pk-close" class="btn">Cancel</button>
+          <button id="pk-folder" class="btn" title="Open every slide in the folder shown">Open this folder</button>
+          <button id="pk-open" class="btn primary" disabled>Open selected</button></div>
+      </div>
       <div id="pathbox">
-        <div id="browser"></div>
         <textarea id="paths" placeholder="Paste file or folder paths, one per line"></textarea>
         <div class="row"><button id="b-paths" class="btn primary">Open</button></div>
       </div>
@@ -338,22 +485,23 @@
 
 <aside id="insp" aria-label="Inspector">
   <div id="tabs" role="tablist">
-    <button role="tab" id="t-layers" data-tab="layers" aria-selected="true">Layers <span class="kc">L</span></button>
-    <button role="tab" id="t-analyze" data-tab="analyze" aria-selected="false">Analyze <span class="kc">A</span></button>
-    <button role="tab" id="t-measure" data-tab="measure" aria-selected="false">Measure <span class="kc">M</span></button>
-    <button role="tab" id="t-draw" data-tab="draw" aria-selected="false">Draw <span class="kc">D</span></button>
+    <button role="tab" id="t-layers" data-tab="layers" aria-selected="true" title="Layers (L)">Layers <span class="kc">L</span></button>
+    <button role="tab" id="t-image" data-tab="image" aria-selected="false" title="Image display: histograms, channels, contrast (I)">Image <span class="kc">I</span></button>
+    <button role="tab" id="t-draw" data-tab="draw" aria-selected="false" title="Annotate and find all like them (D)">Annotate <span class="kc">D</span></button>
+    <button role="tab" id="t-analyze" data-tab="analyze" aria-selected="false" title="Spatial analyses (A)">Analyze <span class="kc">A</span></button>
+    <button role="tab" id="t-measure" data-tab="measure" aria-selected="false" title="Summaries and region measurements (M)">Measure <span class="kc">M</span></button>
   </div>
 
   <section id="p-layers" class="pane-body on" role="tabpanel" aria-labelledby="t-layers">
-    <details class="disp" id="disp">
-      <summary><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path></svg>
-        <b style="font-weight: 600">Image</b><span class="grow"></span><span class="dim" id="disp-sum" style="font-size: 12px"></span></summary>
-      <div class="body" id="disp-body"></div>
-    </details>
     <label class="search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-4-4"></path></svg>
       <input id="l-filter" placeholder="Filter layers and classes" aria-label="Filter layers and classes"><span class="kc">/</span></label>
     <div class="row"><span class="lbl" id="l-title">Layers</span><span class="grow"></span>
       <span class="seg" id="l-scope" role="group" aria-label="Apply to"><button aria-pressed="true" data-scope="pane">this pane</button><button aria-pressed="false" data-scope="all">all panes</button></span></div>
+    <div class="lmodes"><span class="seg" id="l-mode" role="group" aria-label="Layer list view">
+        <button aria-pressed="true" data-mode="nested" title="Each layer with its classes">Nested</button>
+        <button aria-pressed="false" data-mode="source" title="Grouped by where layers came from">By source</button>
+        <button aria-pressed="false" data-mode="flat" title="One compact line per layer">Flat</button></span></div>
+    <div class="chips" id="l-chips" role="group" aria-label="Show layers from"></div>
     <div id="l-list" style="display: flex; flex-direction: column; gap: 8px"></div>
     <div id="l-empty" class="panel-note" hidden>No layers on this slide yet. Add a cell table or annotation file, draw, or run an analysis.</div>
     <div class="row"><button class="btn grow" id="l-add">Add cells / annotations…</button>
@@ -384,17 +532,59 @@
       neighbour distances, contacts and clustering — one column per region.</div>
   </section>
 
+  <section id="p-image" class="pane-body" role="tabpanel" aria-labelledby="t-image">
+    <div class="row"><span class="lbl" id="i-title">Image</span><span class="grow"></span><span class="dim" id="disp-sum" style="font-size: 12px"></span></div>
+    <div class="f2">Histogram of <select id="i-scope" aria-label="Histogram of"><option value="slide">the whole image</option><option value="view">this view</option></select></div>
+    <div class="img-tools">
+      <button id="i-auto" class="btn" title="Contrast every channel from its histogram (0.1–99.9 %)">Auto all</button>
+      <button id="i-link" class="btn" aria-pressed="false" title="Linked: one minimum / maximum for every channel">Link channels</button>
+      <button id="i-reset" class="btn ghost" title="Back to the slide's own settings">Reset</button>
+      <span class="grow"></span>
+      <label class="dim" style="font-size: 12px; display: flex; gap: 5px; align-items: center"><input type="checkbox" id="i-log" checked> log</label>
+    </div>
+    <div id="disp-body" style="display: flex; flex-direction: column; gap: 8px"></div>
+    <div id="i-scenes" class="panel-note"></div>
+    <span class="lbl" style="margin-top: 4px">Overlays</span>
+    <div class="row" style="flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--dim)">
+      <label><input type="checkbox" id="i-scalebar" checked> scale bar</label>
+      <label><input type="checkbox" id="i-fps"> FPS on the slide</label>
+    </div>
+  </section>
+
   <section id="p-draw" class="pane-body" role="tabpanel" aria-labelledby="t-draw">
-    <div class="f2">Save to layer <input type="text" id="a-layer" value="Annotations" list="a-layers"></div>
-    <div class="f2">Class <span class="row"><input type="text" id="a-class" value="Tumor" list="a-classes" style="flex: 1">
-      <input type="color" id="a-color" value="#ff4d6d" title="Class colour"></span></div>
-    <datalist id="a-layers"></datalist><datalist id="a-classes"></datalist>
-    <div class="row"><button id="a-sam" class="btn" title="SAM: click = include, shift-click = exclude, drag = box (8)">SAM tool <span class="kc">8</span></button>
-      <button id="a-accept" class="btn primary" title="Save the SAM mask (Enter / double-click)">Accept <span class="kc">↵</span></button>
-      <button id="a-discard" class="btn" title="Discard the SAM mask (Esc)">Discard <span class="kc">Esc</span></button></div>
-    <div class="panel-note" id="a-sam-status">SAM: checking…</div>
-    <div class="panel-note">Drawing tools (2–7 in the toolbar) and SAM save to this layer and class. SAM: click an object
-      (shift-click to exclude a part, drag a box), check the cyan outline, then Accept.</div>
+    <div class="step" id="st-ex">
+      <div class="sh"><span class="num">1</span><b>Mark examples</b><span class="grow"></span><span class="dim mono" id="ex-count" style="font-size: 11px"></span></div>
+      <div class="f2">Save to layer <input type="text" id="a-layer" value="Annotations" list="a-layers"></div>
+      <div class="f2">Class <span class="row"><input type="text" id="a-class" value="Tumor" list="a-classes" style="flex: 1">
+        <input type="color" id="a-color" value="#ff4d6d" title="Class colour"></span></div>
+      <datalist id="a-layers"></datalist><datalist id="a-classes"></datalist>
+      <div class="row" style="flex-wrap: wrap">
+        <button id="a-sam" class="btn" title="SAM: click an object = include, shift-click = exclude, drag = box (8)">SAM <span class="kc">8</span></button>
+        <button id="a-pick" class="btn" title="Pick objects of a layer as examples: click = like this, shift-click = not like this (P)">Pick objects <span class="kc">P</span></button>
+        <button id="a-accept" class="btn primary" title="Save the SAM mask (Enter / double-click)">Accept <span class="kc">↵</span></button>
+        <button id="a-discard" class="btn" title="Discard the SAM mask (Esc)">Discard <span class="kc">Esc</span></button></div>
+      <div class="ex-chips" id="ex-picks"></div>
+      <div class="panel-note" id="a-sam-status">SAM: checking…</div>
+      <div class="panel-note">Outline a few examples with SAM (click an object, check the cyan outline, Accept) or the drawing
+        tools (2–7), or pick existing objects. They are saved to the layer and class above.</div>
+    </div>
+    <div class="step find" id="st-find">
+      <div class="sh"><span class="num">2</span><b>Find all like them</b></div>
+      <div class="modes" id="f-modes" role="group" aria-label="How to find">
+        <button class="mode" data-mode="objects" aria-pressed="true" title="Score every object of a layer (e.g. detected cells) against the examples"><b>Similar objects</b><span>in a layer of detected cells</span></button>
+        <button class="mode" data-mode="segment" aria-pressed="false" title="SAM (or the classic fill) outlines every object, keeping those like the examples"><b>Segment everything</b><span>outline every object, keep similar</span></button>
+        <button class="mode" data-mode="areas" aria-pressed="false" title="Train a pixel classifier on shapes of two or more classes and map those areas"><b>Areas</b><span>tumour, stroma… from brushed shapes</span></button>
+      </div>
+      <div class="f2" id="f-cand-row">Search <select id="f-cand" aria-label="Objects to search"></select></div>
+      <div class="f2" id="f-size-row" hidden>Object size <span class="row"><input type="range" id="f-size" min="3" max="60" step="1" value="10" aria-label="Object size"><output id="f-size-o" class="mono" style="width: 52px; text-align: right">10 µm</output></span></div>
+      <div class="f2" id="f-detail-row" hidden>Detail <select id="f-detail" aria-label="Detail"><option value="coarse">coarse · 8 µm/px</option><option value="medium" selected>medium · 4 µm/px</option><option value="fine">fine · 2 µm/px</option></select></div>
+      <div class="f2">Where <select id="f-where" aria-label="Where"><option value="view">this view</option><option value="slide">the whole slide</option></select></div>
+      <div class="f2" id="f-strict-row">Strictness <span class="row"><input type="range" id="f-strict" min="0" max="1" step="0.05" value="0.5" aria-label="Strictness"><output id="f-strict-o" class="mono" style="width: 52px; text-align: right">0.50</output></span></div>
+      <div class="panel-note" id="f-hint"></div>
+      <button class="run find" id="f-run">Find all</button>
+      <div id="f-job" hidden><div class="row"><span class="grow dim" id="f-msg" style="font-size: 12px"></span><button id="f-cancel" class="btn">Cancel</button></div><div class="prog"><span id="f-bar"></span></div></div>
+      <div id="f-results" style="display: flex; flex-direction: column; gap: 8px"></div>
+    </div>
   </section>
 </aside>
 
@@ -422,7 +612,8 @@
   <h2>Keyboard</h2>
   <div class="keys">
     <span>Tools: pan, point, rect, ellipse, polygon, freehand, ruler, SAM <span class="mono dim">1 – 8</span></span>
-    <span>Layers / Analyze / Measure / Draw <span class="mono dim">L A M D</span></span>
+    <span>Layers / Image / Annotate / Analyze / Measure <span class="mono dim">L I D A M</span></span>
+    <span>Pick objects as examples <span class="mono dim">P · shift = not like</span></span>
     <span>Solo the hovered layer <span class="mono dim">S</span></span>
     <span>Hide / show the hovered layer <span class="mono dim">H</span></span>
     <span>Filter layers <span class="mono dim">/</span></span>
@@ -437,7 +628,7 @@
   <form method="dialog" class="row" style="justify-content: flex-end"><button class="btn">Close</button></form>
 </dialog>
 
-<footer><span id="log"></span><span>v__VERSION__</span></footer>
+<footer><span id="log"></span><span id="fps" title="Frames per second while the slide is moving (click: show on the slide)">– fps</span><span>v__VERSION__</span></footer>
 <script>window.WISSI_APP = { api: '__API__', base: '__BASE__', token: '__TOKEN__', mode: '__MODE__', caps: __CAPS__ };</script>
 <script type="module" src="__API__/static/app.js"></script>
 </body>

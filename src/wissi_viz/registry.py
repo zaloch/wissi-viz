@@ -538,11 +538,16 @@ class SlideRegistry:
         }
 
     def _channel_windows(self, sid: str, e: SlideEntry, pyr: PyramidSlide) -> list[tuple[float, float]]:
-        """Auto-contrast from the coarsest pyramid level, fetched *through the tile cache* so the
-        same read also serves the first tiles the browser asks for (and is persisted on disk)."""
+        """Auto-contrast from the finest pyramid level of at most ~4 Mpx (the coarsest levels average bright
+        structures away, which sets the maximum too low and saturates the image), fetched *through the tile cache*
+        so the same read also serves the first tiles the browser asks for (and is persisted on disk)."""
 
         info = pyr.info
         L = len(info.levels) - 1
+        for i, lv_ in enumerate(info.levels):
+            if lv_.width * lv_.height <= 4_000_000:
+                L = i
+                break
         lv, ts = info.levels[L], info.tile_size
         nx, ny = math.ceil(lv.width / ts), math.ceil(lv.height / ts)
         dt = '<u2' if info.dtype == 'uint16' else 'u1'
@@ -555,7 +560,7 @@ class SlideRegistry:
             vals = np.concatenate([np.frombuffer(zlib.decompress(f.result()[0]), dt) for f in fs]).astype(np.float32)
             nz = vals[vals > 0]
             vals = nz if nz.size > 100 else vals
-            lo, hi = np.percentile(vals, [0.5, 99.8]) if vals.size else (0.0, 1.0)
+            lo, hi = np.percentile(vals, [0.5, 99.9]) if vals.size else (0.0, 1.0)
             out.append((float(lo), float(max(hi, lo + 1))))
         return out
 

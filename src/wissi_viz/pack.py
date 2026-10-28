@@ -357,6 +357,7 @@ def analyze(sel: list[dict], d: Path, log=print) -> None:
         tis_p = ld / f'{x["id"]}.tissue.parquet'
         if not tis_p.exists():
             _, tis_layer = spatial.tissue_mask(src)
+            tis_layer.origin = 'detected'
             annio.export(tis_layer, tis_p, slide=Path(_slide(x, d)).name)
         tissue = annio.load(tis_p)
         cp = _cells(x, d)
@@ -365,8 +366,12 @@ def analyze(sel: list[dict], d: Path, log=print) -> None:
         if objs is not None and len(objs) and not (ld / f'{x["id"]}.density.parquet').exists():
             cls = None
             g = spatial.density_grid(objs, cls, cell_um=100, hotspots=True)
-            annio.export(g.layer(name='Cell density'), ld / f'{x["id"]}.density.parquet')
-            annio.export(g.hotspot_layer(name='Hotspots'), ld / f'{x["id"]}.hotspots.parquet')
+            for gl, suffix in (
+                (g.layer(name='Cell density'), 'density'),
+                (g.hotspot_layer(name='Hotspots'), 'hotspots'),
+            ):
+                gl.origin = 'analysis'
+                annio.export(gl, ld / f'{x["id"]}.{suffix}.parquet')
         tables = [region_metrics(tissue, source=src, objects=objs, mpp=mpp)]
         exp = ld / f'{x["id"]}.expert.parquet'
         if exp.exists():
@@ -399,14 +404,29 @@ def session(sel: list[dict], d: Path) -> Path:
         entries.append(
             {'id': x['id'], 'title': x['title'], 'slide': str(_slide(x, d)), 'layers': layers, 'licence': x['licence']}
         )
+    groups: dict[str, list[str]] = {}
+    for x in sel:  # the slide list's projects: one per collection
+        groups.setdefault(_collection(x), []).append(x['id'])
     p = d / f'session-{len(sel)}.json'
-    p.write_text(
-        json.dumps(
-            {'name': 'wissi-viz sample pack', 'slides': entries, 'show': [e['id'] for e in entries][:32]}, indent=1
-        ),
-        encoding='utf-8',
-    )
+    doc = {
+        'name': 'wissi-viz sample pack',
+        'slides': entries,
+        'show': [e['id'] for e in entries][:32],
+        'projects': [{'name': f'Sample pack · {k}', 'slides': v} for k, v in groups.items()],
+    }
+    p.write_text(json.dumps(doc, indent=1), encoding='utf-8')
     return p
+
+
+def _collection(x: dict) -> str:
+    src = (x.get('source') or '').lower()
+    if 'xenium' in src or x.get('kind') == 'if':
+        return 'Multiplex IF (Xenium)'
+    if 'camelyon' in src or 'camelyon' in x.get('id', ''):
+        return 'Lymph nodes (CAMELYON16)'
+    if 'tcga' in src or 'gdc' in src:
+        return 'Tumour types (TCGA)'
+    return 'H&E (OpenSlide)'
 
 
 # ------------------------------------------------------------------------------------------------ entry points

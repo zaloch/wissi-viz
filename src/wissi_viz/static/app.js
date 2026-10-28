@@ -122,6 +122,7 @@ const quiet = (p) => p.catch((e) => ({ errors: [e.message] }));
 const call = async (name, ...args) => {
   if (name === 'connect') return quiet(http(`${BASE}/app/connect`, { spec: args[0], images: args[1] }));
   if (name === 'browse') return quiet(http(`${BASE}/app/browse` + (args[0] ? `?dir=${enc(args[0])}` : '')));
+  if (name === 'projects') return TOKEN ? quiet(http(`${BASE}/app/projects`, { projects: args[0] })) : { projects: args[0] };
   if (await nativeReady && native()) return native()[name](...args);
   if (name === 'open_paths') return quiet(http(`${BASE}/app/open`, { paths: args[0], slide: args[1] }));
   if (name === 'close_slide') return quiet(http(`${BASE}/app/close`, { slide: args[0] }));
@@ -161,6 +162,9 @@ function apply() {
   panes = panes.filter((id) => slides.some((x) => x.id === id));
   if (!panes.length && slides.length) panes = [slides[0].id];
   $('empty').style.display = panes.length ? 'none' : '';
+  $('vtools').hidden = !panes.length;
+  if (!panes.length) $('minimap').hidden = true;
+  else if (mapOn) $('minimap').hidden = false;
   $('b-layer').disabled = !panes.length;
   $('n').value = Math.max(1, panes.length);
   active = Math.min(active, Math.max(0, panes.length - 1));
@@ -193,30 +197,194 @@ function renderCrumb() {
   if (panes.length > 1) c.append(` · pane ${active + 1} of ${panes.length}`);
 }
 
+// ---- the slide list: your projects first, then the folders the other slides are in
+let projects = [];   // [{name, slides: [path, …]}] (paths, so they survive restarts)
+const lsGet = (k, d = null) => { try { const v = localStorage.getItem(k); return v == null ? d : v; } catch (e) { return d; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* storage blocked: per-session only */ } };
+const closedGroups = new Set(JSON.parse(lsGet('wissi-closed-groups', '[]')));
+const slidePath = (sl) => sl.path || sl.name;
+const isRemote = (sl) => /^[a-z0-9_-]+:/i.test(sl.path || '') && !/^[a-z]:[\\/]/i.test(sl.path || '');
+function folderOf(sl) {
+  if (isRemote(sl)) { const svc = (sl.path || '').split(':')[0]; return { key: `api:${svc}`, label: svc, kind: 'tile API', title: `Images of ${svc}` }; }
+  const parts = (sl.path || '').split(/[\\/]/);
+  parts.pop();
+  const dir = parts.join('/') || '/';
+  return { key: `dir:${dir}`, label: parts.filter(Boolean).slice(-2).join('/') || dir, kind: 'folder', title: dir };
+}
+async function saveProjects() {
+  const r = await call('projects', projects);
+  if (r?.projects) projects = r.projects;
+  else if (r?.errors) toast({ kind: 'bad', title: 'Projects not saved', sub: r.errors[0] });
+  renderList();
+}
+function uniqueName(base) { let n = 1, name = base; while (projects.some((p) => p.name === name)) name = `${base} ${++n}`; return name; }
+function newProject(seed = []) {
+  const name = uniqueName('New project');
+  projects.unshift({ name, slides: seed.map(slidePath) });
+  renaming = name;
+  saveProjects();
+}
+function addToProject(name, sl) {
+  const pr = projects.find((x) => x.name === name);
+  if (!pr || pr.slides.includes(slidePath(sl))) return;
+  pr.slides.push(slidePath(sl));
+  saveProjects();
+  toast({ title: `Added to ${name}`, sub: sl.name, ms: 2000 });
+}
+function removeFromProject(name, sl) {
+  const pr = projects.find((x) => x.name === name);
+  if (!pr) return;
+  pr.slides = pr.slides.filter((x) => x !== slidePath(sl));
+  saveProjects();
+}
+let renaming = null;
+function toggleGroup(key) {
+  closedGroups.has(key) ? closedGroups.delete(key) : closedGroups.add(key);
+  lsSet('wissi-closed-groups', JSON.stringify([...closedGroups]));
+  renderList();
+}
+
 function renderList() {
-  const ul = $('slides');
-  ul.replaceChildren();
+  const box = $('slides');
+  const q = ($('s-filter').value || '').trim().toLowerCase();
+  const match = (sl) => !q || sl.name.toLowerCase().includes(q) || (sl.path || '').toLowerCase().includes(q);
+  const byPath = new Map(slides.map((sl) => [slidePath(sl), sl]));
+  const inProject = new Set();
+  const groups = projects.map((pr) => {
+    const items = pr.slides.map((x) => byPath.get(x)).filter(Boolean);
+    items.forEach((sl) => inProject.add(sl.id));
+    return { key: `proj:${pr.name}`, label: pr.name, kind: 'project', project: pr, items, title: `${items.length} slide${items.length === 1 ? '' : 's'}` };
+  });
+  const folders = new Map();
   for (const sl of slides) {
-    const shown = panes.map((id, i) => (id === sl.id ? i + 1 : 0)).filter(Boolean);
-    const remote = /^[a-z0-9_-]+:/i.test(sl.path || '') && !/^[a-z]:[\\/]/i.test(sl.path || '');
-    const img = h('img', { class: 'thumb', alt: '', loading: 'lazy', src: `${API}/slides/${enc(sl.id)}/thumbnail?size=160` });
-    img.onerror = () => { img.removeAttribute('src'); img.classList.add('blank'); };
-    const x = h('button', { title: 'Close', 'aria-label': `Close ${sl.name}`, hidden: !CAPS.close }, '✕');
-    x.onclick = async (e) => {
-      e.stopPropagation();
-      const r = await call('close_slide', sl.id);
-      if (r?.slides) slides = r.slides;
-      panes = panes.map((id) => (id === sl.id ? null : id)).filter(Boolean);
-      apply();
-    };
-    const li = h('li', { class: (shown.length ? 'shown' : '') + (sl.id === activeSlide() ? ' active' : ''), title: sl.path || sl.name },
-      img, h('span', { class: 'txt' }, h('span', { class: 'name' }, sl.name),
-        h('span', { class: 'sub' }, remote ? (sl.path || '').split(':')[0] + ' · tile API' : shown.length ? `pane ${shown.join(', ')}` : '')),
-      h('span', { class: 'pane' }, shown.join(' ')), x);
-    li.onclick = () => { if (!panes.length) panes = [sl.id]; else panes[active] = sl.id; apply(); };
-    li.ondblclick = () => { if (panes.length < MAX_PANES && !panes.includes(sl.id)) { panes.push(sl.id); active = panes.length - 1; apply(); } };
-    ul.append(li);
+    if (inProject.has(sl.id)) continue;
+    const f = folderOf(sl);
+    if (!folders.has(f.key)) folders.set(f.key, { ...f, items: [] });
+    folders.get(f.key).items.push(sl);
   }
+  groups.push(...folders.values());
+  box.replaceChildren();
+  for (const g of groups) {
+    const items = g.items.filter(match);
+    if (q && !items.length) continue;
+    const closed = closedGroups.has(g.key) && !q;
+    const sec = h('section', { class: `sgroup${closed ? ' closed' : ''}`, dataset: { key: g.key, kind: g.kind }, role: 'group', 'aria-label': g.label });
+    const tw = h('button', { class: 'tw', 'aria-label': `${closed ? 'Expand' : 'Collapse'} ${g.label}`, 'aria-expanded': String(!closed) },
+      s('svg', { width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2.5, 'stroke-linecap': 'round', 'aria-hidden': 'true' }, s('path', { d: 'M6 9l6 6 6-6' })));
+    tw.onclick = () => toggleGroup(g.key);
+    let gn;
+    if (renaming === g.label && g.kind === 'project') {
+      gn = h('input', { class: 'gn', value: g.label, 'aria-label': 'Project name', style: 'font-size: 12px; padding: 2px 6px' });
+      let finished = false;
+      const done = (ok) => {
+        if (finished) return;   // Enter, then the blur of the removed input
+        finished = true;
+        const v = gn.value.trim();
+        renaming = null;
+        if (ok && v && v !== g.label && !projects.some((x) => x.name === v)) {
+          if (closedGroups.delete(g.key)) lsSet('wissi-closed-groups', JSON.stringify([...closedGroups]));
+          g.project.name = v;
+          saveProjects();
+        } else {   // unchanged: put the name back in place (re-rendering the list here would swallow the click that blurred it)
+          const span = h('span', { class: 'gn', title: g.title || g.label }, g.label);
+          span.onclick = () => toggleGroup(g.key);
+          span.ondblclick = () => { renaming = g.label; renderList(); };
+          gn.replaceWith(span);
+        }
+      };
+      gn.onkeydown = (e) => { if (e.key === 'Enter') done(true); else if (e.key === 'Escape') done(false); e.stopPropagation(); };
+      gn.onblur = () => done(true);
+      setTimeout(() => { gn.focus(); gn.select(); }, 0);
+    } else {
+      gn = h('span', { class: 'gn', title: g.title || g.label }, g.label);
+      gn.onclick = () => toggleGroup(g.key);
+      if (g.kind === 'project') gn.ondblclick = () => { renaming = g.label; renderList(); };
+    }
+    const more = h('button', { class: 'btn icon ghost more', title: 'More', 'aria-label': `More for ${g.label}` }, icon('more', 14));
+    more.onclick = (e) => openMenu(e, g.kind === 'project' ? [
+      ['Show in panes', '', () => showSlides(items.map((x) => x.id))],
+      ['Rename', '', () => { renaming = g.label; renderList(); }],
+      'hr',
+      ['Delete project', '', () => { projects = projects.filter((x) => x !== g.project); saveProjects(); }, 'danger', 'The slides stay open'],
+    ] : [
+      ['Show in panes', '', () => showSlides(items.map((x) => x.id))],
+      ['Make a project of these', '', () => newProject(items)],
+    ]);
+    sec.append(h('div', { class: 'ghead' }, tw, gn, h('span', { class: 'gk' }, g.kind === 'project' ? 'project' : g.kind), h('span', { class: 'chip' }, String(items.length)), more));
+    const ul = h('ul', {});
+    for (const sl of items) ul.append(slideItem(sl, g));
+    if (g.kind === 'project' && !items.length) ul.append(h('li', { class: 'dim', style: 'font-size: 12px; cursor: default; padding: 6px 8px' }, 'Drag slides here, or use a slide’s ⋯ menu'));
+    sec.append(ul);
+    if (g.kind === 'project') {   // drop slides on a project
+      sec.ondragover = (e) => { if (e.dataTransfer.types.includes('text/wissi-slide')) { e.preventDefault(); e.stopPropagation(); sec.classList.add('drop'); } };
+      sec.ondragleave = () => sec.classList.remove('drop');
+      sec.ondrop = (e) => {
+        const id = e.dataTransfer.getData('text/wissi-slide');
+        e.preventDefault(); e.stopPropagation(); sec.classList.remove('drop');
+        const sl = slides.find((x) => x.id === id);
+        if (sl) addToProject(g.label, sl);
+      };
+    }
+    box.append(sec);
+  }
+  if (q && !box.children.length) box.append(h('div', { class: 'panel-note', style: 'padding: 8px' }, `No slide matches “${q}”.`));
+  $('s-count').textContent = slides.length ? String(slides.length) : '';
+}
+
+function slideItem(sl, g) {
+  const shown = panes.map((id, i) => (id === sl.id ? i + 1 : 0)).filter(Boolean);
+  const img = h('img', { class: 'thumb', alt: '', loading: 'lazy', src: `${API}/slides/${enc(sl.id)}/thumbnail?size=160` });
+  img.onerror = () => { img.removeAttribute('src'); img.classList.add('blank'); };
+  const x = h('button', { title: 'Close', 'aria-label': `Close ${sl.name}`, hidden: !CAPS.close, style: 'order: 3' }, '✕');
+  x.onclick = async (e) => {
+    e.stopPropagation();
+    const r = await call('close_slide', sl.id);
+    if (r?.slides) slides = r.slides;
+    panes = panes.map((id) => (id === sl.id ? null : id)).filter(Boolean);
+    apply();
+  };
+  const more = h('button', { class: 'more', title: 'More', 'aria-label': `More for ${sl.name}`, style: 'order: 2' }, '⋯');
+  more.onclick = (e) => {
+    e.stopPropagation();
+    const items = [
+      ['Show in the active pane', '', () => { if (!panes.length) panes = [sl.id]; else panes[active] = sl.id; apply(); }],
+      ['Add as a new pane', '', () => addPane(sl.id)],
+      'hr',
+      ...projects.filter((pr) => !pr.slides.includes(slidePath(sl))).slice(0, 8).map((pr) => [`Add to ${pr.name}`, '', () => addToProject(pr.name, sl)]),
+      ['New project with this slide', '', () => newProject([sl])],
+    ];
+    if (g.kind === 'project') items.push(['Remove from this project', '', () => removeFromProject(g.label, sl)]);
+    openMenu(e, items);
+  };
+  const li = h('li', { class: (shown.length ? 'shown' : '') + (sl.id === activeSlide() ? ' active' : ''), title: sl.path || sl.name, draggable: 'true', role: 'listitem' },
+    img, h('span', { class: 'txt' }, h('span', { class: 'name' }, sl.name),
+      h('span', { class: 'sub' }, isRemote(sl) ? `${(sl.path || '').split(':')[0]} · tile API` : shown.length ? `pane ${shown.join(', ')}` : '')),
+    h('span', { class: 'pane' }, shown.join(' ')), x, more);
+  li.onclick = () => { if (!panes.length) panes = [sl.id]; else panes[active] = sl.id; apply(); };
+  li.ondblclick = () => addPane(sl.id);
+  li.ondragstart = (e) => { e.dataTransfer.setData('text/wissi-slide', sl.id); e.dataTransfer.effectAllowed = 'copy'; };
+  return li;
+}
+function addPane(id) { if (panes.length < MAX_PANES && !panes.includes(id)) { panes.push(id); active = panes.length - 1; apply(); } }
+
+/** A small menu at the clicked element: entries [label, key, fn, class?, title?] or 'hr'. */
+function openMenu(ev, entries) {
+  ev.stopPropagation();
+  closeMenu();
+  const el = h('div', { class: 'menu', role: 'menu' });
+  for (const e of entries) {
+    if (e === 'hr') { if (el.lastChild && el.lastChild.tagName !== 'HR') el.append(h('hr')); continue; }
+    const [label, k, fn, cls, title] = e;
+    const b = h('button', { class: cls || '', role: 'menuitem', title: title || null }, label, k ? h('span', { class: 'kc' }, k) : null);
+    b.onclick = (x) => { x.stopPropagation(); if (fn(b) !== false) closeMenu(); };
+    el.append(b);
+  }
+  if (el.lastChild?.tagName === 'HR') el.lastChild.remove();
+  menuEl = el;
+  document.body.append(el);
+  const r = ev.currentTarget.getBoundingClientRect();
+  el.style.left = `${Math.max(8, Math.min(window.innerWidth - el.offsetWidth - 8, r.right - el.offsetWidth))}px`;
+  el.style.top = `${Math.min(window.innerHeight - el.offsetHeight - 8, r.bottom + 4)}px`;
 }
 
 function renderRecent(items) {
@@ -232,34 +400,109 @@ function renderRecent(items) {
   }
 }
 
-// ---- the in-page file picker and path box (browser window / server)
+// ---- the in-page file picker (browser window / server): places, a clickable path, filter, multi-select
+const pk = { dir: '', parent: null, entries: [], sel: new Set(), mode: 'files', root: '' };
 function showPathBox(why) {
+  pk.mode = why === 'pick_folder' ? 'folder' : why === 'pick_layer' ? 'layer' : 'files';
   $('empty').style.display = '';
+  $('empty').classList.add('picking');
   $('pathbox').style.display = 'block';
-  $('paths').dataset.slide = why === 'pick_layer' ? activeSlide() || '' : '';
+  $('paths').dataset.slide = pk.mode === 'layer' ? activeSlide() || '' : '';
   $('paths').placeholder = SERVER ? 'Or paste paths on the server, one per line' : 'Or paste file or folder paths, one per line';
-  if (CAPS.browse) browse($('browser').dataset.dir || '');
+  $('pk-folder').hidden = pk.mode === 'layer';
+  $('pk-open').textContent = pk.mode === 'layer' ? 'Add to the slide' : 'Open selected';
+  if (CAPS.browse) { $('picker').classList.add('on'); browse(pk.dir || ''); setTimeout(() => $('pk-filter').focus(), 50); }
   else $('paths').focus();
-  log(SERVER ? 'Pick files on the server' : 'Browser window: pick files below or paste paths (native dialogs need the desktop window)');
+  log(pk.mode === 'folder' ? 'Pick a folder: go into it, then “Open this folder”'
+    : pk.mode === 'layer' ? 'Pick cell tables or annotation files for the active slide'
+      : SERVER ? 'Pick slides on the server' : 'Pick slides: click to select, double-click to open (native dialogs need the desktop window)');
 }
-const openPaths = async (list) => onResult(await call('open_paths', list, $('paths').dataset.slide || null));
+function closePicker() {
+  $('picker').classList.remove('on');
+  $('pathbox').style.display = 'none';
+  $('empty').classList.remove('picking');
+  $('empty').style.display = panes.length ? 'none' : '';
+}
+const openPaths = async (list) => {
+  const res = await call('open_paths', list, $('paths').dataset.slide || null);
+  if (res && !(res.errors || []).length) closePicker();
+  onResult(res);
+};
 async function browse(dir) {
-  const box = $('browser');
   const res = await call('browse', dir);
-  if (!res || res.errors) { box.style.display = 'none'; if (res) log(res.errors.join(' · '), true); return; }
-  box.dataset.dir = res.dir;
-  box.style.display = 'block';
-  box.replaceChildren(h('div', { class: 'cwd', title: res.dir }, res.dir || 'Folders you can open from'));
-  const item = (kind, name, act, title) => {
-    const a = h('a', { href: '#', title: title || name }, h('span', { class: 'k' }, kind), h('span', { class: 'n' }, name));
-    a.onclick = (e) => { e.preventDefault(); act(); };
+  if (!res || res.errors) { if (res) { log(res.errors.join(' · '), true); $('pk-info').textContent = res.errors[0]; } return; }
+  pk.dir = res.dir; pk.parent = res.parent; pk.entries = res.entries; pk.sel.clear();
+  $('browser').dataset.dir = res.dir;
+  $('pk-filter').value = '';
+  renderPlaces(res.places || []);
+  renderCrumbs(res.dir);
+  renderEntries();
+}
+function renderPlaces(places) {
+  const nav = $('pk-places');
+  nav.replaceChildren();
+  let group = '';
+  for (const pl of places) {
+    if (pl.group !== group) { group = pl.group; nav.append(h('span', { class: 'lbl' }, group)); }
+    const b = h('button', { class: pk.dir === pl.path ? 'on' : '', title: pl.path }, pl.name);
+    b.onclick = () => browse(pl.path);
+    nav.append(b);
+  }
+}
+function renderCrumbs(dir) {
+  const box = $('pk-crumbs');
+  box.replaceChildren();
+  $('pk-up').disabled = pk.parent == null;
+  if (!dir) { box.append(h('button', {}, 'Folders you can open from')); return; }
+  const win = /^[a-z]:[\\/]/i.test(dir) || dir.includes('\\');
+  const sep = win ? '\\' : '/';
+  const parts = dir.split(/[\\/]/);
+  let acc = '';
+  parts.forEach((part, i) => {
+    acc = i === 0 ? (part || sep) : (acc.endsWith(sep) ? acc + part : acc + sep + part);
+    if (!part && i > 0) return;
+    const target = acc;
+    const b = h('button', { title: target }, i === 0 && !part ? sep : part);
+    b.onclick = () => browse(target);
+    box.append(b);
+    if (i < parts.length - 1) box.append(h('span', { class: 'dim' }, '›'));
+  });
+  box.scrollLeft = box.scrollWidth;
+}
+const human = (n) => (n == null ? '' : n >= 2 ** 30 ? `${(n / 2 ** 30).toFixed(1)} GB` : n >= 2 ** 20 ? `${(n / 2 ** 20).toFixed(1)} MB` : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`);
+function renderEntries() {
+  const box = $('browser');
+  const q = $('pk-filter').value.trim().toLowerCase();
+  const wanted = pk.mode === 'layer' ? ['folder', 'table', 'annotations'] : pk.mode === 'folder' ? ['folder', 'slide'] : ['folder', 'slide', 'table', 'annotations'];
+  const list = pk.entries.filter((e) => wanted.includes(e.kind) && (!q || e.name.toLowerCase().includes(q)));
+  box.replaceChildren();
+  const label = { folder: 'folder', slide: 'slide', table: 'cells', annotations: 'ann.' };
+  for (const e of list) {
+    const isDir = e.kind === 'folder';
+    const sel = pk.sel.has(e.path);
+    const cb = isDir || pk.mode === 'folder' ? h('span') : h('input', { type: 'checkbox', checked: sel, 'aria-label': `Select ${e.name}`, tabindex: -1 });
+    const ic = isDir ? s('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', stroke: 'var(--accent)', 'stroke-width': 1.8, 'stroke-linejoin': 'round', 'aria-hidden': 'true' }, s('path', { d: 'M3 6h6l2 2h10v11H3z' }))
+      : h('span', { class: 'k' }, label[e.kind] || e.kind);
+    const a = h('a', { href: '#', title: e.path, class: sel ? 'sel' : '', role: 'listitem', dataset: { kind: e.kind } }, cb, ic, h('span', { class: 'n' }, e.name), h('span', { class: 'z' }, isDir ? '' : human(e.size)));
+    a.onclick = (ev) => {
+      ev.preventDefault();
+      if (isDir) { browse(e.path); return; }
+      if (pk.mode === 'folder') return;
+      if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.target === cb) pk.sel.has(e.path) ? pk.sel.delete(e.path) : pk.sel.add(e.path);
+      else { const was = pk.sel.has(e.path) && pk.sel.size === 1; pk.sel.clear(); if (!was) pk.sel.add(e.path); }
+      renderEntries();
+    };
+    a.ondblclick = (ev) => { ev.preventDefault(); if (!isDir && pk.mode !== 'folder') openPaths([e.path]); };
     box.append(a);
-  };
-  if (res.parent != null) item('↑', 'up', () => browse(res.parent), res.parent || 'Folders you can open from');
-  if (res.entries.some((e) => e.kind === 'slide')) item('all', 'Open every slide in this folder', () => openPaths([res.dir]), res.dir);
-  const label = { folder: 'folder', slide: 'slide', table: 'cells', annotations: 'annotations' };
-  for (const e of res.entries) item(label[e.kind] || e.kind, e.name, e.kind === 'folder' ? () => browse(e.path) : () => openPaths([e.path]), e.path);
-  if (!res.entries.length) box.append(h('div', { class: 'none' }, 'Nothing wissi-viz opens here'));
+  }
+  if (!list.length) box.append(h('div', { class: 'none' }, q ? `Nothing matches “${q}” here` : 'Nothing wissi-viz opens here'));
+  const nSlides = pk.entries.filter((e) => e.kind === 'slide').length;
+  $('pk-folder').disabled = !pk.dir || (!nSlides && !pk.entries.some((e) => e.kind === 'folder'));
+  $('pk-folder').textContent = nSlides ? `Open this folder (${nSlides} slide${nSlides === 1 ? '' : 's'})` : 'Open this folder';
+  $('pk-open').disabled = !pk.sel.size;
+  if (pk.sel.size) $('pk-open').textContent = `${pk.mode === 'layer' ? 'Add' : 'Open'} ${pk.sel.size} selected`;
+  else $('pk-open').textContent = pk.mode === 'layer' ? 'Add to the slide' : 'Open selected';
+  $('pk-info').textContent = pk.mode === 'folder' ? 'Go into the folder, then open it' : pk.sel.size ? 'Shift / ⌘-click to select more' : 'Click to select · double-click to open';
 }
 
 // ------------------------------------------------------------------------------------------------ toolbar
@@ -327,9 +570,10 @@ function scheduleInspector() { clearTimeout(insT); insT = setTimeout(renderInspe
 function renderInspector() {
   if ($('insp').classList.contains('hidden')) return;
   if (tab === 'layers') renderLayers();
+  else if (tab === 'image') renderImage();
   else if (tab === 'analyze') renderAnalyze();
   else if (tab === 'measure') renderMeasure();
-  else if (tab === 'draw') { refreshDrawLists(); samStatus(); }
+  else if (tab === 'draw') renderDraw();
 }
 const layersOf = (p) => (p?.slide ? [...p.slide.layers.values()] : []);
 const paneSel = () => ($('l-scope').querySelector('[aria-pressed=true]')?.dataset.scope === 'all' ? 'all' : active);
@@ -351,40 +595,191 @@ function getSummary(sid, L, tissue = false) {
   return summaries.get(key);
 }
 
-function renderDisplay(p) {
-  const body = $('disp-body'), sum = $('disp-sum');
-  body.replaceChildren();
+// ------------------------------------------------------------------------------------------------ Image tab
+// per-channel histograms (fluorescence) or R, G, B (brightfield) of the whole image, the view or a CZI scene, with
+// draggable minimum / maximum, gamma, colour, show / solo, auto contrast, and linked channels
+const histCache = new Map();    // `${sid}|${rect}` → Promise<histogram>
+let linkCh = false;
+const panesOf = (sid) => (grid.panes || []).filter((q) => q.slide?.info?.id === sid).map((q) => q.index);
+function histRect(p) {
   const info = p?.slide?.info;
-  if (!info) { sum.textContent = ''; return; }
+  const v = $('i-scope').value;
+  if (v === 'view' && p?.view) {
+    const hw = p.rect.w / 2 / p.view.scale, hh = p.rect.h / 2 / p.view.scale;
+    return [p.view.cx - hw, p.view.cy - hh, p.view.cx + hw, p.view.cy + hh].map((x) => Math.round(x));
+  }
+  const sc = (info?.extra?.scenes || []).find((x) => `scene:${x.index}` === v);
+  return sc ? sc.rect : null;
+}
+function getHist(sid, rect) {
+  const key = `${sid}|${rect ? rect.join(',') : 'all'}`;
+  if (!histCache.has(key)) {
+    const p = api(`/slides/${enc(sid)}/histogram${rect ? `?rect=${rect.join(',')}` : ''}`);
+    p.catch(() => histCache.delete(key));
+    histCache.set(key, p);
+    if (histCache.size > 24) histCache.delete(histCache.keys().next().value);
+  }
+  return histCache.get(key);
+}
+async function renderImage() {
+  const p = curPane();
+  const info = p?.slide?.info;
+  const body = $('disp-body'), sum = $('disp-sum');
+  const sid = info?.id;
+  const sl = slides.find((x) => x.id === activeSlide());
+  $('i-title').textContent = sl ? `Image · ${sl.name}` : 'Image';
+  // the histogram's scope: whole image, this view, or a scene (CZI files with several scenes)
+  const scopeSel = $('i-scope'), keep = scopeSel.value;
+  const scenes = info?.extra?.scenes || [];
+  scopeSel.replaceChildren(h('option', { value: 'slide' }, 'the whole image'), h('option', { value: 'view' }, 'this view'),
+    ...scenes.map((x) => h('option', { value: `scene:${x.index}` }, x.name)));
+  scopeSel.value = [...scopeSel.options].some((o) => o.value === keep) ? keep : 'slide';
+  const sc = $('i-scenes');
+  sc.replaceChildren();
+  if (scenes.length) {
+    sc.append(`${scenes.length} scenes: `);
+    scenes.forEach((x, k) => {
+      const b = h('a', { href: '#', style: 'color: var(--accent)' }, x.name);
+      b.onclick = (e) => { e.preventDefault(); grid.goToBounds(active, ...x.rect); scopeSel.value = `scene:${x.index}`; renderImage(); };
+      sc.append(k ? ', ' : '', b);
+    });
+  }
+  if (!info) { body.replaceChildren(h('div', { class: 'panel-note' }, 'No slide in this pane.')); sum.textContent = ''; return; }
+  $('i-link').hidden = info.mode !== 'channels';
+  $('i-auto').textContent = info.mode === 'channels' ? 'Auto all' : 'Auto levels';
+  let hist = null;
+  const rect = histRect(p);
+  body.replaceChildren(h('div', { class: 'panel-note' }, 'Reading the histogram…'));
+  try { hist = await getHist(sid, rect); } catch (e) { hist = null; log(`histogram: ${e.message}`, true); }
+  if (curPane()?.slide?.info?.id !== sid) return;
+  body.replaceChildren();
   if (info.mode === 'channels' && p.channels) {
     sum.textContent = `${p.channels.filter((c) => c.visible).length} of ${p.channels.length} channels`;
-    const max = info.dtype === 'uint16' ? 65535 : 255;
-    p.channels.forEach((c, i) => {
-      const vis = h('input', { type: 'checkbox', checked: c.visible, 'aria-label': `Show ${c.name}` });
-      vis.onchange = () => { grid.setChannel(active, i, { visible: vis.checked }); renderDisplay(curPane()); };
-      const col = h('input', { type: 'color', value: toHex(c.color), 'aria-label': `${c.name} colour` });
-      col.oninput = () => grid.setChannel(active, i, { color: col.value });
-      const lo = h('input', { type: 'range', min: 0, max, value: c.lo, 'aria-label': `${c.name} minimum` });
-      const hi = h('input', { type: 'range', min: 0, max, value: c.hi, 'aria-label': `${c.name} maximum` });
-      lo.oninput = () => grid.setChannel(active, i, { min: +lo.value });
-      hi.oninput = () => grid.setChannel(active, i, { max: +hi.value });
-      body.append(h('div', { class: 'row' }, vis, col, h('span', { class: 'grow' }, c.name)),
-        h('div', { class: 'row', style: 'padding-left: 26px' }, lo, hi));
-    });
+    p.channels.forEach((c, i) => body.append(channelCard(p, sid, i, c, hist?.channels?.[i])));
     return;
   }
+  // brightfield
   const a = p.adjust || { brightness: 0, contrast: 1, gamma: 1 };
   sum.textContent = p.stain ? `stain: ${p.stain.name}` : 'brightfield';
   const stain = h('select', { 'aria-label': 'Stain view' }, ...['off', 'hematoxylin', 'eosin', 'dab', 'fluorescence']
     .map((m) => h('option', { selected: (p.stain?.name || 'off') === m }, m)));
-  stain.onchange = () => { grid.setStain(active, stain.value); renderDisplay(curPane()); };
-  body.append(h('div', { class: 'field', style: 'grid-template-columns: 88px 1fr' }, 'Stain view', stain));
+  stain.onchange = () => { grid.setStain(panesOf(sid), stain.value); renderImage(); };
+  const card = h('div', { class: 'hist' }, h('div', { class: 'hh' }, h('b', {}, 'R · G · B'), h('span', { class: 'dim', style: 'font-size: 11px' }, hist ? `level ${hist.level}` : '')));
+  if (hist) card.append(histCanvas(hist.channels, ['#ff6b6b', '#5fe08f', '#5ea8ff'], null));
+  body.append(card, h('div', { class: 'field', style: 'grid-template-columns: 88px 1fr' }, 'Stain view', stain));
   for (const [label, key, min, max, step] of [['Brightness', 'brightness', -0.5, 0.5, 0.01], ['Contrast', 'contrast', 0.3, 3, 0.01], ['Gamma', 'gamma', 0.3, 3, 0.01]]) {
     const out = h('output', {}, fmt(a[key] ?? 0, 2));
-    const r = h('input', { type: 'range', min, max, step, value: a[key] ?? 0, 'aria-label': label });
-    r.oninput = () => { grid.setAdjust(active, { [key]: +r.value }); out.textContent = fmt(+r.value, 2); };
+    const r = h('input', { type: 'range', min, max, step, value: a[key] ?? 0, 'aria-label': label, id: `i-${key}` });
+    r.oninput = () => { grid.setAdjust(panesOf(sid), { [key]: +r.value }); out.textContent = fmt(+r.value, 2); };
     body.append(h('label', { class: 'field' }, label, r, out));
   }
+  const inv = h('input', { type: 'checkbox', checked: !!a.invert, id: 'i-invert' });
+  inv.onchange = () => grid.setAdjust(panesOf(sid), { invert: inv.checked });
+  body.append(h('label', { class: 'dim', style: 'font-size: 12px; display: flex; gap: 6px; align-items: center' }, inv, 'invert'));
+}
+function autoLevels(sid, hist) {   // brightfield: stretch the darkest 0.1 % … brightest 0.1 % to the full range
+  if (!hist) return;
+  const lo = Math.min(...hist.channels.map((c) => c.p['0.1'])), hi = Math.max(...hist.channels.map((c) => c.p['99.9']));
+  const contrast = Math.max(0.3, Math.min(3, 255 / Math.max(8, hi - lo)));
+  grid.setAdjust(panesOf(sid), { contrast, brightness: Math.max(-0.5, Math.min(0.5, (127.5 - (lo + hi) / 2) / 255 * contrast)) });
+}
+
+function channelCard(p, sid, i, c, hh) {
+  const card = h('div', { class: `hist${c.visible ? '' : ' off'}`, dataset: { ch: String(i) } });
+  const vis = h('input', { type: 'checkbox', checked: c.visible, 'aria-label': `Show ${c.name}` });
+  vis.onchange = () => { grid.setChannel(panesOf(sid), i, { visible: vis.checked }); renderImage(); };
+  const col = h('input', { type: 'color', value: toHex(c.color), 'aria-label': `${c.name} colour` });
+  col.oninput = () => { grid.setChannel(panesOf(sid), i, { color: col.value }); draw(); };
+  const soloB = h('button', { class: 'solo-b', title: 'Show only this channel (again: show all)' }, 'S');
+  soloB.onclick = () => {
+    const only = p.channels.every((x, k) => x.visible === (k === i));
+    p.channels.forEach((_, k) => grid.setChannel(panesOf(sid), k, { visible: only || k === i }));
+    renderImage();
+  };
+  const autoB = h('button', { class: 'solo-b', title: 'Auto contrast from the histogram (0.1–99.9 %)' }, 'A');
+  autoB.onclick = () => { if (hh) setWin(hh.p['0.1'], hh.p['99.9']); };
+  card.append(h('div', { class: 'hh' }, vis, col, h('b', { title: c.name }, c.name), h('span', { class: 'dim mono', style: 'font-size: 10px' }, hh ? `max ${fmt(hh.max)}` : ''), autoB, soloB));
+  const lo = h('input', { type: 'number', value: Math.round(c.lo), 'aria-label': `${c.name} minimum` });
+  const hi = h('input', { type: 'number', value: Math.round(c.hi), 'aria-label': `${c.name} maximum` });
+  const ga = h('input', { type: 'number', value: c.gamma ?? 1, step: 0.05, min: 0.1, max: 5, 'aria-label': `${c.name} gamma` });
+  const setWin = (a, b) => {
+    a = Math.max(0, Math.round(a)); b = Math.max(a + 1, Math.round(b));
+    const targets = linkCh ? p.channels.map((_, k) => k) : [i];
+    for (const k of targets) grid.setChannel(panesOf(sid), k, { min: a, max: b });
+    lo.value = a; hi.value = b;
+    if (linkCh) document.querySelectorAll('#disp-body .hist').forEach((el) => el !== card && el._redraw?.());
+    draw();
+  };
+  lo.onchange = () => setWin(+lo.value, +hi.value);
+  hi.onchange = () => setWin(+lo.value, +hi.value);
+  ga.onchange = () => { grid.setChannel(panesOf(sid), i, { gamma: Math.max(0.1, +ga.value || 1) }); draw(); };
+  let draw = () => {};
+  if (hh) {
+    const cv = histCanvas([hh], [toHex(c.color)], { ch: c, onWin: setWin });
+    draw = cv._redraw;
+    card._redraw = () => { lo.value = Math.round(c.lo); hi.value = Math.round(c.hi); draw(); };
+    card.append(cv);
+  }
+  card.append(h('div', { class: 'nums' }, h('label', {}, 'min', lo), h('label', {}, 'max', hi), h('label', {}, 'gamma', ga)));
+  return card;
+}
+
+/** A histogram canvas (log or linear counts) with the display window drawn on it; with `win`, drag the minimum /
+ * maximum (or shift-drag the whole window). */
+function histCanvas(chans, colors, win) {
+  const cv = h('canvas', { width: 340, height: 64, 'aria-label': 'Histogram' + (win ? ': drag the minimum and maximum' : '') });
+  const domain = () => Math.max(...chans.map((c) => c.hi), win ? win.ch.hi * 1.02 : 0);
+  const redraw = () => {
+    const g = cv.getContext('2d'), W = cv.width, H = cv.height;
+    g.clearRect(0, 0, W, H);
+    const D = domain(), logy = $('i-log').checked;
+    chans.forEach((c, k) => {
+      const n = c.counts.length, max = Math.max(1, ...c.counts);
+      g.beginPath();
+      g.moveTo(0, H);
+      c.counts.forEach((v, j) => {
+        const x = ((c.lo + (j + 0.5) * (c.hi - c.lo) / n) / D) * W;
+        const y = H - (logy ? Math.log1p(v) / Math.log1p(max) : v / max) * (H - 4);
+        g.lineTo(x, y);
+      });
+      g.lineTo(W, H);
+      g.closePath();
+      g.fillStyle = colors[k] + (chans.length > 1 ? '55' : '88');
+      g.strokeStyle = colors[k];
+      g.fill();
+      g.lineWidth = 1; g.stroke();
+    });
+    if (win) {
+      const D2 = domain(), x0 = (win.ch.lo / D2) * W, x1 = (win.ch.hi / D2) * W, gm = win.ch.gamma ?? 1;
+      g.fillStyle = 'rgba(0,0,0,.45)';
+      g.fillRect(0, 0, x0, H); g.fillRect(x1, 0, W - x1, H);
+      g.strokeStyle = '#fff'; g.lineWidth = 1.5;
+      g.beginPath();   // the transfer curve
+      for (let t = 0; t <= 1.0001; t += 0.05) { const x = x0 + t * (x1 - x0), y = H - Math.pow(t, gm) * (H - 2) - 1; t ? g.lineTo(x, y) : g.moveTo(x, y); }
+      g.stroke();
+      for (const x of [x0, x1]) { g.fillStyle = '#fff'; g.fillRect(x - 1.5, 0, 3, H); }
+    }
+  };
+  if (win) {
+    let drag = null;
+    cv.onpointerdown = (e) => {
+      const r = cv.getBoundingClientRect(), D = domain(), v = ((e.clientX - r.left) / r.width) * D;
+      drag = e.shiftKey ? { k: 'both', v, lo: win.ch.lo, hi: win.ch.hi } : { k: Math.abs(v - win.ch.lo) < Math.abs(v - win.ch.hi) ? 'lo' : 'hi' };
+      cv.setPointerCapture(e.pointerId);
+      cv.onpointermove(e);
+    };
+    cv.onpointermove = (e) => {
+      if (!drag) return;
+      const r = cv.getBoundingClientRect(), D = domain(), v = Math.max(0, Math.min(D, ((e.clientX - r.left) / r.width) * D));
+      if (drag.k === 'lo') win.onWin(Math.min(v, win.ch.hi - 1), win.ch.hi);
+      else if (drag.k === 'hi') win.onWin(win.ch.lo, Math.max(v, win.ch.lo + 1));
+      else win.onWin(drag.lo + v - drag.v, drag.hi + v - drag.v);
+    };
+    cv.onpointerup = () => { drag = null; };
+  }
+  cv._redraw = redraw;
+  requestAnimationFrame(redraw);
+  return cv;
 }
 function toHex(c) {
   if (typeof c === 'string') return c;
@@ -392,20 +787,74 @@ function toHex(c) {
   return '#ffffff';
 }
 
+// where a layer came from → its badge and its group in the "By source" view
+const ORIGINS = {
+  drawn: ['Drawn', 'manual'], sam: ['SAM', 'manual'], 'drawn+sam': ['Drawn + SAM', 'manual'],
+  found: ['Found', 'found'], detected: ['Detected', 'detected'], analysis: ['Analysis', 'analysis'], imported: ['Imported', 'imported'],
+};
+const SOURCE_GROUPS = [['manual', 'Annotations (drawn & SAM)'], ['found', 'Found from examples'], ['detected', 'Detected by algorithms'],
+  ['analysis', 'Analysis results'], ['imported', 'Imported files & tables']];
+const originOf = (L) => (ORIGINS[L.meta.style?.origin] ? L.meta.style.origin : 'imported');
+const groupOf = (L) => ORIGINS[originOf(L)][1];
+const srcBadge = (L) => h('span', { class: `src ${originOf(L)}`, title: `Source: ${ORIGINS[originOf(L)][0]}` }, ORIGINS[originOf(L)][0]);
+let layerMode = lsGet('wissi-layer-mode', 'nested');
+let layerSrc = lsGet('wissi-layer-src', 'all');
+
 function renderLayers() {
   const p = curPane();
-  renderDisplay(p);
   const list = $('l-list');
   const sid = activeSlide();
   const sl = slides.find((x) => x.id === sid);
   $('l-title').textContent = sl ? `Layers on ${sl.name}` : 'Layers';
+  for (const b of $('l-mode').children) b.setAttribute('aria-pressed', String(b.dataset.mode === layerMode));
   const q = $('l-filter').value.trim().toLowerCase();
   const all = layersOf(p);
-  const shown = all.filter((L) => !q || L.name.toLowerCase().includes(q) || (L.meta.classes || []).some((c) => c.name.toLowerCase().includes(q)));
-  list.replaceChildren(...shown.map((L) => layerCard(p, sid, L, q)));
+  // source chips: All + each source present, with counts
+  const counts = {};
+  for (const L of all) counts[groupOf(L)] = (counts[groupOf(L)] || 0) + 1;
+  if (layerSrc !== 'all' && !counts[layerSrc]) layerSrc = 'all';
+  const chips = $('l-chips');
+  chips.replaceChildren();
+  if (all.length) {
+    for (const [k, label] of [['all', 'All'], ...SOURCE_GROUPS.filter(([g]) => counts[g]).map(([g, t]) => [g, t.split(' ')[0]])]) {
+      const b = h('button', { class: 'fchip', 'aria-pressed': String(layerSrc === k), dataset: { src: k }, title: k === 'all' ? 'Every layer' : SOURCE_GROUPS.find(([g]) => g === k)[1] },
+        label, h('span', { class: 'n' }, String(k === 'all' ? all.length : counts[k])));
+      b.onclick = () => { layerSrc = k; lsSet('wissi-layer-src', k); renderLayers(); };
+      chips.append(b);
+    }
+  }
+  const shown = all.filter((L) => (layerSrc === 'all' || groupOf(L) === layerSrc)
+    && (!q || L.name.toLowerCase().includes(q) || (L.meta.classes || []).some((c) => c.name.toLowerCase().includes(q))));
+  if (layerMode === 'flat') list.replaceChildren(...shown.map((L) => layerRow(p, sid, L)));
+  else if (layerMode === 'source') {
+    list.replaceChildren();
+    for (const [g, title] of SOURCE_GROUPS) {
+      const ls = shown.filter((L) => groupOf(L) === g);
+      if (!ls.length) continue;
+      const allOn = ls.every((L) => p.layerVisible(L));
+      const eye = h('button', { class: 'btn ghost', style: 'font-size: 11px; padding: 1px 7px', title: `${allOn ? 'Hide' : 'Show'} every layer in this group` }, allOn ? 'hide all' : 'show all');
+      eye.onclick = () => { for (const L of ls) grid.setLayerVisible(paneSel(), L.name, !allOn); renderLayers(); };
+      list.append(h('div', { class: 'lgroup-h', dataset: { group: g } }, h('span', { class: 'lbl' }, title), h('span', { class: 'chip' }, String(ls.length)), h('span', { class: 'grow' }), eye),
+        ...ls.map((L) => layerCard(p, sid, L, q)));
+    }
+  } else list.replaceChildren(...shown.map((L) => layerCard(p, sid, L, q)));
   $('l-empty').hidden = all.length > 0 || !sid;
   $('l-add').disabled = !sid || !CAPS.open;
   $('l-add').hidden = !CAPS.open;
+}
+
+/** The flat view: one line per layer. */
+function layerRow(p, sid, L) {
+  const vis = p.layerVisible(L);
+  const eye = h('button', { class: `eye${vis ? ' on' : ''}`, 'aria-label': `${vis ? 'Hide' : 'Show'} ${L.name}`, 'aria-pressed': String(vis), title: `${vis ? 'Hide' : 'Show'} (H)` }, icon(vis ? 'eye' : 'eyeOff', 14));
+  eye.onclick = () => toggleLayer(L.name);
+  const sw = h('span', { class: 'sw', style: `background: ${(L.meta.classes || [])[0]?.color || '#9aa3ad'}` });
+  const more = h('button', { class: 'btn icon ghost', title: 'More', 'aria-label': `More for ${L.name}` }, icon('more', 14));
+  more.onclick = (e) => layerMenu(e, sid, L);
+  const row = h('div', { class: `lflat lcard${vis ? '' : ' off'}`, dataset: { layer: L.name }, style: 'border-radius: 8px' }, eye, sw, h('span', { class: 'nm', title: L.name }, L.name), srcBadge(L),
+    h('span', { class: 'chip' }, (L.meta.count ?? 0).toLocaleString('en-US')), more);
+  row.onmouseenter = () => { hoveredLayer = L.name; if (vis) grid.flashLayer(active, L.name, 900); };
+  return row;
 }
 
 function layerCard(p, sid, L, q) {
@@ -429,7 +878,7 @@ function layerCard(p, sid, L, q) {
   soloB.onclick = () => toggleSolo(L.name);
   const more = h('button', { class: 'btn icon ghost', title: 'More', 'aria-label': `More for ${L.name}` }, icon('more'));
   more.onclick = (e) => layerMenu(e, sid, L);
-  card.append(h('div', { class: 'lhead' }, eye, sw, nm, analysis ? h('span', { class: 'badge' }, 'analysis') : null, count, soloB, more));
+  card.append(h('div', { class: 'lhead' }, eye, sw, nm, srcBadge(L), count, soloB, more));
   card.onmouseenter = () => {
     hoveredLayer = L.name;
     if (vis) { grid.flashLayer(active, L.name, 900); card.classList.add('flash'); setTimeout(() => card.classList.remove('flash'), 900); }
@@ -874,10 +1323,12 @@ function renderMetricsTable(j) {
   $('mtable').style.display = 'block';
 }
 
-// ------------------------------------------------------------------------------------------------ Draw tab
+// ------------------------------------------------------------------------------------------------ Annotate tab
+// ① examples: outlines drawn or made with SAM (saved to the layer + class above) and objects picked on the slide;
+// ② find all like them: similar objects of a layer, segment everything (SAM / classic), or areas (pixel classifier)
 const applyDraw = () => { grid.setDrawLayer($('a-layer').value.trim() || 'Annotations'); grid.setDrawClass($('a-class').value.trim() || null, $('a-color').value); };
-['a-layer', 'a-class', 'a-color'].forEach((id) => $(id).addEventListener('change', applyDraw));
-$('a-sam').onclick = () => setTool(grid.tool === 'sam' ? 'pan' : 'sam');
+['a-layer', 'a-class', 'a-color'].forEach((id) => $(id).addEventListener('change', () => { applyDraw(); renderDraw(); }));
+$('a-sam').onclick = () => { setPicking(false); setTool(grid.tool === 'sam' ? 'pan' : 'sam'); };
 $('a-accept').onclick = () => grid.samAccept();
 $('a-discard').onclick = () => grid.samClear();
 let samChecked = false;
@@ -886,7 +1337,8 @@ async function samStatus() {
   samChecked = true;
   try {
     const st = await (await fetch(`${API}/sam/status`)).json();
-    $('a-sam-status').textContent = st.loaded ? `SAM: ${st.backend} on ${st.device}` : `SAM backends installed: ${st.available.join(', ')} (loads on first click)`;
+    $('a-sam-status').textContent = st.loaded ? `SAM: ${st.backend} on ${st.device}`
+      : `SAM backends: ${st.available.join(', ')}${st.available.length === 1 ? ' (no model installed: the classic colour fill; pip install "wissi-viz[sam]" for SAM 2.1)' : ' (loads on first click)'}`;
   } catch (_) { $('a-sam-status').textContent = 'SAM: not available on this server'; }
 }
 grid.addEventListener('samstart', () => log('SAM: segmenting…'));
@@ -899,8 +1351,224 @@ grid.addEventListener('sam', (e) => {
 });
 grid.addEventListener('draw', (e) => {
   toast({ kind: 'good', title: `Saved to ${e.detail?.layer || $('a-layer').value || 'Annotations'}`, sub: $('a-class').value || '', ms: 3000 });
-  setTimeout(scheduleInspector, 300);
+  setTimeout(() => { scheduleInspector(); renderDraw(); }, 400);
 });
+
+// ---- picking objects as examples
+let picking = false;
+const picks = [];   // {slide, layer, index, neg, cls, color}
+let lastMods = { shift: false };
+function setPicking(on) {
+  picking = on;
+  $('a-pick').classList.toggle('on', on);
+  $('a-pick').setAttribute('aria-pressed', String(on));
+  document.body.classList.toggle('picking', on);
+  if (on) { setTool('pan'); log('Pick objects: click = like this, shift-click = not like this · P or Esc to stop'); }
+}
+$('a-pick').onclick = () => setPicking(!picking);
+function addPick(d) {
+  const sid = slides.find((x) => x.id === d.slide) ? d.slide : panes[d.pane];
+  const i = picks.findIndex((x) => x.slide === sid && x.layer === d.layer && x.index === d.index);
+  if (i >= 0) picks.splice(i, 1);
+  else {
+    const L = grid.panes[d.pane]?.slide?.layers.get(d.layer);
+    const color = d.color || (L?.meta.classes || []).find((c) => c.name === d.class)?.color;
+    picks.push({ slide: sid, layer: d.layer, index: d.index, neg: lastMods.shift, cls: d.class, color });
+    grid.flashLayer(d.pane, d.layer, 300);
+  }
+  renderPicks();
+  renderDraw();
+}
+function renderPicks() {
+  const box = $('ex-picks');
+  const mine = picks.filter((x) => x.slide === activeSlide());
+  box.replaceChildren(...mine.map((x) => {
+    const rm = h('button', { 'aria-label': 'Remove this example', title: 'Remove' }, '✕');
+    rm.onclick = () => { picks.splice(picks.indexOf(x), 1); renderPicks(); renderDraw(); };
+    return h('span', { class: `exc${x.neg ? ' neg' : ''}`, title: `${x.layer} #${x.index}` },
+      h('span', { class: 'sw', style: `background: ${x.color || '#9aa3ad'}; width: 8px; height: 8px` }), `${x.neg ? 'not ' : ''}${x.cls || 'object'} #${x.index}`, rm);
+  }));
+  if (mine.length) {
+    const clr = h('button', { class: 'btn ghost', style: 'font-size: 11px; padding: 1px 7px' }, 'clear');
+    clr.onclick = () => { for (const x of mine) picks.splice(picks.indexOf(x), 1); renderPicks(); renderDraw(); };
+    box.append(clr);
+  }
+}
+
+// ---- find all
+let findMode = 'objects', findCaps = null, findJob = null;
+for (const b of $('f-modes').children) b.onclick = () => { findMode = b.dataset.mode; renderDraw(); };
+$('f-strict').oninput = () => { $('f-strict-o').textContent = (+$('f-strict').value).toFixed(2); };
+$('f-size').oninput = () => { $('f-size-o').textContent = `${$('f-size').value} µm`; };
+async function ensureFindCaps() {
+  if (findCaps) return findCaps;
+  try { findCaps = await api('/find/capabilities'); } catch (e) { findCaps = { error: e.message }; }
+  return findCaps;
+}
+function exampleCount(sid, cb) {   // shapes of the draw layer in the draw class (from the layer's summary)
+  const p = curPane();
+  const L = p?.slide?.layers.get($('a-layer').value.trim() || 'Annotations');
+  if (!L) return cb({ n: 0, classes: [] });
+  getSummary(sid, L).then((sm) => cb({ n: (sm.classes || []).find((c) => c.name === $('a-class').value.trim())?.n || 0, classes: sm.classes || [] }))
+    .catch(() => cb({ n: 0, classes: [] }));
+}
+async function renderDraw() {
+  refreshDrawLists();
+  samStatus();
+  renderPicks();
+  const p = curPane(), sid = activeSlide();
+  const caps = await ensureFindCaps();
+  for (const b of $('f-modes').children) {
+    b.setAttribute('aria-pressed', String(b.dataset.mode === findMode));
+    b.disabled = !!caps.error || (b.dataset.mode === 'areas' && caps.areas === false);
+    if (b.dataset.mode === 'areas' && caps.areas === false) b.title = 'Needs scikit-learn: pip install "wissi-viz[analysis]"';
+  }
+  // what to search: object layers (not the examples' own layer), biggest detected first
+  const drawLayer = $('a-layer').value.trim() || 'Annotations';
+  const cands = layersOf(p).filter((L) => L.name !== drawLayer && (L.meta.count ?? 0) >= 3 && groupOf(L) !== 'analysis')
+    .sort((a, b) => (groupOf(b) === 'detected') - (groupOf(a) === 'detected') || (b.meta.count ?? 0) - (a.meta.count ?? 0));
+  const cs = $('f-cand'), keepC = cs.value;
+  cs.replaceChildren(...cands.map((L) => h('option', { value: L.name }, `${L.name} · ${(L.meta.count ?? 0).toLocaleString('en-US')}`)));
+  if (cands.some((L) => L.name === keepC)) cs.value = keepC;
+  const ws = $('f-where'), keepW = ws.value;
+  const regions = layersOf(p).filter((L) => ['manual', 'imported', 'detected'].includes(groupOf(L)) && (L.meta.count ?? 0) < 500 && L.name !== drawLayer);
+  ws.replaceChildren(h('option', { value: 'view' }, 'this view'), h('option', { value: 'slide' }, 'the whole slide'),
+    ...regions.map((L) => h('option', { value: `region:${L.name}` }, `inside ${L.name}`)));
+  ws.value = [...ws.options].some((o) => o.value === keepW) ? keepW : 'view';
+  $('f-cand-row').hidden = findMode !== 'objects';
+  $('f-size-row').hidden = findMode !== 'segment';
+  $('f-detail-row').hidden = findMode !== 'areas';
+  $('f-strict-row').hidden = findMode === 'areas';
+  const mine = picks.filter((x) => x.slide === sid);
+  const hint = $('f-hint'), run = $('f-run');
+  exampleCount(sid, ({ n, classes }) => {
+    const pos = n + mine.filter((x) => !x.neg).length;
+    $('ex-count').textContent = `${n} outline${n === 1 ? '' : 's'} · ${mine.length} picked`;
+    let msg = '', ok = !!sid && !caps.error && !findJob;
+    if (caps.error) msg = caps.error;
+    else if (findMode === 'objects') {
+      if (!cands.length) { msg = 'No object layer to search: add a cell table, or use “Segment everything”.'; ok = false; }
+      else if (!pos) { msg = `Mark at least one example of “${$('a-class').value || 'a class'}” (SAM, draw, or pick objects).`; ok = false; }
+      else msg = `${pos} example${pos === 1 ? '' : 's'} → every similar object of ${cs.value}.`;
+    } else if (findMode === 'segment') {
+      msg = pos ? `${caps.sam || 'SAM'} outlines every object, keeping those like your ${pos} example${pos === 1 ? '' : 's'}.`
+        : `${caps.sam || 'SAM'} outlines every object about ${$('f-size').value} µm across (no examples: keeps all). The whole slide can take long without a GPU.`;
+    } else {
+      const k = classes.filter((c) => c.n > 0);
+      msg = k.length >= 2 ? `Train on ${k.map((c) => `${c.name} (${c.n})`).join(', ')} in ${drawLayer} → map those areas.`
+        : `Draw shapes of at least two classes in ${drawLayer} (e.g. Tumor and Stroma: change the class, draw, repeat).`;
+      ok = ok && k.length >= 2;
+    }
+    hint.textContent = msg;
+    run.disabled = !ok;
+    run.textContent = findMode === 'areas' ? 'Find areas' : findMode === 'segment' ? 'Segment everything' : 'Find all like these';
+  });
+}
+
+function findScope() {
+  const v = $('f-where').value, p = curPane();
+  if (v === 'view' && p?.view) {
+    const hw = p.rect.w / 2 / p.view.scale, hh = p.rect.h / 2 / p.view.scale;
+    return { kind: 'view', rect: [p.view.cx - hw, p.view.cy - hh, p.view.cx + hw, p.view.cy + hh] };
+  }
+  if (v.startsWith('region:')) return { kind: 'region', layer: v.slice(7) };
+  return { kind: 'slide' };
+}
+$('f-run').onclick = async () => {
+  const sid = activeSlide();
+  if (!sid || findJob) return;
+  const drawLayer = $('a-layer').value.trim() || 'Annotations', cls = $('a-class').value.trim();
+  const mine = picks.filter((x) => x.slide === sid);
+  const body = {
+    mode: findMode, scope: findScope(), strictness: +$('f-strict').value,
+    examples: { layer: drawLayer, classes: cls ? [cls] : null, picks: mine.map(({ layer, index, neg }) => ({ layer, index, neg })), name: cls || null, color: $('a-color').value },
+    candidates: $('f-cand').value || null, object_um: +$('f-size').value, training: drawLayer, detail: $('f-detail').value,
+  };
+  if (!(await layerExists(drawLayer))) body.examples.layer = null;
+  try {
+    const job = await api(`/slides/${enc(sid)}/find`, body);
+    trackJob(job, sid);
+  } catch (e) { toast({ kind: 'bad', title: 'Could not start', sub: e.message, ms: 8000 }); log(`find: ${e.message}`, true); }
+};
+async function layerExists(name) { return !!curPane()?.slide?.layers.get(name); }
+$('f-cancel').onclick = () => { if (findJob) api(`/jobs/${enc(findJob.id)}/cancel`, {}).catch(() => {}); };
+function trackJob(job, sid) {
+  findJob = job;
+  $('f-job').hidden = false;
+  $('f-run').disabled = true;
+  $('f-run').classList.add('busy');
+  let lastRefresh = 0;
+  const tick = async () => {
+    let j;
+    try { j = await api(`/jobs/${enc(job.id)}`); } catch (e) { j = { state: 'error', error: e.message }; }
+    $('f-bar').style.width = `${Math.round((j.progress || 0) * 100)}%`;
+    $('f-msg').textContent = `${j.message || j.state}${j.seconds != null ? ` · ${j.seconds} s` : ''}`;
+    if (j.state === 'running' || j.state === 'queued') {
+      if (performance.now() - lastRefresh > 3000) { lastRefresh = performance.now(); grid.refreshAnnotations(sid); }   // partial results
+      setTimeout(tick, 400);
+      return;
+    }
+    findJob = null;
+    $('f-job').hidden = true;
+    $('f-run').classList.remove('busy');
+    grid.refreshAnnotations(sid);
+    if (j.state === 'done') {
+      const r = j.result;
+      findResults.unshift({ ...r, slide: sid, title: j.title });
+      renderFindResults(true);
+      toast({ kind: 'analysis', title: `${j.title}: ${r.count.toLocaleString('en-US')} ${r.mode === 'areas' ? 'areas' : 'found'}`, sub: `${r.layer} · ${r.where}`,
+        action: { label: 'Show', fn: () => showFound(r.layer, sid) }, ms: 8000 });
+      setTimeout(() => showFound(r.layer, sid, false), 400);
+      log(`${j.title}: ${r.count} in ${r.where} (${r.seconds} s)${r.note ? ` · ${r.note}` : ''}`);
+    } else if (j.state === 'cancelled') { toast({ title: 'Cancelled' }); log('find: cancelled'); }
+    else { toast({ kind: 'bad', title: `${j.title || 'Find'} failed`, sub: j.error, ms: 10000 }); log(`find: ${j.error}`, true); }
+    renderDraw();
+  };
+  tick();
+}
+function showFound(layer, sid, flash = true) {
+  if (activeSlide() !== sid) return;
+  grid.setLayerVisible(active, layer, true);
+  if (flash) grid.flashLayer(active, layer, 1200);
+  scheduleInspector();
+}
+const findResults = [];
+function renderFindResults(fresh = false) {
+  const box = $('f-results');
+  box.replaceChildren(...findResults.slice(0, 8).map((r, i) => {
+    const card = h('div', { class: `result${fresh && i === 0 ? ' new' : ''}`, dataset: { layer: r.layer } });
+    const count = h('span', { class: 'chip' }, `${r.count.toLocaleString('en-US')}${r.of && r.mode !== 'areas' ? ` of ${r.of.toLocaleString('en-US')}` : ''}`);
+    card.append(h('div', { class: 'row' }, h('b', { class: 'grow', style: 'font-weight: 600' }, r.layer), count));
+    if (r.kpis?.length) card.append(h('div', { class: 'kpis' }, ...r.kpis.map(([k, v]) => h('span', { class: 'kpi' }, h('span', { class: 'k' }, k), h('span', { class: 'v' }, v)))));
+    if (r.result) {   // live strictness: the server keeps the scores, so this re-filters without measuring again
+      const out = h('output', { class: 'mono' }, (+r.strictness).toFixed(2));
+      const sl = h('input', { type: 'range', min: 0, max: 1, step: 0.05, value: r.strictness, 'aria-label': `Strictness of ${r.layer}` });
+      let t = 0;
+      sl.oninput = () => {
+        out.textContent = (+sl.value).toFixed(2);
+        clearTimeout(t);
+        t = setTimeout(async () => {
+          try {
+            const res = await api(`/slides/${enc(r.slide)}/find/threshold`, { result: r.result, strictness: +sl.value });
+            r.count = res.count; r.strictness = res.strictness;
+            count.textContent = `${res.count.toLocaleString('en-US')} of ${res.of.toLocaleString('en-US')}`;
+            grid.refreshAnnotations(r.slide);
+          } catch (e) { log(`strictness: ${e.message}`, true); }
+        }, 220);
+      };
+      card.append(h('label', { class: 'field' }, 'Strictness', sl, out));
+    }
+    if (r.note) card.append(h('div', { class: 'panel-note' }, r.note));
+    const show = h('button', { class: 'btn grow' }, 'Show');
+    show.onclick = () => showFound(r.layer, r.slide);
+    const rm = h('button', { class: 'btn', title: 'Remove this layer from the slide' }, 'Remove');
+    rm.onclick = () => api(`/slides/${enc(r.slide)}/annotations?layer=${enc(r.layer)}`, null, 'DELETE')
+      .then(() => { findResults.splice(findResults.indexOf(r), 1); grid.refreshAnnotations(r.slide); renderFindResults(); toast({ title: `Removed ${r.layer}` }); })
+      .catch((e) => log(`remove: ${e.message}`, true));
+    card.append(h('div', { class: 'row' }, show, rm));
+    return card;
+  }));
+}
 
 // ------------------------------------------------------------------------------------------------ HUD on the slide
 function placeIn(elm, cx, cy, dx = 16, dy = 12) {
@@ -914,10 +1582,11 @@ function placeIn(elm, cx, cy, dx = 16, dy = 12) {
 }
 
 let lastClick = { x: 0, y: 0 };
-grid.addEventListener('pointerdown', (e) => { lastClick = { x: e.clientX, y: e.clientY }; closeRadial(); closeMenu(); }, true);
+grid.addEventListener('pointerdown', (e) => { lastClick = { x: e.clientX, y: e.clientY }; lastMods = { shift: e.shiftKey }; closeRadial(); closeMenu(); }, true);
 grid.addEventListener('paneclick', () => hideCard());
 grid.addEventListener('objectclick', async (e) => {
   const d = e.detail;
+  if (picking) { addPick(d); return; }
   const sid = slides.find((x) => x.id === d.slide) ? d.slide : panes[d.pane];
   let f = null;
   try { f = await api(`/slides/${enc(sid)}/annotations/feature/${d.index}?layer=${enc(d.layer)}&pct=1`); } catch (_) { f = { properties: d.properties || {}, percentiles: {}, order: [] }; }
@@ -1011,16 +1680,18 @@ document.addEventListener('keydown', (e) => {
   const mod = isMac ? e.metaKey : e.ctrlKey;
   if (mod && e.key.toLowerCase() === 'o') { e.preventDefault(); e.shiftKey ? openFolder() : openSlides(); return; }
   if (mod && e.key.toLowerCase() === 'l') { e.preventDefault(); addLayer(); return; }
-  if (e.key === 'Escape') { hideCard(); closeRadial(); closeMenu(); return; }
+  if (e.key === 'Escape') { hideCard(); closeRadial(); closeMenu(); if (picking) setPicking(false); if ($('picker').classList.contains('on') && !typing(e.target)) closePicker(); return; }
   if (mod || e.altKey || typing(e.target) || document.querySelector('dialog[open]')) return;
   const k = e.key;
   if (k >= '1' && k <= '8' && !e.repeat) { const [t, label] = TOOLS[+k - 1]; setTool(t); keyFlash(k, label); return; }
-  const tabs = { l: ['layers', 'Layers'], a: ['analyze', 'Analyze'], m: ['measure', 'Measure'], d: ['draw', 'Draw'] };
+  const tabs = { l: ['layers', 'Layers'], i: ['image', 'Image'], a: ['analyze', 'Analyze'], m: ['measure', 'Measure'], d: ['draw', 'Annotate'] };
   const lk = k.toLowerCase();
   if (tabs[lk] && !e.shiftKey) { setTab(tabs[lk][0]); keyFlash(k.toUpperCase(), tabs[lk][1]); return; }
   if (lk === 's' && hoveredLayer) { toggleSolo(hoveredLayer); keyFlash('S', `solo ${hoveredLayer}`); return; }
   if (lk === 'h' && hoveredLayer) { toggleLayer(hoveredLayer); keyFlash('H', `${hoveredLayer}`); return; }
   if (lk === 'f') { grid.fit('all'); keyFlash('F', 'fit'); return; }
+  if (lk === 'p') { setPicking(!picking); if (picking) setTab('draw'); keyFlash('P', picking ? 'pick objects' : 'picking off'); return; }
+  if (lk === 'o') { toggleMap(); keyFlash('O', 'overview'); return; }
   if (k === '?') { $('help').showModal(); return; }
   if (k === '/') { e.preventDefault(); setTab('layers'); $('l-filter').focus(); }
 });
@@ -1048,9 +1719,55 @@ function wire() {
   for (const b of $('tabs').children) b.onclick = () => setTab(b.dataset.tab);
   for (const b of $('l-scope').children) b.onclick = () => { for (const x of $('l-scope').children) x.setAttribute('aria-pressed', String(x === b)); };
   $('l-filter').oninput = () => renderLayers();
+  for (const b of $('l-mode').children) b.onclick = () => { layerMode = b.dataset.mode; lsSet('wissi-layer-mode', layerMode); renderLayers(); };
+  $('s-filter').oninput = () => renderList();
+  $('s-newproj').onclick = () => newProject([]);
+  // file picker
+  $('pk-up').onclick = () => { if (pk.parent != null) browse(pk.parent); };
+  $('pk-filter').oninput = () => renderEntries();
+  $('pk-filter').onkeydown = (e) => {
+    if (e.key !== 'Enter') return;
+    const v = $('pk-filter').value.trim();
+    if (/^(\/|~|[a-z]:[\\/])/i.test(v)) { browse(v); return; }   // a typed path: go there
+    const first = $('browser').querySelector('a');
+    if (first) first.dataset.kind === 'folder' ? first.click() : first.dispatchEvent(new MouseEvent('dblclick'));
+  };
+  $('pk-close').onclick = closePicker;
+  $('pk-folder').onclick = () => openPaths([pk.dir]);
+  $('pk-open').onclick = () => openPaths([...pk.sel]);
+  // image tab
+  $('i-scope').onchange = () => renderImage();
+  $('i-log').onchange = () => document.querySelectorAll('#disp-body canvas').forEach((c) => c._redraw?.());
+  $('i-link').onclick = () => { linkCh = !linkCh; $('i-link').setAttribute('aria-pressed', String(linkCh)); $('i-link').classList.toggle('on', linkCh); };
+  $('i-auto').onclick = async () => {
+    const p = curPane(), sid = p?.slide?.info?.id;
+    if (!sid) return;
+    const hist = await getHist(sid, histRect(p)).catch(() => null);
+    if (!hist) return;
+    if (p.slide.info.mode === 'channels') hist.channels.forEach((c, i) => grid.setChannel(panesOf(sid), i, { min: Math.round(c.p['0.1']), max: Math.max(Math.round(c.p['0.1']) + 1, Math.round(c.p['99.9'])) }));
+    else autoLevels(sid, hist);
+    renderImage();
+    toast({ title: 'Auto contrast', sub: $('i-scope').selectedOptions[0].text, ms: 2000 });
+  };
+  $('i-reset').onclick = () => {
+    const p = curPane(), info = p?.slide?.info;
+    if (!info) return;
+    const sid = info.id;
+    if (info.mode === 'channels') (info.channels || []).forEach((c, i) => grid.setChannel(panesOf(sid), i, { visible: true, gamma: 1,
+      min: c.window ? c.window[0] : 0, max: c.window ? c.window[1] : (info.dtype === 'uint16' ? 65535 : 255) }));
+    else { grid.setAdjust(panesOf(sid), { brightness: 0, contrast: 1, gamma: 1, invert: false }); grid.setStain(panesOf(sid), 'off'); }
+    renderImage();
+  };
+  $('i-scalebar').onchange = () => setScaleBar($('i-scalebar').checked);
+  $('i-fps').onchange = () => setPerf($('i-fps').checked);
+  $('fps').onclick = () => setPerf(!perfOn);
+  // view tools on the slide
+  for (const b of $('vtools').querySelectorAll('button')) b.onclick = () => viewTool(b.dataset.v, b);
+  $('minimap').onpointerdown = (e) => { mapNav(e); $('minimap').setPointerCapture(e.pointerId); $('minimap').onpointermove = mapNav; };
+  $('minimap').onpointerup = () => { $('minimap').onpointermove = null; };
+  grid.addEventListener('views', () => { drawMap(); showMag(); });
   $('ms-layer').onchange = () => renderMeasure();
   $('an-objects').onchange = () => renderAnalyze();
-  $('disp').ontoggle = () => renderDisplay(curPane());
   const acts = { open: openSlides, folder: openFolder, connect: openConnect };
   document.querySelectorAll('[data-act]').forEach((b) => (b.onclick = acts[b.dataset.act]));
   $('c-form').onsubmit = async (e) => {
@@ -1072,25 +1789,133 @@ function wire() {
     if (list.length) await openPaths(list);
     $('paths').value = '';
   };
-  grid.addEventListener('activepane', (e) => { active = e.detail.pane; renderList(); renderCrumb(); hideCard(); scheduleInspector(); });
-  grid.addEventListener('slideload', () => { renderCrumb(); scheduleInspector(); });
+  grid.addEventListener('activepane', (e) => { active = e.detail.pane; renderList(); renderCrumb(); hideCard(); scheduleInspector(); loadMap(); });
+  grid.addEventListener('slideload', () => { renderCrumb(); scheduleInspector(); loadMap(); });
   grid.addEventListener('layers', () => scheduleInspector());
   // drag-over highlight (the drop itself is read natively, with full paths)
   let dragDepth = 0;
-  document.addEventListener('dragenter', (e) => { e.preventDefault(); dragDepth++; document.body.classList.add('drag'); });
-  document.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('drag'); } });
+  const fromOutside = (e) => !e.dataTransfer?.types?.includes('text/wissi-slide');   // not a slide dragged in the list
+  document.addEventListener('dragenter', (e) => { if (!fromOutside(e)) return; e.preventDefault(); dragDepth++; document.body.classList.add('drag'); });
+  document.addEventListener('dragend', () => { dragDepth = 0; document.body.classList.remove('drag'); });
+  document.addEventListener('dragleave', (e) => { if (!fromOutside(e)) return; if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('drag'); } });
   document.addEventListener('dragover', (e) => e.preventDefault());
   document.addEventListener('drop', (e) => {
     e.preventDefault(); dragDepth = 0; document.body.classList.remove('drag');
+    if (!fromOutside(e)) return;
     if (!native() && CAPS.open) showPathBox('drop');         // a browser can't see a dropped file's path
   });
   applyDraw();
+  setScaleBar(lsGet('wissi-scalebar', '1') !== '0');
+  setPerf(perfOn);
+  toggleMap(mapOn);
   grid.hoverEvents = true;
   grid.contextEvents = true;
 }
 
 /** Show these slide ids in panes (1–32), as if picked in the slide list. */
 function showSlides(ids) { panes = ids.filter((id) => slides.some((x) => x.id === id)).slice(0, MAX_PANES); active = 0; apply(); }
+
+// ------------------------------------------------------------------------------------------------ view tools on the slide
+function viewTool(v, b) {
+  const p = curPane();
+  const view = p?.view;
+  if (v === 'in' || v === 'out') { if (view) grid.goTo(active, view.cx, view.cy, { zoom: view.scale * (v === 'in' ? 2 : 0.5) }); }
+  else if (v === 'fit') grid.fit(panes.length > 1 && $('sync').value !== 'none' ? 'all' : active);
+  else if (v === 'one') { if (view) grid.goTo(active, view.cx, view.cy, { zoom: 1 / (window.devicePixelRatio || 1) }); }
+  else if (v === 'mag') {
+    if (!view) return;
+    if (!p.slide?.info?.mpp) { toast({ kind: 'bad', title: 'No µm per pixel', sub: 'this slide has no pixel size, so magnifications are unknown' }); return; }
+    grid.goTo(active, view.cx, view.cy, { magnification: +b.dataset.m });
+  } else if (v === 'map') toggleMap();
+  else if (v === 'scale') setScaleBar(b.getAttribute('aria-pressed') !== 'true');
+  else if (v === 'snap') snapshot();
+  else if (v === 'full') {
+    if (document.fullscreenElement) document.exitFullscreen?.();
+    else ($('main').requestFullscreen || $('main').webkitRequestFullscreen)?.call($('main'));
+  }
+}
+function showMag() {
+  const p = curPane(), mpp = p?.slide?.info?.mpp;
+  const el = $('v-mag');
+  if (!p?.view || !mpp) { el.textContent = '–'; return; }
+  const mag = 10 / (mpp[0] / p.view.scale);   // 10 µm per screen px ≈ 1×
+  el.textContent = mag >= 10 ? `${Math.round(mag)}×` : `${mag.toFixed(1)}×`;
+  for (const b of $('vtools').querySelectorAll('[data-v=mag]')) b.classList.toggle('on', Math.abs(Math.log(mag / +b.dataset.m)) < 0.06);
+}
+function setScaleBar(on) {
+  grid.setAttribute('scalebar', on ? 'true' : 'false');
+  $('vtools').querySelector('[data-v=scale]').setAttribute('aria-pressed', String(on));
+  $('i-scalebar').checked = on;
+  lsSet('wissi-scalebar', on ? '1' : '0');
+}
+async function snapshot() {
+  const p = curPane();
+  if (!p?.view) return;
+  const blob = await grid.snapshot(active, { scaleBar: grid.getAttribute('scalebar') !== 'false' });
+  if (!blob) return;
+  const sl = slides.find((x) => x.id === activeSlide());
+  const name = `${(sl?.name || 'slide').replace(/\.[^.]+$/, '')} ${Math.round(p.view.cx)},${Math.round(p.view.cy)}.png`.replace(/[\\/:*?"<>|]+/g, '_');
+  const a = h('a', { href: URL.createObjectURL(blob), download: name });
+  document.body.append(a); a.click(); a.remove();
+  toast({ title: 'Snapshot saved', sub: name, ms: 3000 });
+}
+// overview map: the slide's thumbnail with the active pane's view on it; click or drag to go there
+let mapOn = lsGet('wissi-map', '0') === '1', mapFor = null;
+function toggleMap(on = !mapOn) {
+  mapOn = on;
+  lsSet('wissi-map', on ? '1' : '0');
+  $('vtools').querySelector('[data-v=map]').setAttribute('aria-pressed', String(on));
+  $('minimap').hidden = !on;
+  if (on) loadMap();
+}
+function loadMap() {
+  if (!mapOn) return;
+  const sid = curPane()?.slide?.info?.id;
+  if (!sid || mapFor === sid) { drawMap(); return; }
+  mapFor = sid;
+  const img = $('minimap').querySelector('img');
+  img.onload = () => drawMap();
+  img.src = `${API}/slides/${enc(sid)}/thumbnail?size=440`;
+}
+function drawMap() {
+  if (!mapOn) return;
+  const p = curPane(), info = p?.slide?.info;
+  const img = $('minimap').querySelector('img'), cv = $('minimap').querySelector('canvas');
+  if (!info || !p.view || !img.naturalWidth) return;
+  if (mapFor !== info.id) { loadMap(); return; }
+  const w = img.clientWidth, hh = img.clientHeight;
+  cv.width = w; cv.height = hh; cv.style.width = `${w}px`; cv.style.height = `${hh}px`;
+  const g = cv.getContext('2d'), k = w / info.width;
+  const vw = p.rect.w / p.view.scale, vh = p.rect.h / p.view.scale;
+  const x = (p.view.cx - vw / 2) * k, y = (p.view.cy - vh / 2) * k;
+  g.clearRect(0, 0, w, hh);
+  g.fillStyle = 'rgba(0,0,0,.35)'; g.fillRect(0, 0, w, hh);
+  g.clearRect(x, y, vw * k, vh * k);
+  g.strokeStyle = '#5ed0ff'; g.lineWidth = 2; g.strokeRect(x, y, Math.max(3, vw * k), Math.max(3, vh * k));
+}
+function mapNav(e) {
+  const p = curPane(), info = p?.slide?.info, img = $('minimap').querySelector('img');
+  if (!info || !p.view) return;
+  const r = img.getBoundingClientRect();
+  const fx = (e.clientX - r.left) / r.width, fy = (e.clientY - r.top) / r.height;
+  grid.goTo(active, Math.max(0, Math.min(1, fx)) * info.width, Math.max(0, Math.min(1, fy)) * info.height, { animate: false });
+}
+// FPS: frames the viewer drew in the last half second (idle when nothing moves: it only draws on change)
+let perfOn = lsGet('wissi-perf', '0') === '1', lastFrames = 0, lastFpsAt = performance.now();
+function setPerf(on) { perfOn = on; lsSet('wissi-perf', on ? '1' : '0'); $('perf').style.display = on ? 'block' : 'none'; $('i-fps').checked = on; }
+setInterval(() => {
+  const t = performance.now(), n = grid.framesDrawn || 0;
+  const fps = Math.round(((n - lastFrames) * 1000) / Math.max(1, t - lastFpsAt));
+  lastFrames = n; lastFpsAt = t;
+  const el = $('fps');
+  el.textContent = fps > 1 ? `${fps} fps` : 'idle';
+  el.classList.toggle('hot', fps > 1);
+  if (perfOn) {
+    let st = {};
+    try { st = grid.stats?.() || {}; } catch (_) { /* viewer not ready */ }
+    $('perf').textContent = `${fps > 1 ? `${fps} fps` : 'idle'} · ${(grid._frameMs || 0).toFixed(1)} ms/frame · ${st.textures ?? 0} tiles · ${st.textureMB ?? 0} MB GPU`;
+  }
+}, 500);
 
 window.wissiApp = { onResult, activeSlide, showSlides, setTool, setTab, toast };
 
@@ -1099,6 +1924,7 @@ async function start() {
   await customElements.whenDefined('wissi-viz');
   const st = await call('state');
   slides = st.slides || [];
+  projects = st.projects || [];
   // ?show=a,b (an embedding page picks the panes), else the session's choice, else the first four slides
   const asked = (new URLSearchParams(location.search).get('show') || '').split(',').filter((id) => slides.some((x) => x.id === id));
   panes = (asked.length ? asked : st.show && st.show.length ? st.show : slides.slice(0, Math.min(4, slides.length)).map((x) => x.id)).slice(0, MAX_PANES);

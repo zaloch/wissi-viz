@@ -288,6 +288,7 @@ def segment_slide(
         raise ValueError(f'unknown model {model!r} (cellpose | classpose | classic)')
     F = _features(parts, rgb, names, mpp)
     F.name = 'cells'
+    F.style = {**(F.style or {}), 'origin': 'detected'}
     p = annio.write_geoparquet(F, out, slide=Path(slide).name)
     log(f'{len(F):,} cells → {p} ({time.time() - t0:.0f} s)')
     return p

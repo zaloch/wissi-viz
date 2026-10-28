@@ -33,6 +33,10 @@
 - **Formats:** SVS, CZI, OME-TIFF, NDPI, VSI, ZVI, DICOM, SCN, AFI and more, plus vendor tile APIs (PathCore, HALO Link, any HTTP tile service) through connectors.
 - **Millions of cells.** Object tables from QuPath, HALO, CellProfiler, GeoJSON, label masks or AnnData. They are shown as aggregated dots when zoomed out and as GPU-drawn outlines up close, coloured by class or by any measurement.
 - **Annotations with SAM 2.1.** Click an object or drag a box in any of the 32 panes and Segment Anything outlines it; pick a class and accept. Runs on PyTorch (CUDA / Apple / CPU) or ONNX Runtime (CUDA / DirectML / CPU), with a model-free fallback. Drawing tools too (point, rectangle, ellipse, polygon, freehand, line).
+- **Find all like these.** Mark a few examples (SAM, drawing, or picking objects) and find every similar one in the
+  view, a region or the whole slide: similar objects of a cell layer, *segment everything* with SAM and keep the
+  similar, or a pixel classifier for areas (tumour, stroma, …). Background jobs with progress, cancel and a live
+  strictness slider.
 - **An efficient annotation format.** GeoParquet (≈3× smaller than GeoJSON, spatially filterable, opens in GeoPandas, QGIS and DuckDB), with `wissi-viz convert` to and from QuPath GeoJSON, HALO, Aperio and ASAP XML, CSV, COCO and label masks.
 - **Measurements of any region.** Shape, stain or channel intensity, texture, and — with cells — counts, density, composition, diversity, neighbour distances, contacts and clustering (Clark–Evans, Morisita, Ripley), per class, in one exportable table.
 - **Spatial analysis:**
@@ -40,8 +44,10 @@
   - Ripley's K/L/g, co-location, cellular neighbourhoods, contact graphs, Moran's I, IHC H-score.
   - Each analysis produces a table, a slide overlay and a chart, from Python or from the app's **Analyze** tab.
 - **An app with an inspector.** The desktop app, `wissi-viz serve` and NiceGUI's `WissiApp` share one interface: a
-  slide list, a tool bar, and an inspector that follows the active pane (Layers, Analyze, Measure, Draw). Click a cell
-  for its measurements and where it ranks in its layer; right-click for actions under the cursor; `?` lists the keys.
+  slide list grouped into projects and folders, a tool bar, a view bar on the slide (zoom, magnifications, overview
+  map, scale bar, snapshot), and an inspector that follows the active pane (Layers, Image, Annotate, Analyze,
+  Measure). Per-channel histograms for fluorescence, per scene for CZI. Click a cell for its measurements and where
+  it ranks in its layer; right-click for actions under the cursor; `?` lists the keys.
 - **Built for servers:** memory and disk tile caches with byte budgets, memory-mapped object layers, an integration probe and a load tester.
 - **Permissive licences only.** The default install is BSD / MIT / Apache-2.0 / ISC, and a test enforces it. LGPL readers are an opt-in extra.
 
@@ -56,7 +62,8 @@ uv tool install "wissi-viz[desktop]"    # the desktop app
 cell, runs the analyses and opens them; the benchmark measures this machine:
 
 ```bash
-uv run wissi-viz --demo              # needs the [demo] extra · 5 images (~1.2 GB): 3 H&E + 2 multiplex IF
+uv run wissi-viz --demo              # needs the [demo] extra · asks: quick or full
+uv run wissi-viz --demo quick        # 5 images (~1.2 GB): 3 H&E + 2 multiplex IF
 uv run wissi-viz --demo full         # 32 images (~7 GB): 26 H&E (18 tumour types, lymph-node metastases) + 6 IF
 uv run wissi-viz --benchmark         # report → ./wissi-viz-benchmark.md
 ```
@@ -74,7 +81,8 @@ uv run wissi-viz --benchmark         # report → ./wissi-viz-benchmark.md
 | `all` | everything permissive above, except `desktop` |
 | `lgpl` | opt-in: OpenSlide (MRXS, BIF) and libCZI |
 
-wissi-viz runs on Windows, macOS (Apple silicon and Intel) and Linux (x86_64, ARM), with Python 3.10–3.14.
+wissi-viz runs on Windows, macOS (Apple silicon and Intel) and Linux (x86_64, ARM), with Python 3.10–3.14. On a
+network that inspects HTTPS (corporate), add `--system-certs` to any command (or set `WISSI_VIZ_SYSTEM_CERTS=1`).
 
 ## Quick start
 
@@ -93,13 +101,17 @@ wissi-viz desktop --connect my_api.json    # images from a tile API (or: Connect
 
 | Tab | What it does |
 |---|---|
-| **Layers** (`L`) | image display (stain view, brightness, contrast, channels); per layer: show / hide (`H`), solo (`S`), opacity, outline, fill, colour by class or any measurement, class toggles with counts and colours, zoom / export / summary / remove; hovering a row pulses its objects on the slide |
+| **Layers** (`L`) | nested, by source (drawn & SAM · found · detected · analysis · imported) or flat; per layer: show / hide (`H`), solo (`S`), opacity, outline, fill, colour by class or any measurement, class toggles with counts and colours, zoom / export / summary / remove; hovering a row pulses its objects on the slide |
+| **Image** (`I`) | histograms of the whole image, the view or a CZI scene; per fluorescence channel: drag min / max, gamma, colour, solo, auto; link channels; brightfield levels, stain view |
+| **Annotate** (`D`) | ① examples: SAM, drawing tools, or pick objects (`P`); ② find all like them: similar objects, segment everything, or areas |
 | **Analyze** (`A`) | density & hotspots, nearest neighbours, proximity, margin bands, infiltration, composition, Ripley's L, neighbour enrichment, cellular neighbourhoods, contact graph, Moran's I: each run adds layers to the slide and a card with numbers, a chart, the table and a CSV |
 | **Measure** (`M`) | count, share and averages per class, cells per mm² of tissue, region areas; shape, intensity, texture and cell statistics for every region |
-| **Draw** (`D`) | the layer and class that drawings and SAM masks are saved to |
 
-Tools are on keys `1`–`8` (pan, point, rectangle, ellipse, polygon, freehand, ruler, SAM). Click an object for its
-card, right-click for a radial menu, `?` for every shortcut.
+Tools are on keys `1`–`8` (pan, point, rectangle, ellipse, polygon, freehand, ruler, SAM); the view bar on the slide
+zooms to 2.5–40×, shows the overview map (`O`), toggles the scale bar and saves a snapshot; the footer shows frames
+per second. Click an object for its card, right-click for a radial menu, `?` for every shortcut.
+
+![Find all: three picked nuclei as examples, every similar nucleus marked, with the result's strictness slider](docs/screenshots/find-all.jpg)
 
 ![The Analyze tab: density and Getis-Ord hotspots of the nuclei, with the result's chart](docs/screenshots/analyze.jpg)
 

@@ -136,12 +136,16 @@ class CziSource(SlideSource):
         def pos(e, d, default=0):
             return e.start[dims.index(d)] if d in dims else default
 
+        def scene_of(e) -> int:  # czifile's scene_index (from the S dimension); -1: no scene
+            si = getattr(e, 'scene_index', None)
+            return int(si) if si is not None else int(pos(e, 'S', -1))
+
         # keep entries of the requested scene / Z / T (other non-spatial dims: their first value)
         other = [d for d in dims if d not in ('X', 'Y', 'C', 'S', 'Z', 'T')]
         first = {d: min(pos(e, d) for e in entries) for d in other}
         sel = []
         for i, e in enumerate(entries):
-            if scene is not None and getattr(e, 'scene_index', 0) not in (scene, -1):
+            if scene is not None and scene_of(e) not in (scene, -1):
                 continue
             if pos(e, 'Z') != z or pos(e, 'T') != t:
                 continue
@@ -208,6 +212,20 @@ class CziSource(SlideSource):
             tile_size=tile_size,
             background='#ffffff' if self._rgb else '#000000',
         )
+        # scenes (several tissue pieces / wells in one file): their bounds, for "zoom to scene" and per-scene contrast
+        scenes: dict[int, list[int]] = {}
+        for _, e in ref:
+            k = scene_of(e)
+            if k < 0:
+                continue
+            bx0, by0 = e.start[ix] - x0, e.start[iy] - y0
+            bx1, by1 = bx0 + e.shape[ix], by0 + e.shape[iy]
+            r = scenes.setdefault(k, [bx0, by0, bx1, by1])
+            r[0], r[1], r[2], r[3] = min(r[0], bx0), min(r[1], by0), max(r[2], bx1), max(r[3], by1)
+        if len(scenes) > 1:
+            self.info.extra['scenes'] = [
+                {'index': k, 'name': f'Scene {k + 1}', 'rect': scenes[k]} for k in sorted(scenes)
+            ]
         self._meta = meta
 
     # ---------------------------------------------------------------- per-thread file handles

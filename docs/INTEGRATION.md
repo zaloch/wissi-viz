@@ -1,6 +1,6 @@
 # Integrating wissi-viz
 
-*Current as of wissi-viz 0.9.1.* This guide covers how to put wissi-viz into an app: NiceGUI (wissi), other Python web frameworks, JavaScript frameworks and notebooks. It also covers:
+*Current as of wissi-viz 0.10.0.* This guide covers how to put wissi-viz into an app: NiceGUI (wissi), other Python web frameworks, JavaScript frameworks and notebooks. It also covers:
 - how to show large cell and object tables;
 - how to keep the viewer smooth, including on clients without a GPU;
 - how to connect a vendor tile API such as PathCore or HALO Link;
@@ -30,6 +30,7 @@
 | 0.8.0 | **Annotate, measure, demo.** Up to 32 panes; `wissi-viz serve` shows the app UI with a slide list. SAM 2.1 click / box annotation (PyTorch or ONNX Runtime, Apache-2.0 weights). GeoParquet annotation files and `wissi-viz convert`. Region and object metrics. `wissi-viz segment` (Cellpose-SAM, Classpose, classic). `wissi-viz --demo` / `--benchmark` on 32 public slides. | Optional: `[sam]` / `[sam-onnx]` extras (§15); `[demo]` for the demo (§17). Pages that loaded `/` for the bare element demo now use `/demo`. |
 | 0.9.0 | **Inspector.** The app's Layers / Analyze / Measure / Draw inspector, object cards with percentiles, hover tips, a radial menu and keyboard shortcuts (§12). Spatial analyses from the app and `wissi_viz.analyses` (§16). Layer summaries, colour-by and removal over HTTP. NiceGUI: `WissiApp` / `mount_app` (the whole app in a page), `on_object_hover` / `on_context` / `on_layers`, `flash_layer`, `summary`, `run_analysis`, and `analyses.echarts_option` for `ui.echart` (§2). **Connect…** and `--connect` for tile APIs (§7); `serve --allow-open` with an in-page file picker and `--key` (§8). | The app page's logic moved to `static/app.js`. The per-pane ⚙ menu is off in the app (its controls are in the inspector); the element keeps it. New viewer events: `objecthover`, `panecontext` (opt-in: `grid.hoverEvents`, `grid.contextEvents`) and `layers`; new methods `hitAt()` and `flashLayer()`. NiceGUI handlers now run once per event (they also ran a second time without the event's data). |
 | 0.9.1 | `--system-certs` / `WISSI_VIZ_SYSTEM_CERTS=1`: downloads trust the operating system's certificates, for networks that inspect HTTPS (§13). | Nothing; use the flag where downloads fail with `CERTIFICATE_VERIFY_FAILED`. `truststore` (MIT) is a new core dependency. |
+| 0.10.0 | **Find all, image tools, projects.** Annotate tab: examples (SAM, drawing, picked objects) → find all like them: similar objects, segment everything (SAM / classic) or areas (pixel classifier), in the view, a region or the whole slide, as background jobs with progress, cancel and a live strictness slider (§12, `wissi_viz.findall`, §16). Image tab: histograms of the whole image, the view or a CZI scene, with draggable windows, auto, link, solo. View bar on the slide (zoom, 1:1, 2.5–40×, overview map, scale bar, snapshot, full screen) and an FPS readout. Layers: nested / by source / flat views and source badges (`origin`, saved with layers). Slide list: projects and folder groups. In-page file picker with places, a path bar, multi-select and Open this folder (also in a browser window). `--demo` asks quick or full. | `scikit-learn` (BSD-3) joins the `analysis` extra. Layers you draw are tagged drawn / sam. The scale bar now shows after a pane change (it stayed hidden). Channel auto-contrast reads a finer level (bright structures saturated before). In the in-page picker a click selects; double-click or Open opens. The Draw tab is now Annotate (same key, `D`). |
 | 0.7.0 | **Desktop app and platform support.** `wissi-viz-app` opens the viewer in its own native window with its own icon (pywebview), as an option next to the embedded element. Windows, macOS and Linux are supported and CI-tested; packaging moved to uv (`uv.lock`, dependency groups). Python 3.10–3.11 work again (older czifile). | Nothing for embedded use. For the app: `uv tool install "wissi-viz[desktop]"` (§12). For development: `uv sync` (§13). |
 | 0.5.0 | **Object pyramid.** Millions of cells are shown as screen-sized aggregated dots, then as GPU-drawn outlines when zoomed in. There is a **server mode** (default) and a **client mode**. | Use `cached_object_layer` for big tables (§5). Choose `overlays: 'server'\|'client'\|'auto'`. |
 | 0.5.1 | **Polars reader.** `read_objects(engine='auto')` uses Polars, then pyarrow, then pandas. | `pip install "wissi-viz[polars]"`. |
@@ -615,13 +616,50 @@ uvx --from "wissi-viz[desktop]" wissi-viz-app   # try it without installing
 
 - **What's in the window:**
   - Open slides, a folder, or cells / annotations (CSV, TSV, Parquet, Feather, AnnData, GeoJSON, HALO XML) through native file dialogs, the **File** menu, or by **dropping files** onto the window.
-  - A slide list with thumbnails (click: show in the active pane; double-click: add a pane), 1–32 panes, sync, a tool bar (keys 1–8), and recent files on the start screen.
+  - A **slide list** with thumbnails (click: show in the active pane; double-click: add a pane), grouped into your own
+    **projects** (＋ makes one; drag slides onto it, or use a slide's ⋯ menu; saved between sessions) and then by
+    folder (or tile API), each group collapsible, with a filter box. The sample pack opens as four projects.
+  - An **in-page file picker** where there are no native dialogs (a browser window, `serve --allow-open`): places
+    (home, Desktop, Documents, Downloads, drives, recent folders), a clickable path, a filter that also takes a typed
+    path, sizes, click to select (shift / ⌘ for more), double-click to open, and **Open this folder**.
+  - 1–32 panes, sync, a tool bar (keys 1–8), and on the slide a **view bar**: zoom in / out, fit, 1:1, 2.5–40×
+    magnifications with the current one shown, an **overview map** (`O`; click or drag to go there), the **scale
+    bar**, a **snapshot** (PNG of the pane with its scale bar) and full screen. The footer shows **frames per second**
+    while the slide moves (click it for frame time and GPU memory on the slide).
   - The **inspector**, which follows the active pane:
-    - **Layers:** image display (stain view, brightness / contrast / gamma, or channels). Per layer: show / hide, solo, opacity, outline, fill, colour by class or any numeric column (with a legend), class toggles, counts and colours, and a menu (zoom to the layer, export, summary, remove). Hovering a row makes that layer's objects pulse on the slide.
-    - **Analyze:** the spatial analyses below (§16), grouped by what they need, each with its settings. A run adds its result layers to the slide (earlier results are switched off, not removed) and a card with headline numbers, a chart, the table and a CSV download.
-    - **Measure:** a summary of any layer (count, share and averages per class, cells per mm² of tissue, region areas) and the region measurements of §16.
-    - **Draw:** the layer, class and colour that drawings and SAM masks are saved to.
+    - **Layers** (`L`): three views: *Nested* (each layer with its classes), *By source* (Annotations · Found ·
+      Detected · Analysis · Imported, with show / hide all per group) and *Flat* (one line per layer); chips filter by
+      source, and every layer carries a source badge. Per layer: show / hide, solo, opacity, outline, fill, colour by
+      class or any numeric column (with a legend), class toggles, counts and colours, and a menu (zoom to the layer,
+      export, summary, remove). Hovering a row makes that layer's objects pulse on the slide.
+    - **Image** (`I`): histograms of the whole image, the view or a CZI **scene** (with links to each scene).
+      Fluorescence: per channel, drag the minimum / maximum on the histogram (shift-drag moves both), type them,
+      gamma, colour, show, solo (`S`) and auto (`A`, 0.1–99.9 %); *Auto all*; *Link channels* (one window for all);
+      *Reset*. Brightfield: R / G / B histogram, *Auto levels*, brightness / contrast / gamma, invert, stain view.
+      Settings apply to every pane showing the slide.
+    - **Annotate** (`D`): ① examples: the layer and class that drawings and SAM masks go to, plus **Pick objects**
+      (`P`: click objects of any layer as examples, shift-click for "not like this"); ② **find all like them**
+      (below) in this view, the whole slide or inside a region layer.
+    - **Analyze** (`A`): the spatial analyses below (§16), grouped by what they need, each with its settings. A run
+      adds its result layers to the slide (earlier results are switched off, not removed) and a card with headline
+      numbers, a chart, the table and a CSV download.
+    - **Measure** (`M`): a summary of any layer (count, share and averages per class, cells per mm² of tissue, region
+      areas) and the region measurements of §16.
+  - **Find all like them** (`wissi_viz.findall`; runs in the background with progress and *Cancel*; HTTP and Python
+    in §16):
+
+    | Way | Needs | What it does |
+    |---|---|---|
+    | **Similar objects** | examples; a layer of objects (detected cells, a cell table) | measures every object of the layer (log area, circularity, solidity, eccentricity, stain or channel means) and keeps those close to the examples (robustly standardised; "not like this" examples veto) |
+    | **Segment everything** | an object size, or examples | outlines every object with SAM 2.1 (or the classic colour fill without the model) from clicks at what stands out, then a grid; with examples, keeps those like them |
+    | **Areas** | shapes or strokes of ≥ 2 classes | trains a random forest on multi-scale colour, edge and texture features of their pixels and maps the classes over the scope (glass is left out) |
+
+    Results are new layers (*Found · Tumor*, *Segmented · …*, *Areas · …*; a run never overwrites another) with a
+    card whose **strictness** slider re-filters live, without measuring again. The model-free classic backend is
+    rougher than SAM 2.1: install `wissi-viz[sam]` (or `[sam-onnx]`) for real outlines.
   - On the slide: click an object for its card (measurements and their percentile within the layer), hover for its class, right-click for a radial menu (hide / solo the layer under the cursor, SAM, measure, copy coordinates, fit). `?` shows every shortcut.
+  - Every button of this page is clicked and checked in a real browser by `tests/test_buttons.py`; a visible button
+    without a check there fails the test.
   - Cell tables are compiled once into the cache and memory-mapped on later opens, as on the server (§5).
 - **How it works:** the tile server runs inside the app on 127.0.0.1 (random port, Host-checked, token on the app's own endpoints, §8). [pywebview](https://pywebview.flowrl.com) (BSD-3) shows it in the system web view:
 
@@ -778,8 +816,30 @@ Add your own with the `@analysis(key, name, group, description, params)` decorat
 | `GET …/annotations/feature/{i}?layer=…&pct=1` | one object, plus each measurement's percentile within its layer |
 | `POST …/annotations/style` `{layer, color_by, cmap}` | colour a layer by a numeric column (`null`: back to classes) |
 | `DELETE …/annotations?layer=…` | remove a layer from the slide |
+| `POST …/slides/{id}/find` `{mode, examples, candidates, training, scope, strictness, object_um, detail}` | find all like the examples (§12), in the background → the job; `mode`: `objects` · `segment` · `areas`; `examples`: `{layer, classes, picks: [{layer, index, neg}]}`; `scope`: `{kind: view, rect}` · `{kind: region, layer}` · `{kind: slide}` |
+| `GET {prefix}/jobs/{job}` · `POST …/jobs/{job}/cancel` · `GET …/slides/{id}/jobs` | a background job: state, progress, message, error, result |
+| `POST …/slides/{id}/find/threshold` `{result, strictness}` | re-filter a finished result without measuring again |
+| `GET {prefix}/find/capabilities` | the SAM backend, and whether areas (scikit-learn) are available |
+| `GET …/slides/{id}/histogram?rect=x0,y0,x1,y1` | per-channel (or R, G, B) histograms and 0.1 / 1 / 50 / 99 / 99.9 % percentiles; zero (unscanned) pixels counted apart |
 
-The last two, like adding annotations and running analyses, are edits: `create_router(..., allow_edit=False)` turns them off.
+Styling, removing, adding annotations, running analyses and finding are edits: `create_router(..., allow_edit=False)`
+turns them off.
+
+```python
+from wissi_viz import findall
+
+out = findall.find_objects(
+    registry,
+    'case1',
+    examples={'layer': 'Annotations', 'classes': ['Tumor']},
+    candidates='cells',
+    scope={'kind': 'slide'},
+    strictness=0.5,
+)
+findall.rethreshold(registry, out['result'], 0.8)  # stricter, no re-measuring
+findall.segment_everything(registry, 'case1', scope={'kind': 'view', 'rect': [0, 0, 4000, 4000]}, object_um=8)
+findall.find_areas(registry, 'case1', training='Annotations', detail='medium')  # ≥ 2 classes of shapes
+```
 
 ## 17. Segmentation, the public sample pack, demo and benchmark
 
@@ -790,6 +850,7 @@ wissi-viz segment slide.svs cells.parquet --model classpose  # H&E cell types, i
 uv run wissi-viz --demo [quick|full]                         # [demo] extra
 uv run wissi-viz --benchmark [quick|full]
 uv run wissi-viz --demo --system-certs                       # networks that inspect HTTPS (§13)
+# without quick / full, --demo asks which set (quick when there is no terminal)
 wissi-viz pack status | download | prepare | segment | analyze | open --set full
 ```
 

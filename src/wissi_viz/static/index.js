@@ -999,8 +999,10 @@ canvas.ov { pointer-events:none; }
 .pane.tool { cursor:crosshair; }
 .label { position:absolute; left:6px; top:6px; padding:2px 6px; border-radius:4px; background:rgba(0,0,0,.55);
   max-width:calc(100% - 60px); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; pointer-events:none; }
-.scale { position:absolute; left:6px; bottom:6px; pointer-events:none; padding:3px 6px 4px; border-radius:4px; background:rgba(0,0,0,.5); }
-.scale i { display:block; height:3px; background:#fff; box-shadow:0 0 2px #000; margin-top:2px; }
+.scale { position:absolute; left:8px; bottom:8px; pointer-events:none; padding:4px 8px 5px; border-radius:6px; background:rgba(0,0,0,.55);
+         font:11px ui-monospace, Menlo, Consolas, monospace; color:#fff; }
+.scale i { display:block; height:4px; background:#fff; box-shadow:0 0 2px #000; margin-top:3px; border:solid #fff; border-width:0 1px; }
+:host([scalebar=false]) .scale { display:none !important; }
 .legend { position:absolute; right:6px; bottom:34px; max-width:min(240px, 45%); max-height:45%; overflow:hidden; pointer-events:none;
   padding:5px 7px; border-radius:6px; background:rgba(0,0,0,.6); font-size:11px; line-height:1.35; }
 .legend:empty { display:none; }
@@ -1454,6 +1456,7 @@ export class WsiGrid extends HTMLElement {
       p.el = el;
       p.$label = el.querySelector('.label');
       p.$scale = el.querySelector('.scale');
+      p._scaleKey = p._scaleI = p._scaleS = null;   // new elements: the cached scale bar state is stale
       p.$coords = el.querySelector('.coords');
       p.$legend = el.querySelector('.legend');
       p.$msg = el.querySelector('.msg');
@@ -1990,7 +1993,43 @@ export class WsiGrid extends HTMLElement {
     if (this._lost) return;
     const t = now();
     try { this._frameBody(t); } finally { if (this.jsFrameMs) { this.jsFrameMs.push(now() - t); if (this.jsFrameMs.length > 20000) this.jsFrameMs.length = 0; } }
+    if (this._snaps?.length) this._takeSnaps();   // right after drawing: the WebGL buffer is still there
     this._probeCost(t);
+  }
+
+  /** A PNG of a pane as it is shown — image, layers, drawing overlay and (optionally) a scale bar: Promise<Blob>. */
+  snapshot(pane = 'active', { scaleBar = true } = {}) {
+    const p = this._pane(pane);
+    if (!p || !p.view) return Promise.resolve(null);
+    return new Promise((resolve) => { (this._snaps ||= []).push({ p, resolve, scaleBar }); this.requestRender(); });
+  }
+
+  _takeSnaps() {
+    const jobs = this._snaps.splice(0);
+    const W = this.$root.clientWidth || 1, H = this.$root.clientHeight || 1;
+    for (const { p, resolve, scaleBar } of jobs) {
+      const k = Math.max(1, this.dpr || 1);
+      const c = document.createElement('canvas');
+      c.width = Math.round(p.rect.w * k); c.height = Math.round(p.rect.h * k);
+      const g = c.getContext('2d');
+      for (const src of [this.$canvas, this.$ov]) {
+        if (!src || !src.width) continue;
+        const fx = src.width / W, fy = src.height / H;
+        g.drawImage(src, p.rect.x * fx, p.rect.y * fy, p.rect.w * fx, p.rect.h * fy, 0, 0, c.width, c.height);
+      }
+      const mpp = p.slide?.info?.mpp;
+      if (scaleBar && mpp) {
+        const umPerPx = mpp[0] / p.view.scale;
+        const target = 140 * umPerPx, pow = Math.pow(10, Math.floor(Math.log10(target)));
+        const nice = [1, 2, 5, 10].map((m) => m * pow).filter((v) => v <= target).pop() || pow;
+        const bw = (nice / umPerPx) * k, txt = nice >= 1000 ? `${nice / 1000} mm` : nice >= 1 ? `${nice} µm` : `${nice * 1000} nm`;
+        const x = 14 * k, y = c.height - 14 * k;
+        g.fillStyle = 'rgba(0,0,0,.55)'; g.fillRect(x - 8 * k, y - 26 * k, bw + 16 * k, 32 * k);
+        g.fillStyle = '#fff'; g.fillRect(x, y - 5 * k, bw, 5 * k);
+        g.font = `${12 * k}px ui-monospace, Menlo, monospace`; g.fillText(txt, x, y - 10 * k);
+      }
+      c.toBlob((b) => resolve(b), 'image/png');
+    }
   }
 
   // What a frame really costs the main thread: our JS *plus* the browser's style/paint/commit that follow the rAF
@@ -2022,6 +2061,7 @@ export class WsiGrid extends HTMLElement {
     const gap = this._prevFrameAt ? t - this._prevFrameAt : 1e9;
     const sample = gap < 250 ? gap : this._reqAt ? t - this._reqAt : 16;
     this._prevFrameAt = t;
+    this.framesDrawn = (this.framesDrawn || 0) + 1;
     this._frameMs = 0.75 * (this._frameMs || 16) + 0.25 * Math.min(500, Math.max(sample, 0));
     const dt = this._lastT ? Math.min(64, t - this._lastT) : 16;
     this._lastT = t;

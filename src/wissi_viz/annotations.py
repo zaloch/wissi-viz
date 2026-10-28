@@ -96,7 +96,9 @@ class AnnotationLayer:
     #: dots (one per ~4 screen px, with per-class counts) and, zoomed in, only the visible cells, tile by tile —
     #: so what a browser downloads scales with screen area, not with the number of objects
     pyramid: Any = 'auto'
-    #: where the layer came from, shown in the app: '' (a file, drawing or table) or 'analysis' (a result)
+    #: where the layer came from, shown in the app: 'drawn' | 'sam' | 'drawn+sam' (made in the viewer), 'found'
+    #: (find all), 'detected' (segmentation, tissue detection), 'analysis' (a result), 'imported' (a file or table);
+    #: '' = unknown (treated as imported). Saved with the layer (GeoParquet metadata, the cache format).
     origin: str = ''
 
     def __post_init__(self) -> None:
@@ -917,6 +919,7 @@ class AnnotationLayer:
                     'z',
                     'overview',
                     'pyramid',
+                    'origin',
                 )
             },
             'median_size': c.median_size,

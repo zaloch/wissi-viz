@@ -41,6 +41,8 @@ def write_czi(path, blocks, channel_names=None, mpp=None, compression=None):
         ptype = PIXEL[(a.dtype, spp)]
         sh, sw = a.shape[:2]
         dims = [('X', b['x'], b['w'], sw), ('Y', b['y'], b['h'], sh), ('C', b['c'], 1, 1), ('M', b.get('m', 0), 1, 1)]
+        if 's' in b:  # scene
+            dims.append(('S', b['s'], 1, 1))
         pos = base + len(body)
         de = _dir_entry(ptype, pos, dims, 2 if b.get('pyramid') else 0, 5 if compression == 'zstd' else 0)
         payload = a.tobytes()

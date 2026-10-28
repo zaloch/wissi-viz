@@ -203,7 +203,8 @@ def from_layer(layer: AnnotationLayer, ellipse_vertices: int = _ELLIPSE_VERTS) -
     F.class_colors = dict(layer.classes)
     F.name = layer.name
     F.style = {
-        k: getattr(layer, k) for k in ('line_width', 'fill_opacity', 'point_size', 'visible', 'detail_min_px', 'z')
+        k: getattr(layer, k)
+        for k in ('line_width', 'fill_opacity', 'point_size', 'visible', 'detail_min_px', 'z', 'origin')
     }
     F.props = _layer_props(layer, len(F))
     return F

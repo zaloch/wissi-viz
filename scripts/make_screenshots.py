@@ -229,6 +229,12 @@ def app_shots(slides: list[Path], cells: Path, out: Path, spot: tuple[float, flo
         _settle(pg, 4000)
         pg.screenshot(path=str(out / 'inspector.png'))
 
+        # find all: three large nuclei picked as examples, every similar nucleus in the view found
+        pg = page(1440, 900)
+        panes(pg, [ids[0]])
+        find_all_shot(pg, s, first, layer, sx, sy)
+        pg.screenshot(path=str(out / 'find-all.png'))
+
         # stain deconvolution: the same field, RGB vs haematoxylin only
         pg = page(1600, 900)
         panes(pg, [ids[0], ids[0]])
@@ -245,6 +251,40 @@ def app_shots(slides: list[Path], cells: Path, out: Path, spot: tuple[float, flo
         b.close()
     srv.stop()
     s.shutdown()
+
+
+def find_all_shot(pg, s, sid: str, layer: str, sx: float, sy: float) -> None:
+    """Annotate tab: pick three of the largest nuclei near (sx, sy) as examples, then "Find all like these" in the
+    view; the result layer, its card and the strictness slider are on screen."""
+    L = s.registry.layer(sid, layer)
+    c = L.compiled()
+    area = L.column_values('area_um2') if 'area_um2' in L.numeric_columns() else np.ones(len(L))
+    near = np.argsort((c.cx - sx) ** 2 + (c.cy - sy) ** 2)[:300]
+    typical = np.abs(area[near] - np.percentile(area, 85))  # typical large nuclei, not the outliers
+    picks = near[np.argsort(typical)][:3]
+    g = "document.getElementById('grid')"
+    pg.evaluate("() => window.wissiApp.setTab('draw')")
+    pg.click('#a-pick')
+    for i in picks:
+        pg.evaluate(f'([x, y]) => {g}.goTo(0, x, y, {{zoom: 2, animate: false}})', [float(c.cx[i]), float(c.cy[i])])
+        pg.wait_for_timeout(500)
+        box = pg.evaluate(f"""() => {{ const e = {g}, p = e.panes[0], r = e.getBoundingClientRect();
+            return [r.left + p.rect.x + p.rect.w / 2, r.top + p.rect.y + p.rect.h / 2]; }}""")
+        pg.mouse.click(*box)
+        pg.wait_for_timeout(300)
+    pg.click('#a-pick')
+    pg.evaluate(f'([x, y]) => {g}.goTo(0, x, y, {{magnification: 20, animate: false}})', [sx, sy])
+    pg.fill('#a-class', 'Large nuclei')
+    pg.dispatch_event('#a-class', 'change')
+    pg.select_option('#f-cand', layer)
+    pg.select_option('#f-where', 'view')
+    pg.wait_for_function("() => !document.getElementById('f-run').disabled")
+    pg.click('#f-run')
+    pg.wait_for_selector('#f-results .result', timeout=300_000)
+    pg.evaluate("() => document.querySelectorAll('.toast').forEach((t) => t.remove())")
+    pg.evaluate(f'(L) => {g}.setLayerVisible(0, L, false)', layer)
+    pg.evaluate("() => document.querySelector('#f-results .result').scrollIntoView({block: 'end'})")
+    _settle(pg, 3000)
 
 
 def analysis_shot(slide: Path, cells: Path, out: Path, port: int = 8093) -> None:
@@ -289,7 +329,7 @@ def finish(out: Path) -> None:
     """Photos as JPEG (a fifth of the size), the analysis view cropped to its content."""
     from PIL import Image
 
-    for n in ('hero', 'desktop-app', 'inspector', 'stain-deconvolution'):
+    for n in ('hero', 'desktop-app', 'inspector', 'find-all', 'stain-deconvolution'):
         p = out / f'{n}.png'
         Image.open(p).convert('RGB').save(out / f'{n}.jpg', quality=88, optimize=True, progressive=True)
         p.unlink()

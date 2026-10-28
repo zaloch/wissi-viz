@@ -309,7 +309,7 @@ def test_page_picker_and_connect_dialog(tree, mock_api):
             pg.wait_for_selector('#browser a:has-text("a.svs")')
             pg.click('#browser a:has-text("sub")')
             pg.wait_for_selector('#browser a:has-text("b.svs")')
-            pg.click('#browser a:has-text("b.svs")')
+            pg.dblclick('#browser a:has-text("b.svs")')  # click selects, double-click opens
             pg.wait_for_function('() => document.querySelectorAll("#slides li").length === 1')
             pg.wait_for_function('() => document.getElementById("grid").panes.length === 1')
             pg.click('#b-connect')

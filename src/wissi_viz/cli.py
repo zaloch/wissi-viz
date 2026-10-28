@@ -254,9 +254,9 @@ def _demo_or_benchmark(argv: list[str]) -> None:
     ap.add_argument(
         'set',
         nargs='?',
-        default='quick',
+        default=None,
         choices=['quick', 'full'],
-        help='quick: 5 images (~1 GB); full: 32 images (~7 GB)',
+        help='quick: 5 images (~1.2 GB); full: 32 images (~7 GB). Asked when not given (quick without a terminal)',
     )
     ap.add_argument('--dir', default=None, help='where the images are kept (default: your user cache)')
     ap.add_argument('--yes', action='store_true', help="don't ask before downloading")
@@ -276,10 +276,20 @@ def _demo_or_benchmark(argv: list[str]) -> None:
         ap.add_argument('--browser', action='store_true', help='open in a browser window instead of the desktop app')
         ap.add_argument('--no-open', action='store_true', help='prepare everything, open nothing')
     a = ap.parse_args(argv[1:])
+    if a.set is None:
+        a.set = _ask_set() if sys.stdin and sys.stdin.isatty() and not a.yes else 'quick'
     if bench:
         pack.run_benchmark(a.set, a.dir, a.out, a.panes, a.yes, a.headed, a.seconds)
     else:
         pack.run_demo(a.set, a.dir, a.model, a.yes, open_app=not a.no_open, browser=a.browser)
+
+
+def _ask_set() -> str:
+    print('Which sample set?')
+    print('  1  quick:  5 images, ~1.2 GB  (3 H&E, 2 multiplex IF)')
+    print('  2  full:  32 images, ~7 GB    (26 H&E: OpenSlide, CAMELYON16 lymph nodes, 18 TCGA tumour types; 6 IF)')
+    ans = input('[1/2, default 1] ').strip().lower()
+    return 'full' if ans in ('2', 'f', 'full') else 'quick'
 
 
 if __name__ == '__main__':

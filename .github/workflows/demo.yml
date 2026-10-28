@@ -1,0 +1,56 @@
+# Runs `wissi-viz --demo quick` and `wissi-viz --benchmark quick` on real public slides (download, Xenium merge,
+# segmentation, analyses, benchmark) and pushes the report to the `demo-report` branch.
+name: demo
+on:
+  workflow_dispatch:
+    inputs:
+      set:
+        description: quick | full
+        default: quick
+  push:
+    branches: [main]
+    paths: [src/wissi_viz/pack.py, src/wissi_viz/segment.py, .github/workflows/demo.yml]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: demo
+  cancel-in-progress: true
+
+jobs:
+  demo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      SET: ${{ github.event.inputs.set || 'quick' }}
+      WISSI_PACK_DIR: ${{ github.workspace }}/pack
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - name: Install
+        run: |
+          uv sync --extra analysis --extra io --extra server --extra bench --extra desktop --extra sam-onnx
+          uv run playwright install --with-deps chromium
+      - name: Demo (download, prepare, segment, analyze)
+        run: |
+          set -o pipefail
+          uv run wissi-viz --demo $SET --yes --no-open 2>&1 | tee demo.log || { echo "::error::$(tail -c 3000 demo.log | tr '\n' ' ')"; exit 1; }
+          echo "::notice::$(tail -3 demo.log | tr '\n' ' ')"
+      - name: Benchmark
+        run: |
+          set -o pipefail
+          uv run wissi-viz --benchmark $SET --yes --panes 1,4,16,32 --seconds 4 --out wissi-viz-benchmark 2>&1 | tee bench.log || { echo "::error::$(tail -c 3000 bench.log | tr '\n' ' ')"; exit 1; }
+      - name: Publish the report to the demo-report branch
+        if: always()
+        run: |
+          mkdir -p report && cp -f wissi-viz-benchmark.* demo.log bench.log report/ 2>/dev/null || true
+          cp -f pack/metrics/all_regions.csv pack/ATTRIBUTION.md report/ 2>/dev/null || true
+          ls -la pack/layers report || true
+          git config user.name gzeballo
+          git config user.email gzeballo@bu.edu
+          git checkout --orphan demo-report
+          git rm -rfq --cached . >/dev/null
+          git add -f report
+          git commit -qm "Demo + benchmark report ($SET, ${{ runner.os }})"
+          git push -f origin demo-report

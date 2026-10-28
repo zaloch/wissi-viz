@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -43,15 +44,26 @@ LIC = {
 
 
 def get(url: str, data: bytes | None = None, headers: dict | None = None):
-    req = urllib.request.Request(url, data=data, headers=headers or {}, method='POST' if data else 'GET')
+    req = urllib.request.Request(url, data=data, headers={**UA, **(headers or {})}, method='POST' if data else 'GET')
     with urllib.request.urlopen(req, timeout=120) as r:
         return r.read()
 
 
+UA = {'User-Agent': 'Mozilla/5.0 (wissi-viz sample-pack manifest builder)'}
+
+
 def head_size(url: str) -> int:
-    req = urllib.request.Request(url, method='HEAD')
-    with urllib.request.urlopen(req, timeout=120) as r:
-        return int(r.headers.get('Content-Length') or 0)
+    """Size in bytes: HEAD, else a one-byte ranged GET (some CDNs refuse HEAD)."""
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, method='HEAD', headers=UA), timeout=120) as r:
+            n = int(r.headers.get('Content-Length') or 0)
+            if n:
+                return n
+    except urllib.error.HTTPError:
+        pass
+    with urllib.request.urlopen(urllib.request.Request(url, headers={**UA, 'Range': 'bytes=0-0'}), timeout=120) as r:
+        cr = r.headers.get('Content-Range') or ''
+        return int(cr.rsplit('/', 1)[-1]) if '/' in cr else int(r.headers.get('Content-Length') or 0)
 
 
 def tcga() -> list[dict]:
@@ -128,7 +140,16 @@ def xenium() -> list[dict]:
 
 def main() -> None:
     out = Path(sys.argv[1] if len(sys.argv) > 1 else 'pack32.json')
-    items = openslide() + camelyon() + tcga() + xenium()
+    items, errors = [], []
+    for f in (openslide, camelyon, tcga, xenium):
+        try:
+            items += f()
+        except Exception as e:  # noqa: BLE001  (report every source, then fail)
+            errors.append(f'{f.__name__}: {type(e).__name__}: {e}')
+    if errors:
+        print('ERRORS: ' + ' | '.join(errors))
+        if len(items) < 20:
+            raise SystemExit(1)
     quick = ['cmu-1', 'cmu-2', 'cmu-3', 'xenium-breast', 'xenium-kidney-protein']
     doc = {'name': 'wissi-viz public sample pack', 'version': 1, 'items': items, 'quick': quick,
            'total_bytes': sum(x['size'] for x in items),

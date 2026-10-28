@@ -215,6 +215,20 @@ def app_shots(slides: list[Path], cells: Path, out: Path, spot: tuple[float, flo
         _settle(pg, 4000)
         pg.screenshot(path=str(out / 'desktop-app.png'))
 
+        # the inspector: density & hotspots run from the Analyze tab, its chart, and the result on the slide
+        pg = page(1440, 900)
+        panes(pg, [ids[0]])
+        pg.evaluate(
+            "([x, y]) => document.getElementById('grid').goTo(0, x, y, {magnification: 1.25, animate: false})", [sx, sy]
+        )
+        pg.evaluate("() => window.wissiApp.setTab('analyze')")
+        pg.click('.an-card:has-text("Density")')
+        pg.click('#an-run')
+        pg.wait_for_selector('.result .chart svg', timeout=300_000)
+        pg.evaluate("() => document.querySelectorAll('.toast').forEach((t) => t.remove())")
+        _settle(pg, 4000)
+        pg.screenshot(path=str(out / 'inspector.png'))
+
         # stain deconvolution: the same field, RGB vs haematoxylin only
         pg = page(1600, 900)
         panes(pg, [ids[0], ids[0]])
@@ -275,7 +289,7 @@ def finish(out: Path) -> None:
     """Photos as JPEG (a fifth of the size), the analysis view cropped to its content."""
     from PIL import Image
 
-    for n in ('hero', 'desktop-app', 'stain-deconvolution'):
+    for n in ('hero', 'desktop-app', 'inspector', 'stain-deconvolution'):
         p = out / f'{n}.png'
         Image.open(p).convert('RGB').save(out / f'{n}.jpg', quality=88, optimize=True, progressive=True)
         p.unlink()

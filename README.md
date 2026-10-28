@@ -38,7 +38,11 @@
 - **Spatial analysis:**
   - nearest neighbours, proximity, invasive margins, ROI composition, density and hotspots;
   - Ripley's K/L/g, co-location, cellular neighbourhoods, contact graphs, Moran's I, IHC H-score.
-  - Each analysis produces a table, a slide overlay and a chart.
+  - Each analysis produces a table, a slide overlay and a chart, from Python or from the app's **Analyze** tab.
+- **An inspector that follows the active pane.** Layers (show, solo, opacity, outline, fill, colour by class or any
+  measurement, per-class toggles and colours), Analyze (run an analysis, see its chart, switch between results),
+  Measure (counts, shares, means per class and cells per mm² of tissue) and Draw. Click a cell for its measurements
+  and where it ranks in its layer; right-click for actions under the cursor; number keys pick tools, `?` lists the rest.
 - **Built for servers:** memory and disk tile caches with byte budgets, memory-mapped object layers, an integration probe and a load tester.
 - **Permissive licences only.** The default install is BSD / MIT / Apache-2.0 / ISC, and a test enforces it. LGPL readers are an opt-in extra.
 

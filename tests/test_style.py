@@ -40,7 +40,7 @@ EXTRA_AT_TOP = {
     'sam.py': {'scipy', 'skimage'},
     'nicegui.py': {'nicegui'},
 }
-FEATURE_MODULES = {'metrics', 'spatial', 'segment', 'sam', 'nicegui', 'plots'}
+FEATURE_MODULES = {'metrics', 'spatial', 'segment', 'sam', 'nicegui', 'plots', 'analyses'}
 CYCLES = {('annotations', 'annio'), ('annotations', 'objects')}
 
 

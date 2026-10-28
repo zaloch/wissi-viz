@@ -412,7 +412,7 @@ class CompositionResult:
     def layer(self, name: str = 'ROIs', value: str | None = None, cmap: str = 'viridis') -> AnnotationLayer:
         """ROI outlines; ``value`` (a column, e.g. 'density CD8 /mm2') colours them as a choropleth."""
         if value is None:
-            return _geom_layer(self.rois, name, fill_opacity=0.08, line_width=2.5, detail_min_px=0, legend=True)
+            return _geom_layer(self.rois, name, fill_opacity=0.08, line_width=2.5, detail_min_px=0)
         t = self.table
         vals = [float(t.loc[t['roi'] == k, value].iloc[0]) if hasattr(t, 'loc') else np.nan for k, _ in self.rois]
         return _geom_layer(

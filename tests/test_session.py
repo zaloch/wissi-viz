@@ -259,7 +259,7 @@ def test_cli_serve_wires_the_options(tree, mock_api, monkeypatch, capsys):
     c = TestClient(got['app'])
     page = c.get('/').text
     assert '"open": true' in page and '"connect": false' in page and got['port'] == 8123
-    token = page.split("TOKEN = '")[1].split("'")[0]
+    token = page.split("token: '")[1].split("'")[0]
     names = [x['path'] for x in c.get('/app/state', headers={'x-wissi-token': token}).json()['slides']]
     assert any(n.endswith('a.svs') for n in names) and 'custom:img-01' in names
     assert 'custom: 1 image' in capsys.readouterr().err

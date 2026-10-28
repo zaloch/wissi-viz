@@ -432,6 +432,7 @@ class Slide {
       this.layers.set(m.name, new AnnLayer(this.grid, this, m));
     }
     for (const [n, L] of this.layers) if (!names.has(n)) { L.destroy(); this.layers.delete(n); }
+    this.grid._emit('layers', { slide: this.info?.id, url: this.url, names: [...this.layers.keys()] });
   }
   async refreshAnnotations() {
     // never hold one of the browser's ~6 HTTP/1.1 connections open: poll while the server parses sidecars
@@ -1625,7 +1626,8 @@ export class WsiGrid extends HTMLElement {
         this._coordsHit = hit;
         if (!this._coordsRaf) this._coordsRaf = requestAnimationFrame(() => this._writeCoords());
         if (this._drawing && this._drawing.p === hit.p) this._drawMove(hit, e);
-      }
+        if (this.hoverEvents && !ptrs.size && this.tool === 'pan') this._hoverAt(hit, e);
+      } else if (this._hovered) this._hoverAt(null, e);
       if (!ptrs.has(e.pointerId)) return;
       const last = ptrs.get(e.pointerId);
       ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -1659,7 +1661,7 @@ export class WsiGrid extends HTMLElement {
       if (ptrs.size === 1) { drag.pinch = null; return; }
       if (ptrs.size) return;
       p.el.classList.remove('drag');
-      if (drag.moved < 4 && now() - drag.t < 400) this._click(p, e);
+      if (drag.moved < 4 && now() - drag.t < 400 && e.button !== 2) this._click(p, e);
       else if (drag.hist.length > 1) {
         const dt = Math.max(16, drag.hist[drag.hist.length - 1].t - drag.hist[0].t);
         const vx = drag.hist.reduce((a, h) => a + h.dx, 0) / dt, vy = drag.hist.reduce((a, h) => a + h.dy, 0) / dt;
@@ -1670,6 +1672,17 @@ export class WsiGrid extends HTMLElement {
     };
     root.addEventListener('pointerdown', down);
     root.addEventListener('pointermove', move);
+    root.addEventListener('pointerleave', (e) => { if (this._hovered) this._hoverAt(null, e); });
+    root.addEventListener('contextmenu', async (e) => {
+      if (!this.contextEvents) return;
+      const hit = this._paneAt(e.clientX, e.clientY);
+      if (!hit?.p.view) return;
+      e.preventDefault();
+      const [x, y] = this._toImage(hit.p, hit.sx, hit.sy);
+      const h = await this.hitAt(hit.p, hit.sx, hit.sy, { server: false });
+      this._emit('panecontext', { pane: hit.p.index, slide: hit.p.slide?.info?.id, x, y, clientX: e.clientX, clientY: e.clientY,
+        object: h && { layer: h.layer, index: h.index, class: h.class } });
+    });
     root.addEventListener('pointerup', up);
     root.addEventListener('pointercancel', up);
     root.addEventListener('pointerleave', () => this.panes.forEach((p) => { if (p.$coords && p._coordsTxt) { p._coordsTxt = ''; p.$coords.textContent = ''; } }));
@@ -1761,6 +1774,60 @@ export class WsiGrid extends HTMLElement {
     }
   }
 
+  /** The smallest visible object under a pane point (sx, sy: px from the pane's top-left), or null.
+   *  server: false → only objects whose data is already in the browser (no request; for hover). */
+  async hitAt(p, sx, sy, { server = true } = {}) {
+    if (!p?.view || !p.slide) return null;
+    const [x, y] = this._toImage(p, sx, sy);
+    const tol = 5 / p.view.scale;
+    const scaleDev = p.view.scale * this.dpr;
+    let found = null;
+    for (const L of p.slide.layers.values()) {
+      if (!p.layerVisible(L) || L.state !== 'ready') continue;
+      let h = L.hitInfo(x, y, tol, L.pyr ? L.pyrLevel(scaleDev) : 0);
+      if (h === undefined) { if (!server) continue; h = await L.serverHit(x, y, tol); }
+      if (h && (!found || h.size < found.size)) found = { ...h, L };
+    }
+    if (!found) return null;
+    const c = found.L.classes[found.cls];
+    return { layer: found.L.name, index: found.f, class: c?.name, color: c?.color, cx: found.cx, cy: found.cy, size: found.size, L: found.L };
+  }
+
+  _hoverAt(hit, e) {
+    if (!hit) { if (this._hovered) { this._hovered = null; this._emit('objecthover', null); } return; }
+    this._hoverPt = { hit, x: e.clientX, y: e.clientY };
+    if (this._hoverT) return;
+    this._hoverT = setTimeout(async () => {
+      this._hoverT = 0;
+      const { hit: h0, x, y } = this._hoverPt;
+      const h = await this.hitAt(h0.p, h0.sx, h0.sy, { server: false });
+      const key = h ? `${h.layer}|${h.index}` : null;
+      if (key === (this._hovered?.key ?? null)) { if (h) this._emit('objecthover', { ...this._hovered.d, clientX: x, clientY: y }); return; }
+      const d = h && { pane: h0.p.index, layer: h.layer, index: h.index, class: h.class, color: h.color, size: h.size, clientX: x, clientY: y };
+      this._hovered = h ? { key, d } : null;
+      this._emit('objecthover', d);
+    }, 50);
+  }
+
+  /** Make a layer's objects pulse for a moment (the app does this when its row is hovered). */
+  flashLayer(pane, layer, ms = 900) {
+    for (const p of this._panes(pane)) {
+      const L = p.slide?.layers.get(layer);
+      if (L) { L._flashUntil = now() + ms; L._flashMs = ms; }
+    }
+    this.requestRender();
+  }
+
+  _layerAlpha(L, st) {
+    const a = st.opacity ?? 1;
+    if (!L._flashUntil) return a;
+    const t = now();
+    if (t >= L._flashUntil) { L._flashUntil = 0; return a; }
+    this.requestRender();
+    const k = 1 - (L._flashUntil - t) / L._flashMs;   // 0 → 1: two pulses
+    return a * (0.25 + 0.75 * Math.abs(Math.cos(k * Math.PI * 2)));
+  }
+
   async _click(p, e) {
     const hit = this._paneAt(e.clientX, e.clientY);
     if (!hit || hit.p !== p) return;
@@ -1768,20 +1835,12 @@ export class WsiGrid extends HTMLElement {
     const detail = { pane: p.index, slide: p.slide?.info?.id, x, y, button: e.button };
     if (p.slide?.info?.mpp) { detail.x_um = x * p.slide.info.mpp[0]; detail.y_um = y * p.slide.info.mpp[1]; }
     this._emit('paneclick', detail);
-    const tol = 5 / p.view.scale;
-    let found = null;
-    const scaleDev = p.view.scale * this.dpr;
-    for (const L of p.slide.layers.values()) {
-      if (!p.layerVisible(L) || L.state !== 'ready') continue;
-      let h = L.hitInfo(x, y, tol, L.pyr ? L.pyrLevel(scaleDev) : 0);
-      if (h === undefined) h = await L.serverHit(x, y, tol);
-      if (h && (!found || h.size < found.size)) found = { ...h, L };
-    }
-    p.selection = found ? { layer: found.L.name, f: found.f, cx: found.cx, cy: found.cy, size: found.size } : null;
+    const found = await this.hitAt(p, hit.sx, hit.sy);
+    p.selection = found ? { layer: found.layer, f: found.index, cx: found.cx, cy: found.cy, size: found.size } : null;
     this.requestRender();
     if (!found) return;
-    const L = found.L, idx = found.f;
-    const d = { ...detail, layer: L.name, index: idx, class: L.classes[found.cls]?.name,
+    const L = found.L, idx = found.index;
+    const d = { ...detail, layer: L.name, index: idx, class: found.class,
       centroid: [found.cx, found.cy], size: found.size };
     try {
       const r = await fetch(`${p.slide.url}/annotations/feature/${idx}?layer=${encodeURIComponent(L.name)}`, { credentials: 'same-origin' });
@@ -2392,7 +2451,7 @@ export class WsiGrid extends HTMLElement {
         if (d) { d.last = this.frame; detail.push(d); kindRanges.push([B[o + 4], B[o + 5]]); }
         else ptsRanges.push([B[o + 4], B[o + 5]]);
       }
-      const alpha = st.opacity ?? 1;
+      const alpha = this._layerAlpha(L, st);
       if (L.client === 'ready') {
         const outlines = L.pyrLevel(scaleDev) === 0 && L.medSize * p.view.scale >= minPx;
         this._drawPyramid(p, L, vis, scaleDev, alpha, outlines);

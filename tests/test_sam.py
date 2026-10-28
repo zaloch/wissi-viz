@@ -121,7 +121,7 @@ def test_app_sam_accept_export_and_measure(slide, tmp_path):
             pg.on('pageerror', lambda e: errors.append(str(e)))
             pg.goto(url + '/app')
             pg.wait_for_function('() => document.getElementById("grid").panes.every(p => p.slide && p.slide.info)')
-            pg.click('#b-annot')
+            pg.click('#t-draw')
             pg.fill('#a-class', 'Nucleus')
             pg.dispatch_event('#a-class', 'change')
             pg.evaluate(
@@ -143,6 +143,7 @@ def test_app_sam_accept_export_and_measure(slide, tmp_path):
             # export link and measurements
             exp = pg.request.get(f'{url}/wissi-viz/slides/{sid}/annotations/export?layer=Annotations&fmt=geoparquet')
             assert exp.ok and exp.body()[:4] == b'PAR1'
+            pg.click('#t-measure')
             pg.wait_for_function(
                 '() => [...document.querySelectorAll("#m-regions option")].some(o => o.value === "Annotations")'
             )

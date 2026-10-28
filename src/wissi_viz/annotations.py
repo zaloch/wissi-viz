@@ -96,6 +96,8 @@ class AnnotationLayer:
     #: dots (one per ~4 screen px, with per-class counts) and, zoomed in, only the visible cells, tile by tile —
     #: so what a browser downloads scales with screen area, not with the number of objects
     pyramid: Any = 'auto'
+    #: where the layer came from, shown in the app: '' (a file, drawing or table) or 'analysis' (a result)
+    origin: str = ''
 
     def __post_init__(self) -> None:
         self._lock = threading.RLock()
@@ -702,6 +704,33 @@ class AnnotationLayer:
         return {'type': 'FeatureCollection', 'features': feats}
 
     # ------------------------------------------------------------- continuous colouring
+    def column_values(self, name: str) -> np.ndarray:
+        """One float per feature from a measurement column or a numeric property (NaN where missing)."""
+        with self._lock:
+            return self._column_values(name)
+
+    def _column_values(self, name: str) -> np.ndarray:
+        if name in self._columns:
+            v = np.full(len(self), np.nan, np.float64)
+            c = np.asarray(self._columns[name], np.float64)
+            v[self._col_offset : self._col_offset + len(c)] = c
+            return v
+        return np.array(
+            [float(q) if isinstance(q := (p or {}).get(name), (int, float)) else np.nan for p in self._props],
+            np.float64,
+        )
+
+    def numeric_columns(self, limit: int = 32, sample: int = 2000) -> list[str]:
+        """Names of the numeric measurement columns (or, for drawn / GeoJSON layers, numeric properties seen
+        in the first ``sample`` features)."""
+        cols = [k for k, v in self._columns.items() if np.asarray(v).dtype.kind in 'biuf']
+        seen: dict[str, None] = dict.fromkeys(cols)
+        for p in self._props[:sample]:
+            for k, v in (p or {}).items():
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    seen.setdefault(k)
+        return list(seen)[:limit]
+
     def color_by(
         self,
         values: Any,
@@ -725,20 +754,7 @@ class AnnotationLayer:
                 return self
             if isinstance(values, str):
                 label = label or values
-                col = values
-                if col in self._columns:
-                    v = np.full(len(self), np.nan, np.float64)
-                    c = np.asarray(self._columns[col], np.float64)
-                    v[self._col_offset : self._col_offset + len(c)] = c
-                    values = v
-                else:
-                    values = np.array(
-                        [
-                            float(q) if isinstance(q := (p or {}).get(col), (int, float)) else np.nan
-                            for p in self._props
-                        ],
-                        np.float64,
-                    )
+                values = self._column_values(values)
             v = np.asarray(values, np.float64).ravel()
             if len(v) != len(self):
                 raise ValueError(f'color_by: {len(v)} values for {len(self)} features')
@@ -820,6 +836,7 @@ class AnnotationLayer:
                 'detail_min_px': self.detail_min_px,
                 'z': self.z,
                 'overview': self.overview,
+                'origin': self.origin,
             },
         }
 

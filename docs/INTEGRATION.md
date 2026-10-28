@@ -1,6 +1,6 @@
 # Integrating wissi-viz
 
-*Current as of wissi-viz 0.8.0.* This guide covers how to put wissi-viz into an app: NiceGUI (wissi), other Python web frameworks, JavaScript frameworks and notebooks. It also covers:
+*Current as of wissi-viz 0.9.0.* This guide covers how to put wissi-viz into an app: NiceGUI (wissi), other Python web frameworks, JavaScript frameworks and notebooks. It also covers:
 - how to show large cell and object tables;
 - how to keep the viewer smooth, including on clients without a GPU;
 - how to connect a vendor tile API such as PathCore or HALO Link;
@@ -27,7 +27,8 @@
 
 | Version | Change | What you do |
 |---|---|---|
-| 0.8.0 | **Annotate, measure, demo.** Up to 32 panes; `wissi-viz serve` shows the app UI with a slide list. SAM 2.1 click / box annotation (PyTorch or ONNX Runtime, Apache-2.0 weights). GeoParquet annotation files and `wissi-viz convert`. Region and object metrics. `wissi-viz segment` (Cellpose-SAM, Classpose, classic). `wissi-viz --demo` / `--benchmark` on 32 public slides. | Optional: `[sam]` / `[sam-onnx]` extras (§15); `[demo]` for the demo (§17). Pages that loaded `/` for the bare element demo now use `/demo`. Also: **Connect…** and `--connect` for tile APIs (§7); `serve --allow-open` with an in-page file picker and `--key` (§8). |
+| 0.8.0 | **Annotate, measure, demo.** Up to 32 panes; `wissi-viz serve` shows the app UI with a slide list. SAM 2.1 click / box annotation (PyTorch or ONNX Runtime, Apache-2.0 weights). GeoParquet annotation files and `wissi-viz convert`. Region and object metrics. `wissi-viz segment` (Cellpose-SAM, Classpose, classic). `wissi-viz --demo` / `--benchmark` on 32 public slides. | Optional: `[sam]` / `[sam-onnx]` extras (§15); `[demo]` for the demo (§17). Pages that loaded `/` for the bare element demo now use `/demo`. |
+| 0.9.0 | **Inspector.** The app's Layers / Analyze / Measure / Draw inspector, object cards with percentiles, hover tips, a radial menu and keyboard shortcuts (§12). Spatial analyses from the app and `wissi_viz.analyses` (§16). Layer summaries, colour-by and removal over HTTP. **Connect…** and `--connect` for tile APIs (§7); `serve --allow-open` with an in-page file picker and `--key` (§8). | The app page's logic moved to `static/app.js`. The per-pane ⚙ menu is off in the app (its controls are in the inspector); the element keeps it. New viewer events: `objecthover`, `panecontext` (opt-in: `grid.hoverEvents`, `grid.contextEvents`) and `layers`; new methods `hitAt()` and `flashLayer()`. |
 | 0.7.0 | **Desktop app and platform support.** `wissi-viz-app` opens the viewer in its own native window with its own icon (pywebview), as an option next to the embedded element. Windows, macOS and Linux are supported and CI-tested; packaging moved to uv (`uv.lock`, dependency groups). Python 3.10–3.11 work again (older czifile). | Nothing for embedded use. For the app: `uv tool install "wissi-viz[desktop]"` (§12). For development: `uv sync` (§13). |
 | 0.5.0 | **Object pyramid.** Millions of cells are shown as screen-sized aggregated dots, then as GPU-drawn outlines when zoomed in. There is a **server mode** (default) and a **client mode**. | Use `cached_object_layer` for big tables (§5). Choose `overlays: 'server'\|'client'\|'auto'`. |
 | 0.5.1 | **Polars reader.** `read_objects(engine='auto')` uses Polars, then pyarrow, then pandas. | `pip install "wissi-viz[polars]"`. |
@@ -521,7 +522,13 @@ uvx --from "wissi-viz[desktop]" wissi-viz-app   # try it without installing
 
 - **What's in the window:**
   - Open slides, a folder, or cells / annotations (CSV, TSV, Parquet, Feather, AnnData, GeoJSON, HALO XML) through native file dialogs, the **File** menu, or by **dropping files** onto the window.
-  - A slide list (click: show in the active pane; double-click: add a pane), 1–32 panes, sync, the drawing tools, and recent files on the start screen.
+  - A slide list with thumbnails (click: show in the active pane; double-click: add a pane), 1–32 panes, sync, a tool bar (keys 1–8), and recent files on the start screen.
+  - The **inspector**, which follows the active pane:
+    - **Layers:** image display (stain view, brightness / contrast / gamma, or channels). Per layer: show / hide, solo, opacity, outline, fill, colour by class or any numeric column (with a legend), class toggles, counts and colours, and a menu (zoom to the layer, export, summary, remove). Hovering a row makes that layer's objects pulse on the slide.
+    - **Analyze:** the spatial analyses below (§16), grouped by what they need, each with its settings. A run adds its result layers to the slide (earlier results are switched off, not removed) and a card with headline numbers, a chart, the table and a CSV download.
+    - **Measure:** a summary of any layer (count, share and averages per class, cells per mm² of tissue, region areas) and the region measurements of §16.
+    - **Draw:** the layer, class and colour that drawings and SAM masks are saved to.
+  - On the slide: click an object for its card (measurements and their percentile within the layer), hover for its class, right-click for a radial menu (hide / solo the layer under the cursor, SAM, measure, copy coordinates, fit). `?` shows every shortcut.
   - Cell tables are compiled once into the cache and memory-mapped on later opens, as on the server (§5).
 - **How it works:** the tile server runs inside the app on 127.0.0.1 (random port, Host-checked, token on the app's own endpoints, §8). [pywebview](https://pywebview.flowrl.com) (BSD-3) shows it in the system web view:
 
@@ -612,7 +619,7 @@ Over HTTP: `GET {prefix}/slides/{id}/annotations/export?layer=…&fmt=geoparquet
 
 ## 15. SAM 2.1 click annotation
 
-In the app (desktop or `wissi-viz serve`), **Annotate & measure → SAM tool**, or `grid.setTool('sam')` on the element:
+In the app (desktop or `wissi-viz serve`), the SAM tool (key 8, or **Draw → SAM tool**), or `grid.setTool('sam')` on the element:
 
 - **click** an object to include it, **shift/alt-click** to exclude a part, **drag** a box;
 - the cyan outline updates after each prompt; **Enter / double-click / Accept** saves it to the draw layer with the chosen class (`setDrawLayer`, `setDrawClass`); **Esc** discards it;
@@ -642,7 +649,30 @@ per_cell = object_metrics(cells, source=slide)  # one row per segmented object
 | `tex_` | Haralick GLCM (contrast, dissimilarity, homogeneity, energy, correlation, ASM; 4 directions × 1, 2, 4 px) and entropy; `analysis_mpp` gives the resolution |
 | `obj_` | count, density / mm², per class count, % and density, Shannon / Simpson diversity, richness, evenness, nearest-neighbour distance (all, per class, class → class), contact fraction, Clark–Evans index, Morisita index, Ripley L(r) − r, depth from the region boundary, mean and median of every numeric cell measurement |
 
-Per object: area, perimeter, circularity, solidity, axes, eccentricity, aspect ratio, Feret, and mean / sd of every stain or channel inside the exact outline (rasterised tile by tile). In the app: **Annotate & measure → Measure**; over HTTP: `GET {prefix}/slides/{id}/annotations/metrics?layer=…&objects=…&fmt=json|csv|parquet` and `…/annotations/object_metrics?layer=…`.
+Per object: area, perimeter, circularity, solidity, axes, eccentricity, aspect ratio, Feret, and mean / sd of every stain or channel inside the exact outline (rasterised tile by tile). In the app: the **Measure** tab; over HTTP: `GET {prefix}/slides/{id}/annotations/metrics?layer=…&objects=…&fmt=json|csv|parquet` and `…/annotations/object_metrics?layer=…`.
+
+**Spatial analyses from the app** (`wissi_viz.analyses`, needs the `[analysis]` extra): density & hotspots, nearest neighbours, proximity, margin bands, infiltration, composition per region, Ripley's L, neighbour enrichment, cellular neighbourhoods, contact graph and Moran's I. Each is a small adapter around `wissi_viz.spatial`; result layers carry `origin='analysis'`.
+
+```python
+from wissi_viz import analyses
+
+analyses.catalog()  # what the Analyze tab lists: name, group, settings, rough cost
+out = analyses.run(registry, slide_id, 'nn', 'cells', {'source': 'CD8', 'target': 'Tumor', 'max_um': 100})
+# → {'title', 'kpis', 'note', 'layers' (added to the slide), 'chart', 'table', 'seconds'}
+```
+
+Add your own with the `@analysis(key, name, group, description, params)` decorator: a function `(ctx, **params) -> Result`.
+
+| Endpoint | What it returns |
+|---|---|
+| `GET {prefix}/analyses` | the catalogue (501 without the `[analysis]` extra) |
+| `POST {prefix}/slides/{id}/analyses` `{analysis, objects, params}` | headline numbers, chart, table (first 200 rows); result layers are added |
+| `GET …/annotations/summary?layer=…&tissue=true` | count, share and per-class means of the main measurements, numeric columns, region areas, tissue mm² and objects per mm² |
+| `GET …/annotations/feature/{i}?layer=…&pct=1` | one object, plus each measurement's percentile within its layer |
+| `POST …/annotations/style` `{layer, color_by, cmap}` | colour a layer by a numeric column (`null`: back to classes) |
+| `DELETE …/annotations?layer=…` | remove a layer from the slide |
+
+The last two, like adding annotations and running analyses, are edits: `create_router(..., allow_edit=False)` turns them off.
 
 ## 17. Segmentation, the public sample pack, demo and benchmark
 

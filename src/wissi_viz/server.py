@@ -30,7 +30,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from PIL import Image
 from starlette.background import BackgroundTask
 
-from . import annio
+from . import annio, summary
 from ._version import __version__
 from .annotations import AnnotationLayer, _add_geometry, _class_from_props
 from .registry import SlideRegistry
@@ -269,21 +269,48 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
         )
 
     @r.get('/slides/{sid}/annotations/feature/{idx}')
-    def ann_feature(sid: str, idx: int, layer_name: str = Query(alias='layer')):
+    def ann_feature(sid: str, idx: int, layer_name: str = Query(alias='layer'), pct: bool = False):
+        """One object: class, properties, centroid, size; ``pct=1`` adds each measurement's percentile within
+        its layer (the app's object card)."""
         L = layer(sid, layer_name)
         if not (0 <= idx < len(L)):
             raise HTTPException(404)
         c = L.compiled()
-        return JSONResponse(
-            {
-                'index': idx,
-                'class': L.class_of(idx),
-                'properties': _jsonable(L.properties(idx)),
-                'centroid': [float(c.cx[idx]), float(c.cy[idx])],
-                'size': float(c.size[idx]),
-            },
-            headers=hdrs('no-cache'),
-        )
+        props = L.properties(idx)
+        out = {
+            'index': idx,
+            'class': L.class_of(idx),
+            'properties': _jsonable(props),
+            'centroid': [float(c.cx[idx]), float(c.cy[idx])],
+            'size': float(c.size[idx]),
+        }
+        if pct:
+            out['percentiles'] = summary.percentiles(L, props)
+            out['order'] = summary.preferred_columns(L, 8)
+        return JSONResponse(out, headers=hdrs('no-cache'))
+
+    @r.get('/slides/{sid}/annotations/summary')
+    async def ann_summary(sid: str, layer_name: str = Query(alias='layer'), tissue: bool = True):
+        """Counts and shares per class, per-class means of the main measurements, region areas and objects per
+        mm² of tissue (the app's Measure tab)."""
+        e, pyr = registry.get(sid)
+        L = layer(sid, layer_name)
+        mpp = (registry.info(sid).get('mpp') or [None])[0]
+
+        def work():
+            area = summary.tissue_area_mm2(f'{sid}@{e.source.version}', pyr.source) if tissue else None
+            return summary.summary(L, mpp, area)
+
+        return JSONResponse(_jsonable(await anyio.to_thread.run_sync(work)), headers=hdrs('no-cache'))
+
+    @r.get('/analyses')
+    def analyses_catalog():
+        """The spatial analyses the app can run (``wissi_viz.analyses``; needs the [analysis] extra)."""
+        try:
+            from . import analyses
+        except ImportError as ex:
+            raise HTTPException(501, f'spatial analyses need: pip install "wissi-viz[analysis]" ({ex.name})') from ex
+        return JSONResponse(analyses.catalog(), headers=hdrs('no-cache'))
 
     @r.get('/slides/{sid}/annotations/geojson')
     def ann_geojson(sid: str, layer_name: str = Query(alias='layer')):
@@ -435,6 +462,47 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
                     _add_geometry(L, f.get('geometry') or f, cn, col, props or None)
                 registry.changed(sid, layer_name)
             return JSONResponse({'ok': True}, headers=hdrs('no-cache'))
+
+        @r.post('/slides/{sid}/annotations/style')
+        async def ann_style(sid: str, request: Request):
+            """Colour a layer by a measurement ({layer, color_by: column | null, cmap}); null: back to classes."""
+            body = await request.json()
+            L = layer(sid, body.get('layer') or '')
+            col = body.get('color_by') or None
+            if col is not None and col not in L.numeric_columns():
+                raise HTTPException(400, f'no numeric column {col!r} in {L.name}')
+            await anyio.to_thread.run_sync(lambda: L.color_by(col, cmap=body.get('cmap') or 'viridis'))
+            registry.changed(sid, L.name)
+            return JSONResponse({'ok': True, 'colormap': _jsonable(L.colormap)}, headers=hdrs('no-cache'))
+
+        @r.delete('/slides/{sid}/annotations')
+        def ann_remove(sid: str, layer_name: str = Query(alias='layer')):
+            layer(sid, layer_name)
+            registry.remove_annotations(sid, layer_name)
+            return JSONResponse({'ok': True}, headers=hdrs('no-cache'))
+
+        @r.post('/slides/{sid}/analyses')
+        async def run_analysis(sid: str, request: Request):
+            """Run a spatial analysis on a cell layer: {analysis, objects, params} → headline numbers, chart, table;
+            result layers are added to the slide."""
+            try:
+                from . import analyses
+            except ImportError as ex:
+                raise HTTPException(
+                    501, f'spatial analyses need: pip install "wissi-viz[analysis]" ({ex.name})'
+                ) from ex
+            body = await request.json()
+            entry(sid)
+            try:
+                out = await anyio.to_thread.run_sync(
+                    lambda: analyses.run(registry, sid, body.get('analysis'), body.get('objects'), body.get('params'))
+                )
+            except ValueError as ex:
+                raise HTTPException(400, str(ex)) from ex
+            except Exception as ex:
+                logging.getLogger('wissi_viz').exception('analysis failed')
+                raise HTTPException(500, f'{type(ex).__name__}: {ex}') from ex
+            return JSONResponse(_jsonable(out), headers=hdrs('no-cache'))
 
     return r
 

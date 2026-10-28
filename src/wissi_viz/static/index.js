@@ -619,20 +619,15 @@ class AnnLayer {
       this.n = n;
       this.nb = B;
       this.medSize = meta.median_size || 0;
-      const om = this.grid.lod.overlays;
-      // client mode: fetch the layer's columns once, build the pyramid in a worker, then never ask again
-      // 'auto': small layers only, and only while this viewer holds < CLIENT_OVERLAY_TOTAL objects client-side
-      // (measured: 1M objects ≈ 70 MB of browser memory + a ~2 s worker build; 16 × 1M = 1.1 GB, 32 s)
-      const g = this.grid;
-      const auto = om === 'auto' && n <= CLIENT_OVERLAY_MAX && (g.clientObjects || 0) + n <= CLIENT_OVERLAY_TOTAL;
-      this.client = meta.client_ok && (om === 'client' || auto) ? 'pending' : null;
-      if (this.client) { g.clientObjects = (g.clientObjects || 0) + n; this.clientCounted = n; }
+      this.clientOk = !!meta.client_ok;
+      this.client = null;
       this.classes = meta.classes || [];
       this.colormap = meta.colormap || null;
       this.ctex = gl.createTexture();
       this._classTex();
       this.grid.gpuBytes += buf.byteLength;
       this.state = 'ready';
+      this.considerClient();
       return;
     }
     this.cen = take(Float32Array, n * 2);
@@ -712,6 +707,22 @@ class AnnLayer {
     return out;
   }
   pkey(level, tx, ty) { return `${level}|${tx}|${ty}`; }
+  // client mode: fetch the layer's columns once, build the pyramid in a worker, then never ask again.
+  // 'auto': small layers only, and only while this viewer holds < CLIENT_OVERLAY_TOTAL objects client-side
+  // (measured: 1M objects ≈ 70 MB of browser memory + a ~2 s worker build; 16 × 1M = 1.1 GB, 32 s).
+  // Decided when the layer loads and again whenever setLod changes the overlay mode, so switching to
+  // 'client' after a layer has loaded still takes effect.
+  considerClient() {
+    if (this.client != null || !this.clientOk || this.state !== 'ready') return;
+    const g = this.grid, om = g.lod.overlays, n = this.n;
+    const auto = om === 'auto' && n <= CLIENT_OVERLAY_MAX && (g.clientObjects || 0) + n <= CLIENT_OVERLAY_TOTAL;
+    if (om !== 'client' && !auto) return;
+    this.client = 'pending';
+    g.clientObjects = (g.clientObjects || 0) + n;
+    this.clientCounted = n;
+    g.requestRender();
+  }
+
   async ingestColumns(buf) {
     this.client = 'building';
     try {
@@ -1411,7 +1422,9 @@ export class WsiGrid extends HTMLElement {
   /** Level-of-detail policy: setLod('default'|'legacy') or any of {motionBias, minify, quadtree, background, prefetch,
    *  decoupled, destination, adaptive, overlays: 'server'|'client'|'auto'} (merged into the current policy). */
   setLod(opts) {
+    const was = this.lod.overlays;
     this.lod = opts === 'legacy' ? { ...LOD_LEGACY } : opts === 'default' || opts == null ? { ...LOD_DEFAULT } : { ...this.lod, ...opts };
+    if (this.lod.overlays !== was) for (const s of this.slides.values()) for (const L of s.layers.values()) L.considerClient?.();
     this.requestRender();
     return { ...this.lod };
   }

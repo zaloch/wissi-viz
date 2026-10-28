@@ -156,6 +156,12 @@
         <h3>Spatial analysis</h3><p>Proximity, invasive margins, composition, density hotspots, Ripley's K/L/g, co-location, neighbourhoods, Moran's I and H-score: a table, an overlay and a chart each.</p></div>
       <div class="card"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a9 9 0 100 18 4.5 4.5 0 010-9 4.5 4.5 0 000-9z"/></svg></div>
         <h3>Fluorescence and stains</h3><p>Up to 8 16-bit channels composited on the GPU with per-channel contrast, and brightfield stain deconvolution (H, E, DAB).</p></div>
+      <div class="card"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12c0-4 3.5-8 8-8s8 4 8 8-3.5 8-8 8"/><circle cx="12" cy="12" r="2.5"/><path d="M3 21l5-5"/></svg></div>
+        <h3>SAM 2.1 annotation</h3><p>Click an object or drag a box in any of the 32 panes; Segment Anything outlines it, you pick the class. PyTorch or ONNX Runtime, Apache-2.0 weights.</p></div>
+      <div class="card"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3h9l4 4v14H6z"/><path d="M15 3v4h4M9 13h6M9 17h6"/></svg></div>
+        <h3>GeoParquet annotations</h3><p>A compact, spatially indexed format that GeoPandas, QGIS and DuckDB open; converts to and from QuPath, HALO, Aperio, ASAP, COCO, CSV and label masks.</p></div>
+      <div class="card"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg></div>
+        <h3>Measure any region</h3><p>Shape, stain and channel intensity, texture, cell counts, density, composition, diversity, neighbour distances and clustering, per class, in one table.</p></div>
       <div class="card"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/></svg></div>
         <h3>Ready for production</h3><p>Byte-budgeted caches, memory-mapped object layers, an integration probe, a load tester, and permissive licences only.</p></div>
     </div>
@@ -176,7 +182,10 @@
       <div>
         <div class="panel on" id="p-desktop" role="tabpanel"><div class="bar">shell<button class="copy" data-copy="c-desktop">Copy</button></div>
 <pre id="c-desktop"><span class="c"># install once (Windows, macOS, Linux)</span>
-uv tool install <span class="s">"wissi-viz[desktop]"</span>
+uv tool install <span class="s">"wissi-viz[demo]"</span>
+
+<span class="c"># 32 public slides, every cell found and measured, in 32 panes</span>
+wissi-viz --demo full
 
 <span class="c"># open the app, or open files directly</span>
 wissi-viz-app

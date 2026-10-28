@@ -32,7 +32,9 @@
 - **Fast, on the GPU.** One WebGL2 context drives 1–32 panes, with synchronised navigation, multi-channel fluorescence compositing, stain deconvolution and adaptive resolution while moving. It stays smooth on clients without a GPU.
 - **Formats:** SVS, CZI, OME-TIFF, NDPI, VSI, ZVI, DICOM, SCN, AFI and more, plus vendor tile APIs (PathCore, HALO Link, any HTTP tile service) through connectors.
 - **Millions of cells.** Object tables from QuPath, HALO, CellProfiler, GeoJSON, label masks or AnnData. They are shown as aggregated dots when zoomed out and as GPU-drawn outlines up close, coloured by class or by any measurement.
-- **Annotations:** ROIs and drawing tools (point, rectangle, ellipse, polygon, freehand, line), with import and export.
+- **Annotations with SAM 2.1.** Click an object or drag a box in any of the 32 panes and Segment Anything outlines it; pick a class and accept. Runs on PyTorch (CUDA / Apple / CPU) or ONNX Runtime (CUDA / DirectML / CPU), with a model-free fallback. Drawing tools too (point, rectangle, ellipse, polygon, freehand, line).
+- **An efficient annotation format.** GeoParquet (≈3× smaller than GeoJSON, spatially filterable, opens in GeoPandas, QGIS and DuckDB), with `wissi-viz convert` to and from QuPath GeoJSON, HALO, Aperio and ASAP XML, CSV, COCO and label masks.
+- **Measurements of any region.** Shape, stain or channel intensity, texture, and — with cells — counts, density, composition, diversity, neighbour distances, contacts and clustering (Clark–Evans, Morisita, Ripley), per class, in one exportable table.
 - **Spatial analysis:**
   - nearest neighbours, proximity, invasive margins, ROI composition, density and hotspots;
   - Ripley's K/L/g, co-location, cellular neighbourhoods, contact graphs, Moran's I, IHC H-score.
@@ -47,6 +49,15 @@ uv add "wissi-viz[nicegui,server]"      # in your project (or: pip install "wiss
 uv tool install "wissi-viz[desktop]"    # the desktop app
 ```
 
+**Try it on real slides** — the bundled demo downloads public images (CC0, TCGA open access, CC BY), finds every
+cell, runs the analyses and opens them; the benchmark measures this machine:
+
+```bash
+uv run wissi-viz --demo              # needs the [demo] extra · 5 images (~1.2 GB): 3 H&E + 2 multiplex IF
+uv run wissi-viz --demo full         # 32 images (~7 GB): 26 H&E (18 tumour types, lymph-node metastases) + 6 IF
+uv run wissi-viz --benchmark         # report → ./wissi-viz-benchmark.md
+```
+
 | Extra | Adds |
 |---|---|
 | `nicegui` | the NiceGUI element |
@@ -56,6 +67,7 @@ uv tool install "wissi-viz[desktop]"    # the desktop app
 | `slideio` | VSI, ZVI, DICOM, SCN, AFI |
 | `remote` | HTTP client for vendor tile APIs |
 | `desktop` | the native desktop window (pywebview) |
+| `sam` / `sam-onnx` | SAM 2.1 click annotation on PyTorch / ONNX Runtime (Apache-2.0 weights) |
 | `all` | everything permissive above, except `desktop` |
 | `lgpl` | opt-in: OpenSlide (MRXS, BIF) and libCZI |
 
@@ -72,6 +84,13 @@ wissi-viz desktop --install-shortcut       # add it to the Start menu / Applicat
 ```
 
 ![Desktop app: CMU-1 with nuclei coloured by size, overview and 40×](docs/screenshots/desktop-app.jpg)
+
+**Segment, convert, measure:**
+
+```bash
+wissi-viz segment slide.svs cells.parquet --model cellpose   # every cell → GeoParquet (Cellpose-SAM, GPU)
+wissi-viz convert cells.parquet cells.geojson --to qupath    # or halo / aperio / csv / coco / mask
+```
 
 **Standalone server** with the same app UI (slide list, 1–32 panes) for everyone on your network:
 

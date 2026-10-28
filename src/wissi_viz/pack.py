@@ -367,8 +367,17 @@ def session(sel: list[dict], d: Path) -> Path:
 
 
 # ------------------------------------------------------------------------------------------------ entry points
+def _need_extras() -> None:
+    import importlib.util
+    missing = [m for m in ('pyarrow', 'scipy', 'skimage', 'pandas', 'shapely') if not importlib.util.find_spec(m)]
+    if missing:
+        raise SystemExit(f'the demo needs {", ".join(missing)}: install "wissi-viz[demo]" '
+                         '(uv tool install "wissi-viz[demo]", or uv sync --extra demo)')
+
+
 def run_demo(which: str = 'quick', directory: str | None = None, model: str = 'auto', yes: bool = False,
              open_app: bool = True, browser: bool = False, log=print) -> Path:
+    _need_extras()
     sel = items(which)
     d = pack_dir(directory)
     need = sum(x['size'] for x in sel if not _complete(d / 'downloads' / x['file'], x))
@@ -441,8 +450,9 @@ def run_benchmark(which: str = 'quick', directory: str | None = None, out: str =
     latency, region metrics, GeoParquet vs GeoJSON. Writes <out>.md and <out>.json."""
     import platform
 
-    from . import __version__, annio
+    from . import __version__
     from .bench import browser_bench, server_bench
+    _need_extras()
     sel = items(which)
     d = pack_dir(directory)
     need = sum(x['size'] for x in sel if not _complete(d / 'downloads' / x['file'], x))

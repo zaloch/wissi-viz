@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "wissi-viz"
-version = "0.7.0"
+version = "0.8.0"
 description = "GPU-accelerated (WebGL2) whole-slide image viewer and spatial-analysis toolkit for brightfield and fluorescence histology (SVS/CZI/OME-TIFF/PathCore/HALO Link), for the browser and NiceGUI"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -42,6 +42,8 @@ desktop = ["pywebview>=5", "uvicorn>=0.29"]
 sam = ["torch>=2.2; sys_platform != 'darwin' or platform_machine != 'x86_64'", "transformers>=4.56", "scipy>=1.11", "scikit-image>=0.22"]
 sam-onnx = ["onnxruntime>=1.17", "scipy>=1.11", "scikit-image>=0.22"]
 all = ["wissi-viz[analysis,io,slideio,nicegui,server,polars]"]
+# everything `wissi-viz --demo` / `--benchmark` use (add [sam] or [sam-onnx] for SAM 2.1, cellpose for Cellpose-SAM)
+demo = ["wissi-viz[analysis,io,server,desktop,bench]"]
 # opt-in, NOT permissive (LGPL): extra formats / alternative CZI backend
 lgpl = ["pylibCZIrw>=4.1", "openslide-python>=1.3", "openslide-bin>=4.0"]
 dev = ["pytest", "httpx", "playwright"]   # pip users; uv uses the dev dependency group below

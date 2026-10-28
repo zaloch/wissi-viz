@@ -1,11 +1,12 @@
 # Integrating wissi-viz
 
-*Current as of wissi-viz 0.7.0.* This guide covers how to put wissi-viz into an app: NiceGUI (wissi), other Python web frameworks, JavaScript frameworks and notebooks. It also covers:
+*Current as of wissi-viz 0.8.0.* This guide covers how to put wissi-viz into an app: NiceGUI (wissi), other Python web frameworks, JavaScript frameworks and notebooks. It also covers:
 - how to show large cell and object tables;
 - how to keep the viewer smooth, including on clients without a GPU;
 - how to connect a vendor tile API such as PathCore or HALO Link;
 - how to deploy and load-test;
-- the standalone desktop app, and installing with uv on Windows, macOS and Linux.
+- the standalone desktop app, and installing with uv on Windows, macOS and Linux;
+- annotation files, SAM 2.1 click annotation, region measurements, and the public demo and benchmark.
 
 ```
  browser (any app)                       your server                                   storage / vendors
@@ -26,6 +27,7 @@
 
 | Version | Change | What you do |
 |---|---|---|
+| 0.8.0 | **Annotate, measure, demo.** Up to 32 panes; `wissi-viz serve` shows the app UI with a slide list. SAM 2.1 click / box annotation (PyTorch or ONNX Runtime, Apache-2.0 weights). GeoParquet annotation files and `wissi-viz convert`. Region and object metrics. `wissi-viz segment` (Cellpose-SAM, Classpose, classic). `wissi-viz --demo` / `--benchmark` on 32 public slides. | Optional: `[sam]` / `[sam-onnx]` extras (§15); `[demo]` for the demo (§17). Pages that loaded `/` for the bare element demo now use `/demo`. |
 | 0.7.0 | **Desktop app and platform support.** `wissi-viz-app` opens the viewer in its own native window with its own icon (pywebview), as an option next to the embedded element. Windows, macOS and Linux are supported and CI-tested; packaging moved to uv (`uv.lock`, dependency groups). Python 3.10–3.11 work again (older czifile). | Nothing for embedded use. For the app: `uv tool install "wissi-viz[desktop]"` (§12). For development: `uv sync` (§13). |
 | 0.5.0 | **Object pyramid.** Millions of cells are shown as screen-sized aggregated dots, then as GPU-drawn outlines when zoomed in. There is a **server mode** (default) and a **client mode**. | Use `cached_object_layer` for big tables (§5). Choose `overlays: 'server'\|'client'\|'auto'`. |
 | 0.5.1 | **Polars reader.** `read_objects(engine='auto')` uses Polars, then pyarrow, then pandas. | `pip install "wissi-viz[polars]"`. |
@@ -540,3 +542,84 @@ uv build                                     # sdist + wheel in dist/
   - **Cache file names** avoid Windows reserved names (CON, NUL, …), illegal characters and the 260-character path limit.
   - **Process memory** (`/stats`, the memory harness) is read with psutil if present, else `/proc` (Linux), the Win32 API (Windows) or `ps` (macOS). `malloc_trim` is used only with glibc.
   - **Benchmarks and the WebGPU test** only add Linux-specific Chromium flags on Linux.
+
+## 14. Annotation files
+
+GeoParquet is the default: Parquet with WKB geometry, a bounding-box column for spatial filtering, zstd compression, the class as a dictionary column, every property as its own column, and wissi-viz metadata (class colours, style, µm/px). A million cell outlines take ~160 MB instead of ~450 MB as GeoJSON and load in ~2 s; reading one region of a slide touches only the row groups it needs. GeoPandas, QGIS (GDAL ≥ 3.8), DuckDB and Arrow read it directly.
+
+```python
+layer.export('cells.parquet')                         # or .geojson, .annotations, .xml, .csv, .coco.json, .tif
+layer = AnnotationLayer.load('cells.parquet')         # any supported format, by extension
+from wissi_viz import annio
+cells = annio.load('cells.parquet', bbox=(x0, y0, x1, y1))   # only the cells in a region
+```
+
+```bash
+wissi-viz convert in.geojson out.parquet                         # by extension
+wissi-viz convert cells.parquet cells.geojson --to qupath        # QuPath objectType + RGB class colours
+wissi-viz convert rois.xml rois.parquet                          # HALO, Aperio or ASAP XML (auto-detected)
+wissi-viz convert cells.parquet labels.tif --slide s.svs --downsample 4 --by class   # label mask
+```
+
+| Format | Read | Write | Notes |
+|---|---|---|---|
+| GeoParquet | ✔ | ✔ | lossless; needs pyarrow (`[io]`) |
+| GeoJSON / QuPath | ✔ | ✔ | `qupath` writes `objectType`, classification colours as RGB, numeric measurements |
+| HALO XML | ✔ | ✔ | negative regions become holes |
+| Aperio XML | ✔ | ✔ | negative regions become holes |
+| ASAP XML | ✔ | | CAMELYON and other challenge datasets |
+| CSV | ✔ (object tables) | ✔ | class, centroid, bbox, area, properties, optional WKT |
+| COCO | ✔ | ✔ | instance segmentation polygons |
+| Label mask TIFF | ✔ | ✔ | per feature (uint32) or per class (uint16), any downsample |
+
+Over HTTP: `GET {prefix}/slides/{id}/annotations/export?layer=…&fmt=geoparquet|geojson|qupath|halo|aperio|csv|coco`.
+
+## 15. SAM 2.1 click annotation
+
+In the app (desktop or `wissi-viz serve`), **Annotate & measure → SAM tool**, or `grid.setTool('sam')` on the element:
+
+- **click** an object to include it, **shift/alt-click** to exclude a part, **drag** a box;
+- the cyan outline updates after each prompt; **Enter / double-click / Accept** saves it to the draw layer with the chosen class (`setDrawLayer`, `setDrawClass`); **Esc** discards it;
+- it works in any of the 32 panes; each pane's view is encoded once and cached, so further clicks only run the mask decoder.
+
+| Backend | Install | Runs on | Notes |
+|---|---|---|---|
+| `torch` | `[sam]` (transformers + torch) | CUDA, Apple MPS, CPU | `facebook/sam2.1-hiera-*` from Hugging Face; fastest on a GPU (`--benchmark` reports your click latency) |
+| `onnx` | `[sam-onnx]` (ONNX Runtime; `onnxruntime-gpu` / `-directml` for GPUs) | CUDA, DirectML (any Windows GPU), CoreML, CPU | SAM 2.1 tiny / small exported by this project's CI and checked against PyTorch (mask IoU ≥ 0.9998); downloaded once, SHA-256 verified |
+| `classic` | nothing | CPU | colour flood fill / Otsu in the box; always available, rougher masks |
+
+`WISSI_SAM_BACKEND` = auto | torch | onnx | classic, `WISSI_SAM_MODEL` = tiny | small | base-plus | large, `WISSI_SAM_DEVICE` = auto | cuda | mps | dml | cpu. All weights are Apache-2.0 (commercial use allowed). Endpoints: `GET {prefix}/sam/status`, `POST {prefix}/slides/{id}/sam` with `{rect, points, labels, box}` → polygons in level-0 px.
+
+## 16. Measuring regions and objects
+
+```python
+from wissi_viz.metrics import region_metrics, object_metrics
+table = region_metrics(rois, source=slide, objects=cells)   # one row per ROI
+per_cell = object_metrics(cells, source=slide)              # one row per segmented object
+```
+
+| Prefix | Region measurements |
+|---|---|
+| `shape_` | area, perimeter, circularity, solidity, convexity, extent, eccentricity, major / minor axis (exact area moments), orientation, Feret diameters, aspect ratio, holes |
+| `int_` | brightfield: haematoxylin / eosin / DAB optical density and R, G, B (mean, sd, median, p10, p90, integrated, Otsu-positive fraction), tissue fraction; fluorescence: the same per channel |
+| `tex_` | Haralick GLCM (contrast, dissimilarity, homogeneity, energy, correlation, ASM; 4 directions × 1, 2, 4 px) and entropy; `analysis_mpp` gives the resolution |
+| `obj_` | count, density / mm², per class count, % and density, Shannon / Simpson diversity, richness, evenness, nearest-neighbour distance (all, per class, class → class), contact fraction, Clark–Evans index, Morisita index, Ripley L(r) − r, depth from the region boundary, mean and median of every numeric cell measurement |
+
+Per object: area, perimeter, circularity, solidity, axes, eccentricity, aspect ratio, Feret, and mean / sd of every stain or channel inside the exact outline (rasterised tile by tile). In the app: **Annotate & measure → Measure**; over HTTP: `GET {prefix}/slides/{id}/annotations/metrics?layer=…&objects=…&fmt=json|csv|parquet` and `…/annotations/object_metrics?layer=…`.
+
+## 17. Segmentation, the public sample pack, demo and benchmark
+
+```bash
+wissi-viz segment slide.svs cells.parquet                    # auto: Cellpose-SAM if installed, else classic
+wissi-viz segment slide.svs cells.parquet --model cellpose   # pip install cellpose (BSD-3); GPU if available
+wissi-viz segment slide.svs cells.parquet --model classpose  # H&E cell types, in its own uvx environment
+uv run wissi-viz --demo [quick|full]                         # [demo] extra
+uv run wissi-viz --benchmark [quick|full]
+wissi-viz pack status | download | prepare | segment | analyze | open --set full
+```
+
+- **Segmentation** runs tile by tile on tissue at 0.5 µm/px; a cell belongs to the tile that holds its centre, so cells are neither cut nor duplicated. Every backend writes outlines, a class and measurements (area, perimeter, circularity, eccentricity, mean stain / channel). Classes: Classpose assigns cell types; the others classify by measurement (H&E nuclei by size; fluorescence cells by their brightest positive marker).
+- **Licences.** Cellpose-SAM: code and weights BSD-3. **Classpose:** weights labelled MIT, but trained on datasets with non-commercial terms (e.g. CoNIC/Lizard, MoNuSAC: CC BY-NC-SA); it is opt-in and runs in its own environment; review before commercial use. GrandQC (non-commercial) is never used.
+- **The pack** (`src/wissi_viz/data/pack32.json`, built in CI with sizes and checksums): 3 OpenSlide Aperio slides (CC0), 5 CAMELYON16 lymph-node slides with expert tumour outlines (CC0), 18 TCGA diagnostic slides, one per tumour type (NCI GDC open access), and 6 10x Xenium multiplex IF images with 10x cell outlines (CC BY 4.0). All allow commercial use; `ATTRIBUTION.md` is written next to the images. Quick set: 5 images, ~1.2 GB; full: 32 images, ~7 GB.
+- **`--demo`** downloads (resumable, verified), merges Xenium channels into one OME-TIFF, converts the expert annotations, segments, analyses (tissue outline, cell density, Getis-Ord hotspots, region metrics → `metrics/all_regions.csv`) and opens a 32-pane session in the desktop app. Cells from a GPU run are downloaded instead of recomputed when this project publishes them (release `pack32-results-v1`).
+- **`--benchmark`** writes `wissi-viz-benchmark.md` / `.json`: slide opening and tile serving, panning with 1, 4, 16 and 32 panes in Chromium (`--headed` to use your GPU), SAM click latency, region metrics, GeoParquet vs GeoJSON. CI runs both on the quick set (`.github/workflows/demo.yml`).

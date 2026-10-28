@@ -79,7 +79,7 @@ def test_sam_endpoint(slide):
 def test_real_sam(slide):
     svc = SamService(backend=os.environ['WISSI_TEST_SAM'], model=os.environ.get('WISSI_SAM_MODEL', 'tiny'))
     polys, info = svc.segment(slide, rect=(700, 700, 1500, 1500), points=[(1000, 1000)], labels=[1], key='r')
-    assert info['backend'] == os.environ['WISSI_TEST_SAM']
+    assert info['backend'] == os.environ['WISSI_TEST_SAM'], svc.status()['notes']
     assert _area(polys[0]) == pytest.approx(math.pi * 40 ** 2, rel=0.25)
     polys, info = svc.segment(slide, rect=(700, 700, 1500, 1500), box=(1160, 1010, 1240, 1090), key='r')
     assert info['cached'] and _area(polys[0]) == pytest.approx(math.pi * 25 ** 2, rel=0.3)

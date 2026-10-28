@@ -111,17 +111,10 @@ class _Torch:
         self.model = Sam2Model.from_pretrained(mid).to(device).eval()
 
     def embed(self, rgb: np.ndarray):
-        torch = self.torch
-        inputs = self.processor(images=rgb, return_tensors='pt').to(self.device)
-        with torch.inference_mode():
-            if hasattr(self.model, 'get_image_embeddings'):
-                emb = self.model.get_image_embeddings(inputs['pixel_values'])
-            else:                                       # older/newer API: one forward with a dummy prompt
-                h, w = rgb.shape[:2]
-                out = self.model(**self.processor(images=rgb, input_points=[[[[w / 2, h / 2]]]], input_labels=[[[1]]],
-                                                  return_tensors='pt').to(self.device), multimask_output=False)
-                emb = out.image_embeddings
-        return {'emb': emb, 'sizes': inputs['original_sizes']}
+        # the first prompt runs the image encoder (forward with pixel_values) and keeps its image_embeddings;
+        # later prompts on the same view pass those embeddings and only run the mask decoder
+        inputs = self.processor(images=rgb, return_tensors='pt')
+        return {'pixel_values': inputs['pixel_values'].to(self.device), 'sizes': inputs['original_sizes'], 'emb': None}
 
     def predict(self, emb, points, labels, box):
         torch = self.torch
@@ -133,9 +126,14 @@ class _Torch:
             kw['input_boxes'] = [[[float(v) for v in box]]]
         inputs = self.processor(**kw).to(self.device)
         inputs.pop('original_sizes', None)
+        inputs.pop('reshaped_input_sizes', None)
         multi = box is None and len(points) == 1
         with torch.inference_mode():
-            out = self.model(**inputs, image_embeddings=emb['emb'], multimask_output=multi)
+            if emb['emb'] is None:
+                out = self.model(pixel_values=emb['pixel_values'], **inputs, multimask_output=multi)
+                emb['emb'] = out.image_embeddings
+            else:
+                out = self.model(**inputs, image_embeddings=emb['emb'], multimask_output=multi)
         masks = self.processor.post_process_masks(out.pred_masks.cpu(), emb['sizes'])[0]   # (objects, masks, H, W)
         scores = out.iou_scores.detach().float().cpu().numpy().reshape(-1)
         k = int(np.argmax(scores)) if multi else 0

@@ -60,21 +60,26 @@ from nicegui import ui
 from wissi_viz import cached_object_layer
 from wissi_viz.nicegui import WissiViz, configure
 
-def require_login(request: Request):                       # your auth; protects every tile and overlay route
+
+def require_login(request: Request):  # your auth; protects every tile and overlay route
     if not request.session.get('user'):
         raise HTTPException(401)
 
-registry = configure(cache_dir='/cache/wissi-viz', memory_mb=2048,
-                     dependencies=[Depends(require_login)])
+
+registry = configure(cache_dir='/cache/wissi-viz', memory_mb=2048, dependencies=[Depends(require_login)])
+
 
 @ui.page('/viewer')
 def viewer():
-    grid = WissiViz(['/data/case1.svs', '/data/case1_if.czi'], layout='1x2', sync='all',
-                    on_object_click=lambda e: ui.notify(e.get('properties')),
-                    on_view_change=lambda v: status.set_text(f"pane {v['pane']}: {v['magnification']:.1f}×"),
-                    ).classes('w-full h-[85vh]')
+    grid = WissiViz(
+        ['/data/case1.svs', '/data/case1_if.czi'],
+        layout='1x2',
+        sync='all',
+        on_object_click=lambda e: ui.notify(e.get('properties')),
+        on_view_change=lambda v: status.set_text(f'pane {v["pane"]}: {v["magnification"]:.1f}×'),
+    ).classes('w-full h-[85vh]')
     status = ui.label()
-    cells = cached_object_layer('/data/case1_cells.parquet', '/cache/layers', mpp=0.25)   # see §5
+    cells = cached_object_layer('/data/case1_cells.parquet', '/cache/layers', mpp=0.25)  # see §5
     grid.show(grid.slides[0], cells, name='cells')
     with ui.row():
         ui.button('ROI 1', on_click=lambda: grid.go_to(0, 15200, 9800, magnification=20))
@@ -105,11 +110,13 @@ def viewer():
 ### Path B: the raw component inside NiceGUI
 
 ```python
-registry = configure()        # still mounts /wissi-viz
+registry = configure()  # still mounts /wissi-viz
 ui.add_head_html('<script type="module" src="/wissi-viz/static/index.js"></script>')
 ui.html('<wissi-viz id="v" slides="slideA,slideB" style="display:block;height:80vh"></wissi-viz>')
-ui.button('20×', on_click=lambda: ui.run_javascript(
-    'document.getElementById("v").goTo("all", 8000, 6000, {magnification: 20})'))
+ui.button(
+    '20×',
+    on_click=lambda: ui.run_javascript('document.getElementById("v").goTo("all", 8000, 6000, {magnification: 20})'),
+)
 ```
 
 ## 3. Any ASGI app (path C)
@@ -132,8 +139,9 @@ Run the tile server on its own (in a container), with CORS limited to your app's
 ```python
 # tiles.py — uvicorn tiles:app --port 8010   (or hypercorn with TLS for HTTP/2)
 from wissi_viz import SlideRegistry, TileService, cached_object_layer, create_app
+
 registry = SlideRegistry(TileService(disk_dir='/cache/wissi-viz'))
-registry.add_directory('/data/slides')                  # and/or connector.register(registry, image_id)
+registry.add_directory('/data/slides')  # and/or connector.register(registry, image_id)
 registry.add_annotations('case1', cached_object_layer('/data/case1_cells.parquet', '/cache/layers', mpp=0.25))
 app = create_app(registry, cors='https://app.example.org')
 ```
@@ -190,9 +198,12 @@ Don't put the view into React state that re-renders the whole page on every `vie
 **Streamlit**
 ```python
 import streamlit.components.v1 as components
-components.html(f'''<script type="module" src="https://tiles.example.org/wissi-viz/static/index.js"></script>
+
+components.html(
+    f'''<script type="module" src="https://tiles.example.org/wissi-viz/static/index.js"></script>
 <wissi-viz api="https://tiles.example.org/wissi-viz" slides="{','.join(ids)}" style="display:block;height:760px"></wissi-viz>''',
-                height=780)
+    height=780,
+)
 ```
 
 **Dash, Panel, Jupyter:** embed a page served by the tile server, for example `html.Iframe(src='https://tiles.example.org/')` or `IPython.display.IFrame(...)`. You can also render the same `<script>` + `<wissi-viz>` HTML wherever the framework allows raw HTML with scripts.
@@ -214,9 +225,11 @@ components.html(f'''<script type="module" src="https://tiles.example.org/wissi-v
 
 ```python
 from wissi_viz import cached_object_layer
-layer = cached_object_layer('/data/case1_cells.parquet', '/cache/layers', mpp=0.25,
-                            read_kw={'engine': 'polars'}, name='cells')
-grid.show('case1', layer)                       # NiceGUI; or registry.add_annotations('case1', layer)
+
+layer = cached_object_layer(
+    '/data/case1_cells.parquet', '/cache/layers', mpp=0.25, read_kw={'engine': 'polars'}, name='cells'
+)
+grid.show('case1', layer)  # NiceGUI; or registry.add_annotations('case1', layer)
 ```
 
 - The first call parses the table and compiles it: outline buckets plus the object pyramid, about 3 s of CPU per 1M cells.
@@ -238,7 +251,7 @@ grid.show('case1', layer)                       # NiceGUI; or registry.add_annot
 | `'auto'` | Client mode for layers of 300k objects or fewer, while the viewer holds under 1M objects client-side; server mode otherwise. | Mixed workloads. |
 
 ```python
-WissiViz(slides, lod={'overlays': 'auto'})      # or grid.set_lod(overlays='client')
+WissiViz(slides, lod={'overlays': 'auto'})  # or grid.set_lod(overlays='client')
 ```
 Measured A/B (1 and 16 panes; 10–100 users): `benchmarks/results-overlays.md`.
 
@@ -315,16 +328,17 @@ python examples/tile_api/app.py --api http://127.0.0.1:9000 --token secret      
 
 ```python
 class MyVendor(RemoteConnection):
-    id_prefix = 'halo'          # slide ids become 'halo-<image id>'
-    max_concurrency = 10        # stay under the vendor's rate limit
+    id_prefix = 'halo'  # slide ids become 'halo-<image id>'
+    max_concurrency = 10  # stay under the vendor's rate limit
     retries = 4
 
-    def image_info(self, image_id) -> RemoteImageInfo: ...          # required
-    def tile(self, image_id, level, col, row, channel=None): ...    # required: bytes | ndarray | None
-    def annotations(self, image_id): ...                            # optional: [AnnotationPayload]
-    def objects(self, image_id): ...                                # optional: [AnnotationPayload] (cell tables)
+    def image_info(self, image_id) -> RemoteImageInfo: ...  # required
+    def tile(self, image_id, level, col, row, channel=None): ...  # required: bytes | ndarray | None
+    def annotations(self, image_id): ...  # optional: [AnnotationPayload]
+    def objects(self, image_id): ...  # optional: [AnnotationPayload] (cell tables)
 
-sid = MyVendor(client).register(registry, 'image-123')   # lazy: nothing is fetched until a pane shows it
+
+sid = MyVendor(client).register(registry, 'image-123')  # lazy: nothing is fetched until a pane shows it
 ```
 
 | The vendor… | Put this in the connector |
@@ -354,7 +368,8 @@ If the service serves tiles at plain URLs, describe it in JSON instead of writin
 
 ```python
 from wissi_viz.connectors import HttpTileConnection
-conn = HttpTileConnection('my_api.json')        # base_url, auth headers (${ENV_VAR}), metadata fields, tile URL template
+
+conn = HttpTileConnection('my_api.json')  # base_url, auth headers (${ENV_VAR}), metadata fields, tile URL template
 sid = conn.register(registry, 'image-123')
 ```
 
@@ -548,10 +563,11 @@ uv build                                     # sdist + wheel in dist/
 GeoParquet is the default: Parquet with WKB geometry, a bounding-box column for spatial filtering, zstd compression, the class as a dictionary column, every property as its own column, and wissi-viz metadata (class colours, style, µm/px). A million cell outlines take ~160 MB instead of ~450 MB as GeoJSON and load in ~2 s; reading one region of a slide touches only the row groups it needs. GeoPandas, QGIS (GDAL ≥ 3.8), DuckDB and Arrow read it directly.
 
 ```python
-layer.export('cells.parquet')                         # or .geojson, .annotations, .xml, .csv, .coco.json, .tif
-layer = AnnotationLayer.load('cells.parquet')         # any supported format, by extension
+layer.export('cells.parquet')  # or .geojson, .annotations, .xml, .csv, .coco.json, .tif
+layer = AnnotationLayer.load('cells.parquet')  # any supported format, by extension
 from wissi_viz import annio
-cells = annio.load('cells.parquet', bbox=(x0, y0, x1, y1))   # only the cells in a region
+
+cells = annio.load('cells.parquet', bbox=(x0, y0, x1, y1))  # only the cells in a region
 ```
 
 ```bash
@@ -594,8 +610,9 @@ In the app (desktop or `wissi-viz serve`), **Annotate & measure → SAM tool**, 
 
 ```python
 from wissi_viz.metrics import region_metrics, object_metrics
-table = region_metrics(rois, source=slide, objects=cells)   # one row per ROI
-per_cell = object_metrics(cells, source=slide)              # one row per segmented object
+
+table = region_metrics(rois, source=slide, objects=cells)  # one row per ROI
+per_cell = object_metrics(cells, source=slide)  # one row per segmented object
 ```
 
 | Prefix | Region measurements |

@@ -112,11 +112,13 @@ wissi-viz serve /data/slides --port 8010
 from nicegui import ui
 from wissi_viz.nicegui import WissiViz, configure
 
-configure(cache_dir='/var/cache/wissi-viz')     # once, at startup
+configure(cache_dir='/var/cache/wissi-viz')  # once, at startup
+
 
 @ui.page('/')
 def index():
     WissiViz(['/data/case1.svs', '/data/case1_if.czi'], sync='all').classes('w-full h-[85vh]')
+
 
 ui.run()
 ```
@@ -143,9 +145,15 @@ uv sync --extra analysis --extra io --extra polars --extra server --extra remote
 uv run playwright install chromium
 uv run pytest -q
 uv build
+uvx ruff check . && uvx ruff format .   # lint + format (settings in pyproject.toml)
 ```
 
-CI runs the tests on Linux (x64, ARM), Windows and macOS (Apple silicon, Intel) for Python 3.10, 3.12 and 3.13.
+Code style: ruff (pycodestyle, pyflakes, isort, bugbear, pyupgrade, comprehensions, blind excepts), 120 columns,
+single quotes. Imports go at the top of the module; only optional extras (torch, cellpose, pandas, …) are imported
+inside the function that needs them, so `import wissi_viz` works with the core install. `tests/test_style.py`
+enforces this, and every `except Exception` carries a comment saying why it is safe.
+
+CI lints first, then runs the tests on Linux (x64, ARM), Windows and macOS (Apple silicon, Intel) for Python 3.10, 3.12 and 3.13.
 
 ## License
 

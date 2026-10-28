@@ -10,12 +10,15 @@ The tile/annotation routes are mounted on NiceGUI's FastAPI app automatically
 (under ``/wissi-viz`` by default). Everything runs in the NiceGUI process — no extra
 server or port, which is what you want inside a Docker container.
 """
+
 from __future__ import annotations
 
+import logging
 import os
-from typing import Any, Callable, Sequence
+from collections.abc import Callable, Sequence
+from typing import Any
 
-from nicegui import app
+from nicegui import app, run
 from nicegui.element import Element
 from nicegui.events import GenericEventArguments
 
@@ -23,7 +26,10 @@ from .annotations import AnnotationLayer
 from .registry import SlideRegistry
 from .server import create_router
 from .sources import SlideSource
+from .spatial import estimate_stain_vectors
 from .tiles import TileService
+
+log = logging.getLogger(__name__)
 
 _default: SlideRegistry | None = None
 _mounted: dict[str, SlideRegistry] = {}
@@ -31,11 +37,23 @@ _mounted: dict[str, SlideRegistry] = {}
 SlideRef = 'str | os.PathLike | SlideSource | dict'
 
 
-def configure(*, cache_dir: str | os.PathLike | None = None, memory_mb: int = 1024, disk_gb: float = 20,
-              workers: int | None = None, registry: SlideRegistry | None = None, prefix: str = '/wissi-viz',
-              allow_edit: bool = True, dependencies: list | None = None, annotation_memory_mb: float | None = 1024,
-              decoded_cache_mb: float | None = None, overlay_cache_mb: float | None = None,
-              layer_disk_gb: float = 20, gzip_cache_mb: float = 256, layer_mapped_mb: float | None = 2048) -> SlideRegistry:
+def configure(
+    *,
+    cache_dir: str | os.PathLike | None = None,
+    memory_mb: int = 1024,
+    disk_gb: float = 20,
+    workers: int | None = None,
+    registry: SlideRegistry | None = None,
+    prefix: str = '/wissi-viz',
+    allow_edit: bool = True,
+    dependencies: list | None = None,
+    annotation_memory_mb: float | None = 1024,
+    decoded_cache_mb: float | None = None,
+    overlay_cache_mb: float | None = None,
+    layer_disk_gb: float = 20,
+    gzip_cache_mb: float = 256,
+    layer_mapped_mb: float | None = 2048,
+) -> SlideRegistry:
     """Set up the shared registry (call once at startup, before creating viewers).
 
     ``cache_dir`` enables the persistent tile cache — mount it as a Docker volume so it
@@ -51,11 +69,17 @@ def configure(*, cache_dir: str | os.PathLike | None = None, memory_mb: int = 10
     """
     global _default
     if registry is None:
-        registry = SlideRegistry(TileService(memory_bytes=memory_mb * 2**20, disk_dir=cache_dir,
-                                             disk_bytes=int(disk_gb * 2**30), workers=workers),
-                                 annotation_memory_mb=annotation_memory_mb, decoded_cache_mb=decoded_cache_mb,
-                                 overlay_cache_mb=overlay_cache_mb, layer_disk_gb=layer_disk_gb,
-                                 gzip_cache_mb=gzip_cache_mb, layer_mapped_mb=layer_mapped_mb)
+        registry = SlideRegistry(
+            TileService(
+                memory_bytes=memory_mb * 2**20, disk_dir=cache_dir, disk_bytes=int(disk_gb * 2**30), workers=workers
+            ),
+            annotation_memory_mb=annotation_memory_mb,
+            decoded_cache_mb=decoded_cache_mb,
+            overlay_cache_mb=overlay_cache_mb,
+            layer_disk_gb=layer_disk_gb,
+            gzip_cache_mb=gzip_cache_mb,
+            layer_mapped_mb=layer_mapped_mb,
+        )
     _default = registry
     mount(registry, prefix, allow_edit=allow_edit, dependencies=dependencies)
     return registry
@@ -68,16 +92,17 @@ def default_registry() -> SlideRegistry:
     return _default
 
 
-def mount(registry: SlideRegistry, prefix: str = '/wissi-viz', allow_edit: bool = True,
-          dependencies: list | None = None) -> None:
+def mount(
+    registry: SlideRegistry, prefix: str = '/wissi-viz', allow_edit: bool = True, dependencies: list | None = None
+) -> None:
     if prefix in _mounted:
         if _mounted[prefix] is not registry:
             raise RuntimeError(f'another registry is already mounted at {prefix}')
         return
-    app.include_router(create_router(registry, cors=None, allow_edit=allow_edit), prefix=prefix,
-                       dependencies=list(dependencies or []))
+    app.include_router(
+        create_router(registry, cors=None, allow_edit=allow_edit), prefix=prefix, dependencies=list(dependencies or [])
+    )
     _mounted[prefix] = registry
-
 
 
 def merge_views(views: dict, args: Any) -> list[dict]:
@@ -93,21 +118,37 @@ def merge_views(views: dict, args: Any) -> list[dict]:
         views[v['pane']] = v
     return changed
 
-class WissiViz(Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'},
-              default_style='width:100%;height:600px;'):
+
+class WissiViz(
+    Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'}, default_style='width:100%;height:600px;'
+):
     """1–32 whole-slide images in one GPU canvas.
 
     ``slides``: file paths, :class:`SlideSource` objects (e.g. PathCore/HALOLink adapters),
     registered slide ids, or dicts ``{'slide': ref, 'view': {...}, 'channels': [...], 'layers': {...}}``.
     """
 
-    def __init__(self, slides: Sequence[Any] = (), *, layout: str = 'auto', sync: str = 'none',
-                 controls: bool = True, legend: bool = True, tool: str = 'pan', draw_layer: str | None = None, quality: float = 1.0,
-                 texture_budget_mb: int | None = None, lod: str | dict | None = None, registry: SlideRegistry | None = None,
-                 prefix: str = '/wissi-viz',
-                 on_view_change: Callable | None = None, on_click: Callable | None = None,
-                 on_object_click: Callable | None = None, on_draw: Callable | None = None,
-                 on_slide_load: Callable | None = None) -> None:
+    def __init__(
+        self,
+        slides: Sequence[Any] = (),
+        *,
+        layout: str = 'auto',
+        sync: str = 'none',
+        controls: bool = True,
+        legend: bool = True,
+        tool: str = 'pan',
+        draw_layer: str | None = None,
+        quality: float = 1.0,
+        texture_budget_mb: int | None = None,
+        lod: str | dict | None = None,
+        registry: SlideRegistry | None = None,
+        prefix: str = '/wissi-viz',
+        on_view_change: Callable | None = None,
+        on_click: Callable | None = None,
+        on_object_click: Callable | None = None,
+        on_draw: Callable | None = None,
+        on_slide_load: Callable | None = None,
+    ) -> None:
         super().__init__()
         self.registry = registry or _mounted.get(prefix) or default_registry()
         mount(self.registry, prefix)
@@ -178,13 +219,13 @@ class WissiViz(Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'},
     def slides(self) -> list:
         return list(self._props['slides'])
 
-    def set_slides(self, slides: Sequence[Any]) -> 'WissiViz':
+    def set_slides(self, slides: Sequence[Any]) -> WissiViz:
         """Replace all panes (1–32)."""
         self._props['slides'] = [self._ref(s) for s in list(slides)[:32]]
         self.update()
         return self
 
-    def set_slide(self, pane: int, slide: Any) -> 'WissiViz':
+    def set_slide(self, pane: int, slide: Any) -> WissiViz:
         lst = list(self._props['slides'])
         while len(lst) <= pane:
             lst.append(None)
@@ -193,19 +234,19 @@ class WissiViz(Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'},
         self.update()
         return self
 
-    def set_layout(self, layout: str) -> 'WissiViz':
+    def set_layout(self, layout: str) -> WissiViz:
         """'auto' or 'ROWSxCOLS', e.g. '4x4', '3x4', '1x2'."""
         self._props['layout'] = layout
         self.update()
         return self
 
-    def set_sync(self, mode: str) -> 'WissiViz':
+    def set_sync(self, mode: str) -> WissiViz:
         """'none' | 'all' | 'pan' | 'zoom' — linked navigation across panes."""
         self._props['sync'] = mode
         self.update()
         return self
 
-    def set_tool(self, tool: str, draw_layer: str | None = None) -> 'WissiViz':
+    def set_tool(self, tool: str, draw_layer: str | None = None) -> WissiViz:
         """'pan' | 'point' | 'rect' | 'ellipse' | 'polygon' | 'freehand' | 'line'."""
         self._props['tool'] = tool
         if draw_layer is not None:
@@ -213,7 +254,7 @@ class WissiViz(Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'},
         self.update()
         return self
 
-    def set_lod(self, preset: str | None = None, **opts: Any) -> 'WissiViz':
+    def set_lod(self, preset: str | None = None, **opts: Any) -> WissiViz:
         """Level-of-detail policy. ``set_lod('legacy')`` / ``set_lod('default')`` or individual options:
         ``motion_bias`` (texels per device px allowed while moving, default 2), ``minify`` (keep loaded finer tiles
         down to this many device px per texel, 0.5), ``quadtree`` (draw the finest loaded tile per region, True),
@@ -232,9 +273,20 @@ class WissiViz(Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'},
     def _call(self, name: str, *args: Any):
         return self.run_method('call', name, *args)
 
-    def go_to(self, pane: int | str | list[int], x: float, y: float, *, units: str = 'px', zoom: float | None = None,
-              magnification: float | None = None, mpp: float | None = None, fov: float | None = None,
-              fov_um: float | None = None, animate: bool = True):
+    def go_to(
+        self,
+        pane: int | str | list[int],
+        x: float,
+        y: float,
+        *,
+        units: str = 'px',
+        zoom: float | None = None,
+        magnification: float | None = None,
+        mpp: float | None = None,
+        fov: float | None = None,
+        fov_um: float | None = None,
+        animate: bool = True,
+    ):
         """Centre ``pane`` (index, 'active', 'all' or a list) on (x, y) in level-0 px (or µm with ``units='um'``)."""
         opts: dict[str, Any] = {'units': units, 'animate': animate}
         for k, v in (('zoom', zoom), ('magnification', magnification), ('mpp', mpp), ('fov', fov), ('fovUm', fov_um)):
@@ -242,7 +294,9 @@ class WissiViz(Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'},
                 opts[k] = v
         return self._call('goTo', pane, x, y, opts)
 
-    def go_to_bounds(self, pane, x0: float, y0: float, x1: float, y1: float, padding: float = 0.1, animate: bool = True):
+    def go_to_bounds(
+        self, pane, x0: float, y0: float, x1: float, y1: float, padding: float = 0.1, animate: bool = True
+    ):
         return self._call('goToBounds', pane, x0, y0, x1, y1, {'padding': padding, 'animate': animate})
 
     def go_to_object(self, pane: int, slide: str, layer: str, index: int, padding: float = 1.0):
@@ -261,38 +315,78 @@ class WissiViz(Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'},
         return await self._call('getViews')
 
     # ------------------------------------------------------------ display
-    def set_channel(self, pane, index: int, *, visible: bool | None = None, color: str | None = None,
-                    min: float | None = None, max: float | None = None, gamma: float | None = None):  # noqa: A002
-        opts = {k: v for k, v in dict(visible=visible, color=color, min=min, max=max, gamma=gamma).items() if v is not None}
+    def set_channel(
+        self,
+        pane,
+        index: int,
+        *,
+        visible: bool | None = None,
+        color: str | None = None,
+        min: float | None = None,
+        max: float | None = None,
+        gamma: float | None = None,
+    ):
+        opts = {
+            k: v
+            for k, v in {'visible': visible, 'color': color, 'min': min, 'max': max, 'gamma': gamma}.items()
+            if v is not None
+        }
         return self._call('setChannel', pane, index, opts)
 
-    def set_adjust(self, pane, *, brightness: float | None = None, contrast: float | None = None,
-                   gamma: float | None = None, invert: bool | None = None):
-        opts = {k: v for k, v in dict(brightness=brightness, contrast=contrast, gamma=gamma, invert=invert).items()
-                if v is not None}
+    def set_adjust(
+        self,
+        pane,
+        *,
+        brightness: float | None = None,
+        contrast: float | None = None,
+        gamma: float | None = None,
+        invert: bool | None = None,
+    ):
+        opts = {
+            k: v
+            for k, v in {'brightness': brightness, 'contrast': contrast, 'gamma': gamma, 'invert': invert}.items()
+            if v is not None
+        }
         return self._call('setAdjust', pane, opts)
 
-    def set_stain(self, pane, mode: str = 'off', *, preset: str | None = None, vectors: dict | None = None,
-                  scale: float | None = None, colors: list[str] | None = None):
+    def set_stain(
+        self,
+        pane,
+        mode: str = 'off',
+        *,
+        preset: str | None = None,
+        vectors: dict | None = None,
+        scale: float | None = None,
+        colors: list[str] | None = None,
+    ):
         """Brightfield colour deconvolution on the GPU: ``mode`` = 'off' | 'hematoxylin' | 'eosin' | 'dab' |
         'residual' | 'fluorescence' (pseudo-IF composite). ``preset`` 'HE' / 'HDAB', or ``vectors`` from
         :func:`wissi_viz.spatial.estimate_stain_vectors` (Macenko) for this slide's staining."""
-        opts = {k: v for k, v in dict(preset=preset, vectors=vectors, scale=scale, colors=colors).items() if v is not None}
+        opts = {
+            k: v
+            for k, v in {'preset': preset, 'vectors': vectors, 'scale': scale, 'colors': colors}.items()
+            if v is not None
+        }
         return self._call('setStain', pane, mode, opts)
 
     async def auto_stain(self, pane: int, mode: str = 'hematoxylin', slide: str | None = None) -> dict:
         """Estimate this slide's stain vectors (Macenko) and apply them to ``pane``."""
-        from nicegui import run
 
-        from .spatial import estimate_stain_vectors
         sid = slide or self._slide_of(pane)
         _, pyr = self.registry.get(sid)
         vec = await run.io_bound(estimate_stain_vectors, pyr.source)
         self.set_stain(pane, mode, vectors=vec)
         return vec
 
-    def show(self, slide: str, item: Any, name: str | None = None, group: str | None = 'analysis',
-             replace: bool = True, **layer_kw) -> AnnotationLayer:
+    def show(
+        self,
+        slide: str,
+        item: Any,
+        name: str | None = None,
+        group: str | None = 'analysis',
+        replace: bool = True,
+        **layer_kw,
+    ) -> AnnotationLayer:
         """Overlay an analysis result (anything with ``.layer()``), an ObjectTable, or a layer on ``slide``.
         Every viewer showing that slide updates. Layers shown with the same ``group`` replace each other
         in this viewer (previous ones are hidden, not deleted); ``replace=False`` joins the group without
@@ -308,7 +402,7 @@ class WissiViz(Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'},
         out = self.registry.add_annotations(self._ref(slide), layer)
         if group is not None:
             members = self._groups.setdefault(group, [])
-            for other in (members if replace else []):
+            for other in members if replace else []:
                 if other != layer.name:
                     self.set_layer_visible('all', other, False)
             if layer.name in members:
@@ -338,7 +432,9 @@ class WissiViz(Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'},
         return await self._call('stats')
 
     # ------------------------------------------------------------ annotations
-    def add_annotations(self, slide: str, layer: AnnotationLayer | str | os.PathLike, name: str | None = None) -> AnnotationLayer:
+    def add_annotations(
+        self, slide: str, layer: AnnotationLayer | str | os.PathLike, name: str | None = None
+    ) -> AnnotationLayer:
         """Attach a layer to a slide; every viewer showing that slide refreshes automatically."""
         return self.registry.add_annotations(self._ref(slide), layer, name=name)
 
@@ -349,7 +445,7 @@ class WissiViz(Element, component='nicegui_wsi.js', esm={'wissi-viz': 'static'},
             try:
                 self._call('refreshAnnotations', sid)
             except Exception:
-                pass
+                log.debug('refreshAnnotations failed', exc_info=True)
 
     def _handle_delete(self) -> None:
         self._unsubscribe()

@@ -36,23 +36,28 @@ def open_slide(path: str | os.PathLike, *, backend: str = 'auto', **kwargs) -> S
         try:
             if kind == 'czifile':
                 from .czi import CziSource
+
                 return CziSource(p, **_only(kwargs, 'tile_size', 'scene', 'z', 't', 'decode_cache_mb'))
             if kind == 'tifffile':
                 from .tiff import TiffSource
+
                 return TiffSource(p, **_only(kwargs, 'tile_size', 'series'))
             if kind == 'slideio':
                 from .slideio_source import SlideioSource
+
                 return SlideioSource(p, **_only(kwargs, 'tile_size', 'scene', 'z', 't', 'driver', 'rgb'))
             if kind == 'openslide':
                 from .openslide_source import OpenSlideSource
+
                 return OpenSlideSource(p, **_only(kwargs, 'tile_size'))
             if kind == 'libczi':
                 from .czi_libczi import LibCziSource
+
                 return LibCziSource(p, **_only(kwargs, 'tile_size', 'scene', 'z', 't'))
         except ImportError as e:
             hint = {'slideio': 'wissi-viz[slideio]', 'openslide': 'wissi-viz[lgpl]', 'libczi': 'wissi-viz[lgpl]'}
             errors.append(f'{kind}: not installed ({hint.get(kind, e)})')
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001  (collected and reported if no reader works)
             errors.append(f'{kind}: {e}')
         return None
 

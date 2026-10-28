@@ -3,6 +3,7 @@ and what one browser must download to show it at fit and at 10×.
 
     python benchmarks/overlay_profile.py /var/tmp/objbench/cells.parquet
 """
+
 from __future__ import annotations
 
 import gzip
@@ -25,31 +26,46 @@ def rss_mb():
 def pyramid_views(c, dpr=1.0):
     """Bytes (raw, gzip) a browser fetches for one view, replicating the viewer's level choice."""
     import math
+
     pm = c.pyr_meta
     res = {}
     W = max(float(c.bb[:, 2].max()), 1.0)
     H = max(float(c.bb[:, 3].max()), 1.0)
-    for label, (pw, ph, scale) in {'fit_1600x1000': (1600, 1000, None), 'fit_400x250 (1 of 16)': (400, 250, None),
-                                   '10x_1600x1000': (1600, 1000, 1.0), '10x_400x250': (400, 250, 1.0),
-                                   '2.5x_1600x1000': (1600, 1000, 0.25)}.items():
+    for label, (pw, ph, scale) in {
+        'fit_1600x1000': (1600, 1000, None),
+        'fit_400x250 (1 of 16)': (400, 250, None),
+        '10x_1600x1000': (1600, 1000, 1.0),
+        '10x_400x250': (400, 250, 1.0),
+        '2.5x_1600x1000': (1600, 1000, 0.25),
+    }.items():
         sc = scale or min(pw / W, ph / H) * 0.96
         sd = sc * dpr
         k_need = math.ceil(math.log2(4 / sd))
         lvl = 0 if k_need <= pm['k0'] else min(pm['levels'] - 1, k_need - pm['k0'])
         k = pm['k0'] + lvl
-        span = 2 ** k * pm['tile_bins']
+        span = 2**k * pm['tile_bins']
         cx, cy = (W / 2, H / 2) if scale is None else (float(np.median(c.cx)), float(np.median(c.cy)))
         hw, hh = pw / 2 / sc, ph / 2 / sc
-        tiles = [(tx, ty) for tx in range(max(0, int((cx - hw) // span)), int((cx + hw) // span) + 1)
-                 for ty in range(max(0, int((cy - hh) // span)), int((cy + hh) // span) + 1) if (tx, ty) in c._pyr[lvl]['index']]
+        tiles = [
+            (tx, ty)
+            for tx in range(max(0, int((cx - hw) // span)), int((cx + hw) // span) + 1)
+            for ty in range(max(0, int((cy - hh) // span)), int((cy + hh) // span) + 1)
+            if (tx, ty) in c._pyr[lvl]['index']
+        ]
         raw = [c.pyramid_tile(lvl, tx, ty) for tx, ty in tiles]
-        res[label] = {'level': lvl, 'tiles': len(tiles), 'points': sum(c._pyr[lvl]['index'][t][1] for t in tiles),
-                      'KB': round(sum(map(len, raw)) / 1024, 1), 'gzip_KB': round(sum(len(gzip.compress(b, 3)) for b in raw) / 1024, 1)}
+        res[label] = {
+            'level': lvl,
+            'tiles': len(tiles),
+            'points': sum(c._pyr[lvl]['index'][t][1] for t in tiles),
+            'KB': round(sum(map(len, raw)) / 1024, 1),
+            'gzip_KB': round(sum(len(gzip.compress(b, 3)) for b in raw) / 1024, 1),
+        }
     return res
 
 
 def main(path, shape='auto'):
     from wissi_viz import read_objects
+
     out = {}
     r0 = rss_mb()
     t = time.perf_counter()

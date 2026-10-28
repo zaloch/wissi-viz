@@ -15,17 +15,32 @@ Importers (``read_objects`` picks one from the file):
 Microns are converted to pixels with the slide's mpp (detected from column names like
 ``µm``/``um``/``micron`` or set with ``units=``).
 """
+
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import numpy as np
+import tifffile
 
-from .annotations import ELLIPSE, POINT, POLYGON, RECT, AnnotationLayer, _columns_of, _find_col, _norm_col, _ring
+from .annotations import (
+    ELLIPSE,
+    POINT,
+    POLYGON,
+    RECT,
+    AnnotationLayer,
+    CleanText,
+    _columns_of,
+    _find_col,
+    _norm_col,
+    _ring,
+)
 
 _UM = re.compile(r'(µm|μm|\bum\b|micron)', re.I)
 
@@ -33,13 +48,14 @@ _UM = re.compile(r'(µm|μm|\bum\b|micron)', re.I)
 @dataclass
 class ObjectTable:
     """Columnar objects. ``x``/``y`` are level-0 pixel centroids."""
+
     x: np.ndarray
     y: np.ndarray
-    classes: np.ndarray | None = None          # str per object (None/'' = unclassified)
+    classes: np.ndarray | None = None  # str per object (None/'' = unclassified)
     columns: dict[str, np.ndarray] = field(default_factory=dict)
-    bbox: np.ndarray | None = None             # (n, 4) x0 y0 x1 y1, level-0 px
-    outlines: list[np.ndarray] | None = None   # per-object (k, 2) polygons, level-0 px
-    mpp: float | None = None                   # µm per level-0 pixel
+    bbox: np.ndarray | None = None  # (n, 4) x0 y0 x1 y1, level-0 px
+    outlines: list[np.ndarray] | None = None  # per-object (k, 2) polygons, level-0 px
+    mpp: float | None = None  # µm per level-0 pixel
     name: str = 'objects'
 
     def __post_init__(self) -> None:
@@ -85,13 +101,19 @@ class ObjectTable:
             return self.classes == cls
         return np.isin(self.classes, list(cls))
 
-    def subset(self, sel: Any) -> 'ObjectTable':
+    def subset(self, sel: Any) -> ObjectTable:
         m = self.mask(sel) if not (isinstance(sel, np.ndarray) and sel.dtype != bool) else sel
         idx = np.nonzero(m)[0] if np.asarray(m).dtype == bool else np.asarray(m)
-        return ObjectTable(self.x[idx], self.y[idx], None if self.classes is None else self.classes[idx],
-                           {k: v[idx] for k, v in self.columns.items()},
-                           None if self.bbox is None else self.bbox[idx],
-                           None if self.outlines is None else [self.outlines[i] for i in idx], self.mpp, self.name)
+        return ObjectTable(
+            self.x[idx],
+            self.y[idx],
+            None if self.classes is None else self.classes[idx],
+            {k: v[idx] for k, v in self.columns.items()},
+            None if self.bbox is None else self.bbox[idx],
+            None if self.outlines is None else [self.outlines[i] for i in idx],
+            self.mpp,
+            self.name,
+        )
 
     def column(self, name: str) -> np.ndarray:
         if name in self.columns:
@@ -110,8 +132,9 @@ class ObjectTable:
         """Boolean positivity: ``column > threshold``."""
         return np.asarray(self.column(column), np.float64) > threshold
 
-    def phenotype(self, markers: dict[str, Any], *, negative: str = '', rules: dict[str, Any] | None = None,
-                  inplace: bool = True) -> np.ndarray:
+    def phenotype(
+        self, markers: dict[str, Any], *, negative: str = '', rules: dict[str, Any] | None = None, inplace: bool = True
+    ) -> np.ndarray:
         """Combine marker positivities into phenotype labels.
 
         ``markers``: ``{'CD3': ('Cell: CD3 mean', 400), 'CD8': ('Cell: CD8 mean', 300), 'PanCK': bool_array}``.
@@ -145,8 +168,13 @@ class ObjectTable:
             self.classes = lab
         return lab
 
-    def intensity_bins(self, column: str, thresholds: Sequence[float], labels: Sequence[str] = ('0', '1+', '2+', '3+'),
-                       inplace: bool = False) -> np.ndarray:
+    def intensity_bins(
+        self,
+        column: str,
+        thresholds: Sequence[float],
+        labels: Sequence[str] = ('0', '1+', '2+', '3+'),
+        inplace: bool = False,
+    ) -> np.ndarray:
         """IHC scoring bins (e.g. DAB OD → 0 / 1+ / 2+ / 3+)."""
         v = np.asarray(self.column(column), np.float64)
         lab = np.asarray(labels, dtype=object)[np.digitize(v, thresholds)]
@@ -155,9 +183,16 @@ class ObjectTable:
         return lab
 
     # ------------------------------------------------------------------ to the viewer
-    def to_layer(self, name: str | None = None, shape: str = 'auto', color_by: str | np.ndarray | None = None,
-                 cmap: str = 'viridis', classes: dict[str, str] | None = None, max_columns: int = 24,
-                 **style) -> AnnotationLayer:
+    def to_layer(
+        self,
+        name: str | None = None,
+        shape: str = 'auto',
+        color_by: str | np.ndarray | None = None,
+        cmap: str = 'viridis',
+        classes: dict[str, str] | None = None,
+        max_columns: int = 24,
+        **style,
+    ) -> AnnotationLayer:
         """Viewer layer: outlines if present, else bbox ellipses, else points. Measurement columns
         are attached (click a cell to see them); ``color_by`` a column or array for a heat-coloured layer."""
         name = name or self.name
@@ -171,7 +206,7 @@ class ObjectTable:
         if shape == 'outline' and self.outlines is not None:
             L._bulk(POLYGON, [_ring(p, closed=True) for p in self.outlines], labels, None, None)
         elif shape in ('ellipse', 'rect') and self.bbox is not None:
-            L._bulk_shapes(ELLIPSE if shape == 'ellipse' else RECT, self.bbox, cls)   # columnar, GPU-drawn shapes
+            L._bulk_shapes(ELLIPSE if shape == 'ellipse' else RECT, self.bbox, cls)  # columnar, GPU-drawn shapes
         else:
             xy = self.xy.astype(np.float32)
             r = np.broadcast_to(np.asarray(style.get('radius', 0.0), np.float32), (n,))
@@ -179,12 +214,16 @@ class ObjectTable:
         # measurement columns: float32 (half of float64) — clicked cells read their values from here
         L._columns = {k: _compact(v) for k, v in list(self.columns.items())[:max_columns]}
         if color_by is not None:
-            L.color_by(self.column(color_by) if isinstance(color_by, str) else color_by, cmap=cmap,
-                       label=color_by if isinstance(color_by, str) else None)
+            L.color_by(
+                self.column(color_by) if isinstance(color_by, str) else color_by,
+                cmap=cmap,
+                label=color_by if isinstance(color_by, str) else None,
+            )
         return L
 
     def to_frame(self):
         import pandas as pd
+
         d = {'x_px': self.x, 'y_px': self.y}
         if self.mpp:
             d['x_um'], d['y_um'] = self.x * self.mpp, self.y * self.mpp
@@ -197,13 +236,13 @@ class ObjectTable:
 def _norm_labels(values) -> np.ndarray:
     """Class labels as an object array of str ('' = unclassified; None/NaN included). Dictionary-encodes in C when
     pyarrow is available (10^6 labels: ~50 ms instead of ~0.4 s for a Python loop)."""
-    from .annotations import CleanText
-    if isinstance(values, CleanText):           # already str with '' for missing (Polars reader path)
+    if isinstance(values, CleanText):  # already str with '' for missing (Polars reader path)
         return values.view(np.ndarray)
     c = values if isinstance(values, np.ndarray) else np.asarray(values, dtype=object)
     try:
         import pyarrow as pa
         import pyarrow.compute as pc
+
         a = pa.array(c, from_pandas=True)
         if not (pa.types.is_string(a.type) or pa.types.is_large_string(a.type)):
             a = pc.cast(a, pa.string())
@@ -211,26 +250,73 @@ def _norm_labels(values) -> np.ndarray:
         cats = np.asarray(d.dictionary.to_pylist(), dtype=object)
         return cats[d.indices.to_numpy(zero_copy_only=False)]
     except Exception:  # noqa: BLE001  (no pyarrow / mixed types: plain loop)
-        return np.asarray([('' if v is None or (isinstance(v, float) and np.isnan(v)) else str(v)) for v in c], dtype=object)
+        return np.asarray(
+            [('' if v is None or (isinstance(v, float) and np.isnan(v)) else str(v)) for v in c], dtype=object
+        )
 
 
 # ============================================================================= readers
-def from_table(table: Any, *, mpp: float | None = None, units: str = 'auto', name: str = 'objects',
-               x: str | None = None, y: str | None = None, class_column: str | None = None,
-               offset: tuple[float, float] = (0.0, 0.0)) -> ObjectTable:
+def from_table(
+    table: Any,
+    *,
+    mpp: float | None = None,
+    units: str = 'auto',
+    name: str = 'objects',
+    x: str | None = None,
+    y: str | None = None,
+    class_column: str | None = None,
+    offset: tuple[float, float] = (0.0, 0.0),
+) -> ObjectTable:
     """Any tabular object export (DataFrame, dict of columns, list of rows)."""
     cols = _columns_of(table)
     if not cols:
         return ObjectTable(np.zeros(0), np.zeros(0), name=name, mpp=mpp)
-    pick = lambda given, *c: given if given is not None else _find_col(cols, c)  # noqa: E731
-    bx0, by0 = pick(None, 'xmin', 'x min', 'minx', 'bbox_x0', 'Bounding Box X Min'), pick(None, 'ymin', 'y min', 'miny', 'bbox_y0')
+    pick = lambda given, *c: given if given is not None else _find_col(cols, c)
+    bx0, by0 = (
+        pick(None, 'xmin', 'x min', 'minx', 'bbox_x0', 'Bounding Box X Min'),
+        pick(None, 'ymin', 'y min', 'miny', 'bbox_y0'),
+    )
     bx1, by1 = pick(None, 'xmax', 'x max', 'maxx', 'bbox_x1'), pick(None, 'ymax', 'y max', 'maxy', 'bbox_y1')
-    cx = pick(x, 'Centroid X µm', 'Centroid X um', 'Centroid X px', 'Centroid X', 'centroid_x', 'x_centroid',
-              'Location_Center_X', 'AreaShape_Center_X', 'Nuclei_Location_Center_X', 'Cell X Position', 'X Position',
-              'x_um', 'x_px', 'x', 'cx', 'center_x', 'X')
-    cy = pick(y, 'Centroid Y µm', 'Centroid Y um', 'Centroid Y px', 'Centroid Y', 'centroid_y', 'y_centroid',
-              'Location_Center_Y', 'AreaShape_Center_Y', 'Nuclei_Location_Center_Y', 'Cell Y Position', 'Y Position',
-              'y_um', 'y_px', 'y', 'cy', 'center_y', 'Y')
+    cx = pick(
+        x,
+        'Centroid X µm',
+        'Centroid X um',
+        'Centroid X px',
+        'Centroid X',
+        'centroid_x',
+        'x_centroid',
+        'Location_Center_X',
+        'AreaShape_Center_X',
+        'Nuclei_Location_Center_X',
+        'Cell X Position',
+        'X Position',
+        'x_um',
+        'x_px',
+        'x',
+        'cx',
+        'center_x',
+        'X',
+    )
+    cy = pick(
+        y,
+        'Centroid Y µm',
+        'Centroid Y um',
+        'Centroid Y px',
+        'Centroid Y',
+        'centroid_y',
+        'y_centroid',
+        'Location_Center_Y',
+        'AreaShape_Center_Y',
+        'Nuclei_Location_Center_Y',
+        'Cell Y Position',
+        'Y Position',
+        'y_um',
+        'y_px',
+        'y',
+        'cy',
+        'center_y',
+        'Y',
+    )
     has_box = None not in (bx0, by0, bx1, by1)
     if cx is None and not has_box:
         raise ValueError(f'no centroid or bounding-box columns among {list(cols)[:25]}')
@@ -249,13 +335,30 @@ def from_table(table: Any, *, mpp: float | None = None, units: str = 'auto', nam
         X, Y = np.asarray(cols[cx], np.float64) * s + ox, np.asarray(cols[cy], np.float64) * s + oy
     else:
         X, Y = (bbox[:, 0] + bbox[:, 2]) / 2, (bbox[:, 1] + bbox[:, 3]) / 2
-    ccol = pick(class_column, 'Classification', 'Class', 'Phenotype', 'cell_type', 'celltype', 'cell type', 'label',
-                'Name', 'type', 'cluster', 'leiden', 'louvain')
+    ccol = pick(
+        class_column,
+        'Classification',
+        'Class',
+        'Phenotype',
+        'cell_type',
+        'celltype',
+        'cell type',
+        'label',
+        'Name',
+        'type',
+        'cluster',
+        'leiden',
+        'louvain',
+    )
     classes = None
     if ccol is not None:
         classes = np.asarray(cols[ccol], dtype=object)
     meas = {}
-    skip = geo_cols | ({ccol} if ccol else set()) | {'Image', 'Object ID', 'Parent', 'ROI', 'Object type', 'Analysis Region'}
+    skip = (
+        geo_cols
+        | ({ccol} if ccol else set())
+        | {'Image', 'Object ID', 'Parent', 'ROI', 'Object type', 'Analysis Region'}
+    )
     for k, v in cols.items():
         if k in skip:
             continue
@@ -271,8 +374,11 @@ def from_table(table: Any, *, mpp: float | None = None, units: str = 'auto', nam
     t = ObjectTable(X, Y, classes, meas, bbox, None, mpp, name)
     # HALO multiplex: '<Marker> Positive Classification' 0/1 columns → phenotype if no class column
     if classes is None:
-        pos = {re.sub(r'\s*positive\s*classification\s*$', '', k, flags=re.I).strip(): v
-               for k, v in meas.items() if re.search(r'positive\s*classification\s*$', k, re.I)}
+        pos = {
+            re.sub(r'\s*positive\s*classification\s*$', '', k, flags=re.I).strip(): v
+            for k, v in meas.items()
+            if re.search(r'positive\s*classification\s*$', k, re.I)
+        }
         if pos:
             t.phenotype({m: np.asarray(v, np.float64) > 0 for m, v in pos.items()})
     return t
@@ -287,8 +393,8 @@ def from_geojson(data: Any, *, mpp: float | None = None, name: str = 'objects', 
     feats = data.get('features', []) if isinstance(data, dict) else data
     xs, ys, cl, polys = [], [], [], []
     meas: dict[str, list] = {}
-    for i, f in enumerate(feats):
-        g = (f.get('properties', {}) or {}).get('nucleusGeometry') if False else f.get('geometry')
+    for f in feats:
+        g = f.get('geometry')
         if not g:
             continue
         t, c = g.get('type'), g.get('coordinates')
@@ -315,20 +421,38 @@ def from_geojson(data: Any, *, mpp: float | None = None, name: str = 'objects', 
             if len(meas[k]) < len(xs):
                 meas[k].append(np.nan)
     cols = {k: np.asarray(v, np.float64) for k, v in meas.items()}
-    return ObjectTable(np.asarray(xs), np.asarray(ys), np.asarray(cl, dtype=object), cols, None,
-                       polys if outlines and any(len(q) > 2 for q in polys) else None, mpp, name)
+    return ObjectTable(
+        np.asarray(xs),
+        np.asarray(ys),
+        np.asarray(cl, dtype=object),
+        cols,
+        None,
+        polys if outlines and any(len(q) > 2 for q in polys) else None,
+        mpp,
+        name,
+    )
 
 
-def from_label_mask(mask: Any, *, mpp: float | None = None, downsample: float = 1.0, offset=(0.0, 0.0),
-                    intensities: dict[str, np.ndarray] | None = None, outlines: bool = True,
-                    name: str = 'objects') -> ObjectTable:
+def from_label_mask(
+    mask: Any,
+    *,
+    mpp: float | None = None,
+    downsample: float = 1.0,
+    offset=(0.0, 0.0),
+    intensities: dict[str, np.ndarray] | None = None,
+    outlines: bool = True,
+    name: str = 'objects',
+) -> ObjectTable:
     """StarDist / Cellpose / any integer label image → objects (centroid, area, bbox, mean intensities,
     and polygon outlines via scikit-image if installed). ``downsample``: mask pixel size in level-0 px."""
     from scipy import ndimage
+
     if isinstance(mask, (str, Path)):
-        import tifffile
-        mask = tifffile.imread(mask) if str(mask).lower().endswith(('.tif', '.tiff')) else np.asarray(
-            __import__('PIL.Image', fromlist=['Image']).open(mask))
+        mask = (
+            tifffile.imread(mask)
+            if str(mask).lower().endswith(('.tif', '.tiff'))
+            else np.asarray(__import__('PIL.Image', fromlist=['Image']).open(mask))
+        )
     m = np.asarray(mask)
     if m.ndim == 3:
         m = m[..., 0]
@@ -339,8 +463,13 @@ def from_label_mask(mask: Any, *, mpp: float | None = None, downsample: float = 
     com = np.asarray(ndimage.center_of_mass(np.ones_like(m), m, labels))
     area = np.asarray(ndimage.sum(np.ones_like(m, dtype=np.float64), m, labels))
     sl = ndimage.find_objects(m)
-    boxes = np.array([[s[1].start, s[0].start, s[1].stop, s[0].stop] if s else [0, 0, 0, 0]
-                      for s in (sl[int(k) - 1] for k in labels)], np.float64)
+    boxes = np.array(
+        [
+            [s[1].start, s[0].start, s[1].stop, s[0].stop] if s else [0, 0, 0, 0]
+            for s in (sl[int(k) - 1] for k in labels)
+        ],
+        np.float64,
+    )
     ox, oy = offset
     ds = downsample
     cols = {'label': labels, 'area_px': area * ds * ds}
@@ -352,56 +481,73 @@ def from_label_mask(mask: Any, *, mpp: float | None = None, downsample: float = 
     if outlines:
         try:
             from skimage import measure
+
             polys = []
             for k, b in zip(labels, boxes.astype(int)):
-                sub = np.pad(m[b[1]:b[3], b[0]:b[2]] == k, 1)
+                sub = np.pad(m[b[1] : b[3], b[0] : b[2]] == k, 1)
                 cs = measure.find_contours(sub.astype(np.uint8), 0.5)
                 c = max(cs, key=len) if cs else np.array([[1.0, 1.0]])
-                c = c[::max(1, len(c) // 24)]
+                c = c[:: max(1, len(c) // 24)]
                 polys.append(np.stack([(c[:, 1] - 1 + b[0]) * ds + ox, (c[:, 0] - 1 + b[1]) * ds + oy], 1))
         except ImportError:
             polys = None
-    return ObjectTable(com[:, 1] * ds + ox, com[:, 0] * ds + oy, None, cols, boxes * ds + [ox, oy, ox, oy], polys, mpp, name)
+    return ObjectTable(
+        com[:, 1] * ds + ox, com[:, 0] * ds + oy, None, cols, boxes * ds + [ox, oy, ox, oy], polys, mpp, name
+    )
 
 
-def from_anndata(adata: Any, *, mpp: float | None = None, spatial_key: str = 'spatial', class_column: str | None = None,
-                 units: str = 'px', layer_genes: Sequence[str] = (), name: str = 'objects') -> ObjectTable:
+def from_anndata(
+    adata: Any,
+    *,
+    mpp: float | None = None,
+    spatial_key: str = 'spatial',
+    class_column: str | None = None,
+    units: str = 'px',
+    layer_genes: Sequence[str] = (),
+    name: str = 'objects',
+) -> ObjectTable:
     """AnnData / ``.h5ad`` (squidpy, scimap, …): coordinates from ``obsm[spatial_key]``, classes and
     measurements from ``obs``; selected ``var_names`` (markers) copied as columns."""
     if isinstance(adata, (str, Path)):
         import anndata
+
         adata = anndata.read_h5ad(adata)
     xy = np.asarray(adata.obsm[spatial_key], np.float64)[:, :2]
     if units == 'um':
         xy = xy / float(mpp)
     obs = adata.obs
-    ccol = class_column or _find_col({c: None for c in obs.columns}, ['phenotype', 'cell_type', 'celltype', 'leiden',
-                                                                     'louvain', 'cluster', 'class'])
+    ccol = class_column or _find_col(
+        dict.fromkeys(obs.columns), ['phenotype', 'cell_type', 'celltype', 'leiden', 'louvain', 'cluster', 'class']
+    )
     cols = {str(c): np.asarray(obs[c]) for c in obs.columns if c != ccol and obs[c].dtype.kind in 'biuf'}
     X = adata.X
     for g in layer_genes:
         j = list(adata.var_names).index(g)
         v = X[:, j]
         cols[g] = np.asarray(v.toarray() if hasattr(v, 'toarray') else v).ravel()
-    return ObjectTable(xy[:, 0], xy[:, 1], None if ccol is None else np.asarray(obs[ccol]).astype(str), cols, None,
-                       None, mpp, name)
+    return ObjectTable(
+        xy[:, 0], xy[:, 1], None if ccol is None else np.asarray(obs[ccol]).astype(str), cols, None, None, mpp, name
+    )
 
 
-def cached_object_layer(path: str | Path, cache_dir: str | Path, *, mpp: float | None = None, read_kw: dict | None = None,
-                        **layer_kw) -> AnnotationLayer:
+def cached_object_layer(
+    path: str | Path, cache_dir: str | Path, *, mpp: float | None = None, read_kw: dict | None = None, **layer_kw
+) -> AnnotationLayer:
     """``read_objects(path).to_layer(**layer_kw)``, compiled once and kept in ``cache_dir``.
 
     The cache key covers the file (absolute path, size, modification time) and every option, so editing the export
     rebuilds it. A cached layer opens in milliseconds (memory-mapped .npy files: no parsing, no compiling, shared
     by every server worker through the OS page cache); a 1M-cell table otherwise costs ~3 s of CPU per process."""
-    import hashlib
     p = Path(path).resolve()
     st = p.stat()
-    key_src = json.dumps([str(p), st.st_size, st.st_mtime_ns, mpp, read_kw or {}, layer_kw, AnnotationLayer._SAVE_FORMAT],
-                         sort_keys=True, default=str)
+    key_src = json.dumps(
+        [str(p), st.st_size, st.st_mtime_ns, mpp, read_kw or {}, layer_kw, AnnotationLayer._SAVE_FORMAT],
+        sort_keys=True,
+        default=str,
+    )
     key = hashlib.sha1(key_src.encode()).hexdigest()[:20]
     d = Path(cache_dir) / f'{p.stem}-{key}'
-    version = int(key[:6], 16) * 1024   # stable per content: browser caches stay valid across restarts
+    version = int(key[:6], 16) * 1024  # stable per content: browser caches stay valid across restarts
     if (d / 'meta.json').exists():
         try:
             return AnnotationLayer.open(d, version=version)
@@ -409,7 +555,7 @@ def cached_object_layer(path: str | Path, cache_dir: str | Path, *, mpp: float |
             pass
     layer = read_objects(p, mpp=mpp, **(read_kw or {})).to_layer(**layer_kw)
     try:
-        return AnnotationLayer.open(layer.save(d), version=version)   # serve the memory-mapped copy (frees build memory)
+        return AnnotationLayer.open(layer.save(d), version=version)  # serve the memory-mapped copy (frees build memory)
     except (OSError, ValueError):
         return layer
 
@@ -427,7 +573,9 @@ def _engine(engine: str) -> str:
     return 'pandas'
 
 
-def read_objects(path: str | Path, *, mpp: float | None = None, fmt: str = 'auto', engine: str = 'auto', **kw) -> ObjectTable:
+def read_objects(
+    path: str | Path, *, mpp: float | None = None, fmt: str = 'auto', engine: str = 'auto', **kw
+) -> ObjectTable:
     """Read an object export by extension / content (see module docstring).
 
     ``engine``: table reader for CSV/TSV/Parquet/Feather — 'auto' (Polars if installed, else pyarrow, else pandas),
@@ -446,13 +594,16 @@ def read_objects(path: str | Path, *, mpp: float | None = None, fmt: str = 'auto
     if ext in ('.parquet', '.feather', '.arrow', '.ipc'):
         if eng == 'polars':
             import polars as pl
+
             df = pl.read_parquet(p) if ext == '.parquet' else pl.read_ipc(p, memory_map=True)
             return from_table(df, mpp=mpp, name=name, **kw)
         if eng == 'pandas':
             import pandas as pd
+
             return from_table(pd.read_parquet(p) if ext == '.parquet' else pd.read_feather(p), mpp=mpp, name=name, **kw)
         import pyarrow.feather as pf
         import pyarrow.parquet as pq
+
         tbl = pq.read_table(p) if ext == '.parquet' else pf.read_table(p)
         return from_table(tbl, mpp=mpp, name=name, **kw)
     return from_table(_read_delimited(p, eng), mpp=mpp, name=name, **kw)
@@ -468,14 +619,20 @@ def _read_delimited(p: Path, engine: str = 'auto'):
     if engine == 'polars':
         try:
             import polars as pl
+
             # QuPath writes 'NaN' into otherwise-integer columns: read those as missing (→ NaN in numpy); if a type
             # guessed from the first rows still fails later in the file, rescan the whole file; else use pyarrow
-            try:   # fast path: types from the first 10k rows, strict UTF-8
+            try:  # fast path: types from the first 10k rows, strict UTF-8
                 df = pl.read_csv(p, separator=delim, infer_schema_length=10000)
             except Exception:  # noqa: BLE001  ('NaN' in an int column, a late string, Latin-1 bytes …)
-                df = pl.read_csv(p, separator=delim, infer_schema_length=None, null_values=['NaN', 'nan', 'NA', ''],
-                                 encoding='utf8-lossy')
-            if df.columns and df.columns[0].startswith('\ufeff'):     # byte-order mark on the first header
+                df = pl.read_csv(
+                    p,
+                    separator=delim,
+                    infer_schema_length=None,
+                    null_values=['NaN', 'nan', 'NA', ''],
+                    encoding='utf8-lossy',
+                )
+            if df.columns and df.columns[0].startswith('\ufeff'):  # byte-order mark on the first header
                 df = df.rename({df.columns[0]: df.columns[0].lstrip('\ufeff')})
             return df
         except ImportError:
@@ -486,17 +643,21 @@ def _read_delimited(p: Path, engine: str = 'auto'):
         if engine == 'pandas':
             raise ImportError
         import pyarrow.csv as pacsv
-        t = pacsv.read_csv(p, parse_options=pacsv.ParseOptions(delimiter=delim),
-                           read_options=pacsv.ReadOptions(block_size=1 << 24))
+
+        t = pacsv.read_csv(
+            p, parse_options=pacsv.ParseOptions(delimiter=delim), read_options=pacsv.ReadOptions(block_size=1 << 24)
+        )
         return {str(c): t[c].to_numpy(zero_copy_only=False) for c in t.column_names}
     except ImportError:
         pass
     try:
         import pandas as pd
+
         df = pd.read_csv(p, sep=delim, low_memory=False)
         return {str(c): df[c].to_numpy() for c in df.columns}
     except ImportError:
         import csv
+
         with open(p, newline='', encoding='utf-8-sig') as f:
             rows = list(csv.DictReader(f, delimiter=delim))
         return {k: np.asarray([r[k] for r in rows]) for k in (rows[0] if rows else {})}

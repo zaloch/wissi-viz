@@ -66,8 +66,15 @@ Memory is flat once the caches are full. Every revisit of an evicted slide reope
 
 A smaller footprint for a PathCore server, e.g. a 4 GB container:
 ```python
-configure(cache_dir='/cache/wissi-viz', memory_mb=512, decoded_cache_mb=512, overlay_cache_mb=128,
-          gzip_cache_mb=128, annotation_memory_mb=512, layer_mapped_mb=1024)
+configure(
+    cache_dir='/cache/wissi-viz',
+    memory_mb=512,
+    decoded_cache_mb=512,
+    overlay_cache_mb=128,
+    gzip_cache_mb=128,
+    annotation_memory_mb=512,
+    layer_mapped_mb=1024,
+)
 ```
 
 Rerun: `python benchmarks/memory_harness.py` (regression tests: `tests/test_memory.py`). Numbers are from a 2-vCPU container, opening slides through the real server routes.

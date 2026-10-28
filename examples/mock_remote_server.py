@@ -4,6 +4,7 @@ tiles, coarsest-first level ids) — so you can compare them side by side.
 
     python examples/mock_remote_server.py tests-data/synthetic_he.svs [cells.geojson] --port 8020
 """
+
 import argparse
 import sys
 from pathlib import Path
@@ -11,9 +12,9 @@ from pathlib import Path
 import uvicorn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'tests'))
-from mock_remote import MockHaloLink, MockPathCore  # noqa: E402
+from mock_remote import MockHaloLink, MockPathCore
 
-from wissi_viz import SlideRegistry, TileService, create_app  # noqa: E402
+from wissi_viz import SlideRegistry, TileService, create_app
 
 ap = argparse.ArgumentParser()
 ap.add_argument('slide')

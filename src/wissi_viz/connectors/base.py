@@ -10,6 +10,7 @@ naming and defaults), implement the methods marked **required**, and register sl
 Methods may be plain functions or ``async def`` — both work. Raise
 :class:`~wissi_viz.sources.remote.TileNotFound` (or return ``None``) for "no tile here".
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -17,14 +18,22 @@ import logging
 import re
 import threading
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any
 
 import numpy as np
 
-from ..annotations import AnnotationLayer
-from ..sources.remote import (RemoteError, RemoteImageInfo, RemotePyramid, RemoteSlideSource, RetryAfter, TileNotFound,
-                              resolve)
+from ..annotations import AnnotationLayer, _looks_tabular
+from ..sources.remote import (
+    RemoteError,
+    RemoteImageInfo,
+    RemotePyramid,
+    RemoteSlideSource,
+    RetryAfter,
+    TileNotFound,
+    resolve,
+)
 
 log = logging.getLogger('wissi_viz.connectors')
 
@@ -39,11 +48,12 @@ class AnnotationPayload:
     (DataFrame / dict of columns / list of rows), or a ready :class:`AnnotationLayer`.
     Coordinates are converted to level-0 pixels with ``units``/``downsample``/``offset``.
     """
+
     name: str
     data: Any
-    format: str = 'auto'          # 'auto' | 'geojson' | 'halo_xml' | 'aperio_xml' | 'table'
-    units: str = 'px'             # 'px' (level-0 pixels) | 'um'
-    downsample: float = 1.0       # coordinates given at a pyramid level with this downsample
+    format: str = 'auto'  # 'auto' | 'geojson' | 'halo_xml' | 'aperio_xml' | 'table'
+    units: str = 'px'  # 'px' (level-0 pixels) | 'um'
+    downsample: float = 1.0  # coordinates given at a pyramid level with this downsample
     offset: tuple[float, float] = (0.0, 0.0)  # added after scaling (level-0 px)
     style: dict[str, Any] = field(default_factory=dict)  # line_width, fill_opacity, point_size, …
     classes: dict[str, str] = field(default_factory=dict)  # class → '#rrggbb' overrides
@@ -98,7 +108,7 @@ class RemoteConnection:
         return []
 
     # ------------------------------------------------------------------ provided
-    def bind_loop(self, loop: asyncio.AbstractEventLoop | None = None) -> 'RemoteConnection':
+    def bind_loop(self, loop: asyncio.AbstractEventLoop | None = None) -> RemoteConnection:
         """Run this connection's ``async`` methods on ``loop`` (default: the running loop)."""
         self.loop = loop or asyncio.get_running_loop()
         return self
@@ -120,7 +130,7 @@ class RemoteConnection:
                     attempt += 1
                     if attempt > self.retries:
                         raise RemoteError(f'{getattr(fn, "__name__", fn)}{args}: rate limited') from e
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 attempt += 1
                 if attempt > self.retries:
                     raise RemoteError(f'{getattr(fn, "__name__", fn)}{args}: {e}') from e
@@ -142,11 +152,23 @@ class RemoteConnection:
         fetch_region = (lambda lv, x, y, w, h, ch: self.region(image_id, lv, x, y, w, h, ch)) if has_region else None
         mpp = info.mpp
         src = RemoteSlideSource(
-            pyr, fetch_tile, fetch_region=fetch_region, mpp=mpp, name=name or info.name or str(image_id),
-            mode=info.mode, channels=info.channels, dtype=info.dtype, background=info.background,
-            annotations=lambda: self.load_annotations(image_id, mpp), version=info.version,
-            semaphore=self._sem, retries=self.retries, timeout=self.timeout, loop=self.loop,
-            browser_tile_url=info.browser_tile_url)
+            pyr,
+            fetch_tile,
+            fetch_region=fetch_region,
+            mpp=mpp,
+            name=name or info.name or str(image_id),
+            mode=info.mode,
+            channels=info.channels,
+            dtype=info.dtype,
+            background=info.background,
+            annotations=lambda: self.load_annotations(image_id, mpp),
+            version=info.version,
+            semaphore=self._sem,
+            retries=self.retries,
+            timeout=self.timeout,
+            loop=self.loop,
+            browser_tile_url=info.browser_tile_url,
+        )
         if not hasattr(self, '_sources'):
             self._sources = []
         self._sources.append(src)
@@ -162,8 +184,9 @@ class RemoteConnection:
             out['mean_call_ms'] = round(1000 * out.pop('seconds') / out['calls'], 1)
         return out
 
-    def register(self, registry, image_id: str, name: str | None = None, slide_id: str | None = None,
-                 lazy: bool = True) -> str:
+    def register(
+        self, registry, image_id: str, name: str | None = None, slide_id: str | None = None, lazy: bool = True
+    ) -> str:
         """Add the image to a :class:`~wissi_viz.SlideRegistry`. With ``lazy=True`` nothing is fetched
         until a viewer opens it. Returns the slide id to pass to ``WsiGrid``."""
         sid = slide_id or self.slide_id(image_id)
@@ -196,7 +219,6 @@ def to_layer(item: AnnotationPayload | AnnotationLayer, mpp: Any = None) -> Anno
     if isinstance(item, AnnotationLayer):
         return item
     p = item
-    from ..annotations import _looks_tabular
     kw = dict(p.table_options) if (p.format == 'table' or _looks_tabular(p.data)) else {}
     layer = AnnotationLayer.parse(p.data, fmt=p.format, name=p.name, **kw)
     layer.name = p.name

@@ -4,6 +4,7 @@ latency/429s/503s) vs warm (same views again → wissi-viz cache, no upstream tr
     python examples/tile_api/mock_tile_api.py SLIDES... --port 9000      # the vendor, separate process
     python examples/tile_api/bench_api.py --api http://127.0.0.1:9000 --panes 1,4,9,16 --out api_bench.json
 """
+
 from __future__ import annotations
 
 import argparse
@@ -14,10 +15,10 @@ from pathlib import Path
 import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from connector import DemoApiConnection  # noqa: E402
+from connector import DemoApiConnection
 
-from wissi_viz import SlideRegistry, TileService  # noqa: E402
-from wissi_viz.bench import browser_bench, format_report  # noqa: E402
+from wissi_viz import SlideRegistry, TileService
+from wissi_viz.bench import browser_bench, format_report
 
 ap = argparse.ArgumentParser()
 ap.add_argument('--api', default='http://127.0.0.1:9000')
@@ -39,10 +40,21 @@ ids = [conn.register(reg, i['id'], name=i['name']) for i in conn.list_images()]
 api0 = httpx.get(a.api + '/api/_stats').json()
 results = {}
 for phase in ('cold', 'warm'):
-    print(f'--- {phase}: ' + ('tiles come from the vendor API' if phase == 'cold' else 'same views again (wissi-viz cache)'))
+    print(
+        f'--- {phase}: '
+        + ('tiles come from the vendor API' if phase == 'cold' else 'same views again (wissi-viz cache)')
+    )
     before = httpx.get(a.api + '/api/_stats').json()
-    r = browser_bench(registry=reg, slide_ids=ids, panes=panes, pan_seconds=a.seconds, magnification=a.magnification,
-                      viewport=vp, headed=a.headed, http2=a.http2)
+    r = browser_bench(
+        registry=reg,
+        slide_ids=ids,
+        panes=panes,
+        pan_seconds=a.seconds,
+        magnification=a.magnification,
+        viewport=vp,
+        headed=a.headed,
+        http2=a.http2,
+    )
     after = httpx.get(a.api + '/api/_stats').json()
     r['upstream'] = {k: after[k] - before[k] for k in ('requests', 'tiles', 'r429', 'r503', 'r404', 'bytes')}
     r['upstream']['MB'] = round(r['upstream'].pop('bytes') / 2**20, 1)

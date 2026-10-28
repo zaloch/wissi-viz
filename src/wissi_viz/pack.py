@@ -12,13 +12,19 @@ else the CPU classic detector); ``--model classpose`` is opt-in (see wissi_viz.s
 Precomputed results from a GPU run are used when a ``pack32-results`` release exists, so CPU-only machines get the
 same cells.
 """
+
 from __future__ import annotations
 
+import argparse
 import hashlib
+import importlib.util
 import json
 import os
+import platform
+import re
 import shutil
 import sys
+import tempfile
 import threading
 import time
 import urllib.request
@@ -28,6 +34,15 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import tifffile
+
+from . import annio
+from ._compat import user_dir
+from ._version import __version__
+from .annotations import AnnotationLayer
+from .bench import browser_bench, server_bench
+from .desktop import main as desktop_main
+from .sources import open_slide
 
 MANIFEST = Path(__file__).resolve().parent / 'data' / 'pack32.json'
 RESULTS_RELEASE = 'https://github.com/zaloch/wissi-viz/releases/download/pack32-results-v1'
@@ -55,7 +70,6 @@ def pack_dir(path: str | os.PathLike | None = None) -> Path:
     elif os.environ.get('WISSI_PACK_DIR'):
         d = Path(os.environ['WISSI_PACK_DIR'])
     else:
-        from ._compat import user_dir
         d = user_dir('cache') / 'pack32'
     d.mkdir(parents=True, exist_ok=True)
     return d
@@ -90,7 +104,7 @@ def download(sel: list[dict], d: Path, workers: int = 4, log=print) -> None:
         have = part.stat().st_size if part.exists() else 0
         req = urllib.request.Request(x['url'], headers={**UA, **({'Range': f'bytes={have}-'} if have else {})})
         with urllib.request.urlopen(req, timeout=600) as r:
-            if have and r.status != 206:            # server ignored the range: start over
+            if have and r.status != 206:  # server ignored the range: start over
                 have = 0
             with open(part, 'ab' if have else 'wb') as f:
                 while chunk := r.read(1 << 20):
@@ -98,10 +112,10 @@ def download(sel: list[dict], d: Path, workers: int = 4, log=print) -> None:
                     with lock:
                         done[0] += len(chunk)
         if x.get('size') and part.stat().st_size != x['size']:
-            raise IOError(f'{x["file"]}: got {part.stat().st_size} bytes, expected {x["size"]}')
+            raise OSError(f'{x["file"]}: got {part.stat().st_size} bytes, expected {x["size"]}')
         if x.get('md5') and _md5(part) != x['md5']:
             part.unlink()
-            raise IOError(f'{x["file"]}: MD5 mismatch (deleted; run again)')
+            raise OSError(f'{x["file"]}: MD5 mismatch (deleted; run again)')
         os.replace(part, dst)
         return x['id']
 
@@ -111,7 +125,10 @@ def download(sel: list[dict], d: Path, workers: int = 4, log=print) -> None:
         while not stop.wait(5):
             el = time.time() - t0
             rate = done[0] / max(el, 1e-6)
-            log(f'  {_human(done[0])} / {_human(total)}  ({_human(rate)}/s, ~{(total - done[0]) / max(rate, 1):.0f} s left)')
+            log(
+                f'  {_human(done[0])} / {_human(total)}  ({_human(rate)}/s, ~{(total - done[0]) / max(rate, 1):.0f} s left)'
+            )
+
     th = threading.Thread(target=progress, daemon=True)
     th.start()
     errors = []
@@ -145,8 +162,6 @@ def _md5(p: Path) -> str:
 def prepare(sel: list[dict], d: Path, log=print) -> None:
     """Slides into ``slides/`` (Xenium bundles → one multi-channel OME-TIFF + 10x cell outlines), expert
     annotations into GeoParquet, ATTRIBUTION.md."""
-    from . import annio
-    from .annotations import AnnotationLayer
     sd, ld = d / 'slides', d / 'layers'
     sd.mkdir(exist_ok=True)
     ld.mkdir(exist_ok=True)
@@ -161,7 +176,7 @@ def prepare(sel: list[dict], d: Path, log=print) -> None:
             out = sd / x['file']
             if not out.exists():
                 try:
-                    os.link(src, out)                  # no copy: hard link where the file system allows it
+                    os.link(src, out)  # no copy: hard link where the file system allows it
                 except OSError:
                     shutil.copyfile(src, out)
         if x.get('annotations_url'):
@@ -179,7 +194,6 @@ def prepare(sel: list[dict], d: Path, log=print) -> None:
 def _xenium(zpath: Path, out: Path, cells_out: Path) -> None:
     """Xenium output bundle → pyramidal multi-channel OME-TIFF (DAPI + boundary / interior / protein stains) and the
     10x cell boundaries as a GeoParquet layer (µm → px)."""
-    import tifffile
     with zipfile.ZipFile(zpath) as z:
         names = z.namelist()
         focus = sorted(n for n in names if 'morphology_focus' in n and n.endswith('.ome.tif'))
@@ -199,18 +213,21 @@ def _xenium(zpath: Path, out: Path, cells_out: Path) -> None:
             meta = tf.ome_metadata or ''
         a = a.reshape(-1, *a.shape[-2:])
         chans.extend(list(a))
-        import re
         nm = re.findall(r'<Channel[^>]*Name="([^"]+)"', meta)
-        chnames.extend(nm[:len(a)] if len(nm) >= len(a) else [f'ch{len(chnames) + i}' for i in range(len(a))])
+        chnames.extend(nm[: len(a)] if len(nm) >= len(a) else [f'ch{len(chnames) + i}' for i in range(len(a))])
         m = re.search(r'PhysicalSizeX="([0-9.]+)"', meta)
         if m:
             mpp = float(m.group(1))
     data = np.stack(chans)
     with tifffile.TiffWriter(out, bigtiff=True, ome=True) as tw:
-        opts = dict(tile=(512, 512), compression='zlib', photometric='minisblack')
+        opts = {'tile': (512, 512), 'compression': 'zlib', 'photometric': 'minisblack'}
         nlev = max(1, int(np.ceil(np.log2(max(data.shape[1:]) / 1024))) + 1)
-        tw.write(data, subifds=nlev - 1, metadata={'axes': 'CYX', 'Channel': {'Name': chnames},
-                                                    'PhysicalSizeX': mpp, 'PhysicalSizeY': mpp}, **opts)
+        tw.write(
+            data,
+            subifds=nlev - 1,
+            metadata={'axes': 'CYX', 'Channel': {'Name': chnames}, 'PhysicalSizeX': mpp, 'PhysicalSizeY': mpp},
+            **opts,
+        )
         lv = data
         for _ in range(nlev - 1):
             lv = lv[:, ::2, ::2]
@@ -223,7 +240,6 @@ def _xenium(zpath: Path, out: Path, cells_out: Path) -> None:
 def _xenium_cells(parquet: Path, out: Path, mpp: float, slide: str) -> None:
     import pyarrow.parquet as pq
 
-    from . import annio
     t = pq.read_table(parquet, columns=['cell_id', 'vertex_x', 'vertex_y'])
     cid = t.column('cell_id').to_numpy(zero_copy_only=False)
     x = t.column('vertex_x').to_numpy() / mpp
@@ -232,7 +248,7 @@ def _xenium_cells(parquet: Path, out: Path, mpp: float, slide: str) -> None:
     starts = np.concatenate([[0], change])
     ends = np.concatenate([change, [len(cid)]])
     keep = []
-    for s, e in zip(starts, ends):                  # drop the repeated closing vertex of each ring
+    for s, e in zip(starts, ends):  # drop the repeated closing vertex of each ring
         if e - s >= 4 and x[s] == x[e - 1] and y[s] == y[e - 1]:
             e -= 1
         keep.append((s, e))
@@ -241,25 +257,39 @@ def _xenium_cells(parquet: Path, out: Path, mpp: float, slide: str) -> None:
     ring_off = np.zeros(len(keep) + 1, np.int64)
     np.cumsum(lens, out=ring_off[1:])
     n = len(keep)
-    F = annio.Features(np.full(n, annio.GEO_POLYGON, np.uint8), np.stack([x[idx], y[idx]], 1), ring_off,
-                       np.arange(n + 1, dtype=np.int64), np.zeros(n, np.int32), ['Cell (10x)'],
-                       props={'cell_id': np.asarray([str(cid[s]) for s, _ in keep], dtype=object)})
+    F = annio.Features(
+        np.full(n, annio.GEO_POLYGON, np.uint8),
+        np.stack([x[idx], y[idx]], 1),
+        ring_off,
+        np.arange(n + 1, dtype=np.int64),
+        np.zeros(n, np.int32),
+        ['Cell (10x)'],
+        props={'cell_id': np.asarray([str(cid[s]) for s, _ in keep], dtype=object)},
+    )
     F.name, F.mpp = '10x cell segmentation', mpp
     annio.write_geoparquet(F, out, slide=slide)
 
 
 def _attribution(sel: list[dict], d: Path) -> None:
-    lines = ['# Sample pack: sources and licences', '',
-             'Every image below allows reuse, including commercial use. Keep this file with the images.', '',
-             '| Image | Source | Licence | Attribution |', '|---|---|---|---|']
+    lines = [
+        '# Sample pack: sources and licences',
+        '',
+        'Every image below allows reuse, including commercial use. Keep this file with the images.',
+        '',
+        '| Image | Source | Licence | Attribution |',
+        '|---|---|---|---|',
+    ]
     for x in sel:
-        lines.append(f'| {x["title"]} | {x["source"]} ([link]({x["url"]})) | {x["licence"]} | {x.get("attribution", "")} |')
+        lines.append(
+            f'| {x["title"]} | {x["source"]} ([link]({x["url"]})) | {x["licence"]} | {x.get("attribution", "")} |'
+        )
     (d / 'ATTRIBUTION.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
 
 
 # ------------------------------------------------------------------------------------------------ segment + analyze
 def segment(sel: list[dict], d: Path, model: str = 'auto', log=print) -> None:
     from .segment import segment_slide
+
     ld = d / 'layers'
     _fetch_results(sel, d, log)
     for x in sel:
@@ -267,7 +297,7 @@ def segment(sel: list[dict], d: Path, model: str = 'auto', log=print) -> None:
         if out.exists():
             continue
         if (ld / f'{x["id"]}.cells-10x.parquet').exists() and model == 'auto':
-            continue                                   # Xenium bundles bring their own cell segmentation
+            continue  # Xenium bundles bring their own cell segmentation
         segment_slide(_slide(x, d), out, model=model, log=log)
 
 
@@ -275,7 +305,11 @@ def _fetch_results(sel: list[dict], d: Path, log) -> None:
     """Precomputed cells (from a GPU run of this same pack) if this project published them."""
     ld = d / 'layers'
     try:
-        sums = urllib.request.urlopen(urllib.request.Request(f'{RESULTS_RELEASE}/SHA256SUMS', headers=UA), timeout=20).read().decode()
+        sums = (
+            urllib.request.urlopen(urllib.request.Request(f'{RESULTS_RELEASE}/SHA256SUMS', headers=UA), timeout=20)
+            .read()
+            .decode()
+        )
     except Exception:  # noqa: BLE001  (no release yet / offline: segment locally)
         return
     want = {ln.split()[1]: ln.split()[0] for ln in sums.splitlines() if ln.strip()}
@@ -310,7 +344,7 @@ def analyze(sel: list[dict], d: Path, log=print) -> None:
     cells) → layers/*.parquet and metrics/<id>.csv."""
     from . import annio, spatial
     from .metrics import objects_from_layer, region_metrics
-    from .sources import open_slide
+
     ld, md = d / 'layers', d / 'metrics'
     md.mkdir(exist_ok=True)
     for x in sel:
@@ -338,6 +372,7 @@ def analyze(sel: list[dict], d: Path, log=print) -> None:
         if exp.exists():
             tables.append(region_metrics(annio.load(exp), source=src, objects=objs, mpp=mpp))
         import pandas as pd
+
         df = pd.concat(tables, ignore_index=True)
         df.insert(0, 'image', x['id'])
         df.to_csv(out, index=False)
@@ -347,9 +382,12 @@ def analyze(sel: list[dict], d: Path, log=print) -> None:
 
 def _summary(sel, d: Path) -> None:
     import pandas as pd
+
     fs = [d / 'metrics' / f'{x["id"]}.csv' for x in sel if (d / 'metrics' / f'{x["id"]}.csv').exists()]
     if fs:
-        pd.concat([pd.read_csv(f) for f in fs], ignore_index=True).to_csv(d / 'metrics' / 'all_regions.csv', index=False)
+        pd.concat([pd.read_csv(f) for f in fs], ignore_index=True).to_csv(
+            d / 'metrics' / 'all_regions.csv', index=False
+        )
 
 
 def session(sel: list[dict], d: Path) -> Path:
@@ -358,25 +396,38 @@ def session(sel: list[dict], d: Path) -> Path:
     entries = []
     for x in sel:
         layers = [str(p) for p in sorted(ld.glob(f'{x["id"]}.*.parquet'))]
-        entries.append({'id': x['id'], 'title': x['title'], 'slide': str(_slide(x, d)), 'layers': layers,
-                        'licence': x['licence']})
+        entries.append(
+            {'id': x['id'], 'title': x['title'], 'slide': str(_slide(x, d)), 'layers': layers, 'licence': x['licence']}
+        )
     p = d / f'session-{len(sel)}.json'
-    p.write_text(json.dumps({'name': 'wissi-viz sample pack', 'slides': entries, 'show': [e['id'] for e in entries][:32]},
-                            indent=1), encoding='utf-8')
+    p.write_text(
+        json.dumps(
+            {'name': 'wissi-viz sample pack', 'slides': entries, 'show': [e['id'] for e in entries][:32]}, indent=1
+        ),
+        encoding='utf-8',
+    )
     return p
 
 
 # ------------------------------------------------------------------------------------------------ entry points
 def _need_extras() -> None:
-    import importlib.util
     missing = [m for m in ('pyarrow', 'scipy', 'skimage', 'pandas', 'shapely') if not importlib.util.find_spec(m)]
     if missing:
-        raise SystemExit(f'the demo needs {", ".join(missing)}: install "wissi-viz[demo]" '
-                         '(uv tool install "wissi-viz[demo]", or uv sync --extra demo)')
+        raise SystemExit(
+            f'the demo needs {", ".join(missing)}: install "wissi-viz[demo]" '
+            '(uv tool install "wissi-viz[demo]", or uv sync --extra demo)'
+        )
 
 
-def run_demo(which: str = 'quick', directory: str | None = None, model: str = 'auto', yes: bool = False,
-             open_app: bool = True, browser: bool = False, log=print) -> Path:
+def run_demo(
+    which: str = 'quick',
+    directory: str | None = None,
+    model: str = 'auto',
+    yes: bool = False,
+    open_app: bool = True,
+    browser: bool = False,
+    log=print,
+) -> Path:
     _need_extras()
     sel = items(which)
     d = pack_dir(directory)
@@ -395,7 +446,6 @@ def run_demo(which: str = 'quick', directory: str | None = None, model: str = 'a
     s = session(sel, d)
     log(f'ready: {s}  (metrics: {d / "metrics" / "all_regions.csv"})')
     if open_app:
-        from .desktop import main as desktop_main
         desktop_main(['--session', str(s)] + (['--browser'] if browser else []))
     return s
 
@@ -410,9 +460,11 @@ def publish(d: Path) -> str:
     lines = [f'{hashlib.sha256(f.read_bytes()).hexdigest()}  {f.name}' for f in files]
     (ld / 'SHA256SUMS').write_text('\n'.join(lines) + '\n')
     tag = RESULTS_RELEASE.rsplit('/', 1)[-1]
-    return (f'{len(files)} cell layers, {_human(sum(f.stat().st_size for f in files))}. To share them:\n'
-            f'  cd "{ld}"\n  gh release create {tag} --repo zaloch/wissi-viz --title "Sample pack cells" '
-            f'--notes "Cells of the public sample pack" *.cells.parquet SHA256SUMS')
+    return (
+        f'{len(files)} cell layers, {_human(sum(f.stat().st_size for f in files))}. To share them:\n'
+        f'  cd "{ld}"\n  gh release create {tag} --repo zaloch/wissi-viz --title "Sample pack cells" '
+        f'--notes "Cells of the public sample pack" *.cells.parquet SHA256SUMS'
+    )
 
 
 def status(directory: str | None = None) -> dict:
@@ -420,16 +472,18 @@ def status(directory: str | None = None) -> dict:
     out = {}
     for which in ('quick', 'full'):
         sel = items(which)
-        out[which] = {'images': len(sel), 'bytes': sum(x['size'] for x in sel),
-                      'downloaded': sum(_complete(d / 'downloads' / x['file'], x) for x in sel),
-                      'segmented': sum(_cells(x, d) is not None for x in sel),
-                      'analyzed': sum((d / 'metrics' / f'{x["id"]}.csv').exists() for x in sel)}
+        out[which] = {
+            'images': len(sel),
+            'bytes': sum(x['size'] for x in sel),
+            'downloaded': sum(_complete(d / 'downloads' / x['file'], x) for x in sel),
+            'segmented': sum(_cells(x, d) is not None for x in sel),
+            'analyzed': sum((d / 'metrics' / f'{x["id"]}.csv').exists() for x in sel),
+        }
     out['dir'] = str(d)
     return out
 
 
 def main(argv: list[str]) -> None:
-    import argparse
     ap = argparse.ArgumentParser(prog='wissi-viz pack')
     ap.add_argument('step', choices=['status', 'download', 'prepare', 'segment', 'analyze', 'open', 'publish', 'all'])
     ap.add_argument('--set', default='quick', choices=['quick', 'full'])
@@ -454,21 +508,25 @@ def main(argv: list[str]) -> None:
     elif a.step == 'publish':
         print(publish(d))
     elif a.step == 'open':
-        from .desktop import main as desktop_main
         desktop_main(['--session', str(session(sel, d))] + (['--browser'] if a.browser else []))
     else:
         run_demo(a.set, a.dir, a.model, a.yes, browser=a.browser)
 
 
 # ------------------------------------------------------------------------------------------------ benchmark
-def run_benchmark(which: str = 'quick', directory: str | None = None, out: str = 'wissi-viz-benchmark',
-                  panes: str = '1,4,16,32', yes: bool = False, headed: bool = False, seconds: float = 6, log=print) -> Path:
+def run_benchmark(
+    which: str = 'quick',
+    directory: str | None = None,
+    out: str = 'wissi-viz-benchmark',
+    panes: str = '1,4,16,32',
+    yes: bool = False,
+    headed: bool = False,
+    seconds: float = 6,
+    log=print,
+) -> Path:
     """Benchmarks on the sample pack: slide opening and tile serving, panning 1–32 panes in a browser, SAM click
     latency, region metrics, GeoParquet vs GeoJSON. Writes <out>.md and <out>.json."""
-    import platform
 
-    from . import __version__
-    from .bench import browser_bench, server_bench
     _need_extras()
     sel = items(which)
     d = pack_dir(directory)
@@ -481,9 +539,15 @@ def run_benchmark(which: str = 'quick', directory: str | None = None, out: str =
     download(sel, d, log=log)
     prepare(sel, d, log=log)
     slides = [str(_slide(x, d)) for x in sel]
-    rep: dict[str, Any] = {'version': __version__, 'set': which, 'images': len(sel), 'platform': platform.platform(),
-                           'python': platform.python_version(), 'cpu': platform.processor() or platform.machine(),
-                           'cpus': os.cpu_count()}
+    rep: dict[str, Any] = {
+        'version': __version__,
+        'set': which,
+        'images': len(sel),
+        'platform': platform.platform(),
+        'python': platform.python_version(),
+        'cpu': platform.processor() or platform.machine(),
+        'cpus': os.cpu_count(),
+    }
     log('1/5 slide opening and tile serving')
     rep['server'] = server_bench(slides)
     log('2/5 panning in the browser (' + panes + ' panes)')
@@ -508,7 +572,7 @@ def run_benchmark(which: str = 'quick', directory: str | None = None, out: str =
 
 def _bench_sam(slides: list[str]) -> dict:
     from .sam import SamService
-    from .sources import open_slide
+
     svc = SamService()
     rows = []
     for path in slides:
@@ -520,9 +584,17 @@ def _bench_sam(slides: list[str]) -> dict:
             try:
                 _, a = svc.segment(src, rect, points=[(cx, cy)], labels=[1], key=path)
                 _, b = svc.segment(src, rect, points=[(cx, cy), (cx + span / 10, cy)], labels=[1, 1], key=path)
-                rows.append({'slide': Path(path).name, 'view': zoom, 'backend': a['backend'], 'device': a['device'],
-                             'encode_ms': a['encode_ms'], 'first_click_ms': round((a['encode_ms'] or 0) + a['decode_ms'], 1),
-                             'next_click_ms': b['decode_ms']})
+                rows.append(
+                    {
+                        'slide': Path(path).name,
+                        'view': zoom,
+                        'backend': a['backend'],
+                        'device': a['device'],
+                        'encode_ms': a['encode_ms'],
+                        'first_click_ms': round((a['encode_ms'] or 0) + a['decode_ms'], 1),
+                        'next_click_ms': b['decode_ms'],
+                    }
+                )
             except Exception as e:  # noqa: BLE001
                 rows.append({'slide': Path(path).name, 'view': zoom, 'error': str(e)})
     return {'status': svc.status(), 'rows': rows}
@@ -531,7 +603,7 @@ def _bench_sam(slides: list[str]) -> dict:
 def _bench_metrics(sel, d: Path) -> list[dict]:
     from . import annio, spatial
     from .metrics import objects_from_layer, region_metrics
-    from .sources import open_slide
+
     rows = []
     for x in sel:
         src = open_slide(_slide(x, d))
@@ -543,15 +615,22 @@ def _bench_metrics(sel, d: Path) -> list[dict]:
         t2 = time.perf_counter()
         df = region_metrics(tissue, source=src, objects=objs)
         t3 = time.perf_counter()
-        rows.append({'image': x['id'], 'regions': len(df), 'measurements': len(df.columns), 'cells': len(objs) if objs is not None else 0,
-                     'tissue_s': round(t1 - t0, 2), 'load_cells_s': round(t2 - t1, 2), 'metrics_s': round(t3 - t2, 2)})
+        rows.append(
+            {
+                'image': x['id'],
+                'regions': len(df),
+                'measurements': len(df.columns),
+                'cells': len(objs) if objs is not None else 0,
+                'tissue_s': round(t1 - t0, 2),
+                'load_cells_s': round(t2 - t1, 2),
+                'metrics_s': round(t3 - t2, 2),
+            }
+        )
     return rows
 
 
 def _bench_formats(sel, d: Path) -> dict:
-    import tempfile
 
-    from . import annio
     cps = [c for c in (_cells(x, d) for x in sel) if c]
     if not cps:
         return {'note': 'no cell layers yet (run wissi-viz --demo first)'}
@@ -563,59 +642,101 @@ def _bench_formats(sel, d: Path) -> dict:
         gj = Path(tmp) / 'cells.geojson'
         annio.write_geojson(F, gj)
         t2 = time.perf_counter()
-        from .annotations import AnnotationLayer
         AnnotationLayer.from_geojson(gj)
         t3 = time.perf_counter()
         pq_ = annio.write_geoparquet(F, Path(tmp) / 'cells.parquet')
         t4 = time.perf_counter()
-        return {'layer': big.name, 'features': len(F), 'geoparquet_mb': round(pq_.stat().st_size / 2**20, 1),
-                'geojson_mb': round(gj.stat().st_size / 2**20, 1), 'geoparquet_read_s': round(t1 - t0, 2),
-                'geoparquet_write_s': round(t4 - t3, 2), 'geojson_write_s': round(t2 - t1, 2), 'geojson_read_s': round(t3 - t2, 2)}
+        return {
+            'layer': big.name,
+            'features': len(F),
+            'geoparquet_mb': round(pq_.stat().st_size / 2**20, 1),
+            'geojson_mb': round(gj.stat().st_size / 2**20, 1),
+            'geoparquet_read_s': round(t1 - t0, 2),
+            'geoparquet_write_s': round(t4 - t3, 2),
+            'geojson_write_s': round(t2 - t1, 2),
+            'geojson_read_s': round(t3 - t2, 2),
+        }
 
 
 def _report_md(r: dict) -> str:
-    L = [f'# wissi-viz {r["version"]} benchmark', '',
-         f'{r["images"]} public slides ({r["set"]} set) · {r["platform"]} · Python {r["python"]} · {r["cpus"]} CPUs', '']
+    L = [
+        f'# wissi-viz {r["version"]} benchmark',
+        '',
+        f'{r["images"]} public slides ({r["set"]} set) · {r["platform"]} · Python {r["python"]} · {r["cpus"]} CPUs',
+        '',
+    ]
     if r.get('server'):
-        L += ['## Slide opening and tile serving', '', '| slide | open (ms) | cold tile p50 (ms) | warm tile p50 (ms) | tiles/s |',
-              '|---|---|---|---|---|']
+        L += [
+            '## Slide opening and tile serving',
+            '',
+            '| slide | open (ms) | cold tile p50 (ms) | warm tile p50 (ms) | tiles/s |',
+            '|---|---|---|---|---|',
+        ]
         for s in r['server']:
-            lv = (s.get('levels_bench') or [{}])[0]          # full resolution
+            lv = (s.get('levels_bench') or [{}])[0]  # full resolution
             tput = next((v for k, v in lv.items() if k.startswith('throughput')), '')
-            L.append(f'| {s.get("slide", "")} ({s.get("size", "")}) | {s.get("open_ms", "")} | {lv.get("cold_p50_ms", "")} | '
-                     f'{lv.get("warm_p50_ms", "")} | {tput} |')
+            L.append(
+                f'| {s.get("slide", "")} ({s.get("size", "")}) | {s.get("open_ms", "")} | {lv.get("cold_p50_ms", "")} | '
+                f'{lv.get("warm_p50_ms", "")} | {tput} |'
+            )
         L.append('')
     b = r.get('browser') or {}
     if b.get('error'):
         L += ['## Panning', '', f'Not run: {b["error"]}', '']
     elif b:
-        L += ['## Panning in the browser', '',
-              f'{b.get("webgl_renderer", "")} ({"software" if b.get("software_rendering") else "GPU"}), {b.get("http_protocol", "")}', '',
-              '| panes | open (ms) | zoom to sharp (ms) | fps (median) | frame p95 (ms) | sharp while moving | settle (ms) | GPU textures (MB) |',
-              '|---|---|---|---|---|---|---|---|']
+        L += [
+            '## Panning in the browser',
+            '',
+            f'{b.get("webgl_renderer", "")} ({"software" if b.get("software_rendering") else "GPU"}), {b.get("http_protocol", "")}',
+            '',
+            '| panes | open (ms) | zoom to sharp (ms) | fps (median) | frame p95 (ms) | sharp while moving | settle (ms) | GPU textures (MB) |',
+            '|---|---|---|---|---|---|---|---|',
+        ]
         for run in b.get('runs', []):
             pn = run.get('pan', {})
-            L.append(f'| {run.get("panes")} | {run.get("open_ms")} | {run.get("zoom_to_sharp_ms")} | {pn.get("fps_median")} | '
-                     f'{pn.get("frame_p95_ms")} | {pn.get("sharp_while_moving_pct")} % | {pn.get("settle_ms")} | '
-                     f'{(run.get("stats") or {}).get("textureMB")} |')
+            L.append(
+                f'| {run.get("panes")} | {run.get("open_ms")} | {run.get("zoom_to_sharp_ms")} | {pn.get("fps_median")} | '
+                f'{pn.get("frame_p95_ms")} | {pn.get("sharp_while_moving_pct")} % | {pn.get("settle_ms")} | '
+                f'{(run.get("stats") or {}).get("textureMB")} |'
+            )
         L.append('')
     s = r.get('sam') or {}
     if s.get('rows'):
         st = s['status']
-        L += ['## SAM click segmentation', '', f'backend **{st.get("backend")}** on {st.get("device")} (model {st.get("model")})', '',
-              '| slide | view | first click (ms) | next click (ms) |', '|---|---|---|---|']
+        L += [
+            '## SAM click segmentation',
+            '',
+            f'backend **{st.get("backend")}** on {st.get("device")} (model {st.get("model")})',
+            '',
+            '| slide | view | first click (ms) | next click (ms) |',
+            '|---|---|---|---|',
+        ]
         for row in s['rows']:
-            L.append(f'| {row["slide"]} | {row["view"]} | {row.get("first_click_ms", row.get("error", ""))} | {row.get("next_click_ms", "")} |')
+            L.append(
+                f'| {row["slide"]} | {row["view"]} | {row.get("first_click_ms", row.get("error", ""))} | {row.get("next_click_ms", "")} |'
+            )
         L.append('')
     if r.get('metrics'):
-        L += ['## Region metrics', '', '| image | cells | measurements | tissue (s) | metrics (s) |', '|---|---|---|---|---|']
+        L += [
+            '## Region metrics',
+            '',
+            '| image | cells | measurements | tissue (s) | metrics (s) |',
+            '|---|---|---|---|---|',
+        ]
         for m in r['metrics']:
             L.append(f'| {m["image"]} | {m["cells"]:,} | {m["measurements"]} | {m["tissue_s"]} | {m["metrics_s"]} |')
         L.append('')
     f = r.get('formats') or {}
     if f.get('features'):
-        L += ['## Annotation formats', '', f'{f["features"]:,} cells ({f["layer"]})', '',
-              '| | size (MB) | write (s) | read (s) |', '|---|---|---|---|',
-              f'| GeoParquet | {f["geoparquet_mb"]} | {f["geoparquet_write_s"]} | {f["geoparquet_read_s"]} |',
-              f'| GeoJSON | {f["geojson_mb"]} | {f["geojson_write_s"]} | {f["geojson_read_s"]} |', '']
+        L += [
+            '## Annotation formats',
+            '',
+            f'{f["features"]:,} cells ({f["layer"]})',
+            '',
+            '| | size (MB) | write (s) | read (s) |',
+            '|---|---|---|---|',
+            f'| GeoParquet | {f["geoparquet_mb"]} | {f["geoparquet_write_s"]} | {f["geoparquet_read_s"]} |',
+            f'| GeoJSON | {f["geojson_mb"]} | {f["geojson_write_s"]} | {f["geojson_read_s"]} |',
+            '',
+        ]
     return '\n'.join(L)

@@ -23,14 +23,26 @@ Region columns (µm units when the slide is calibrated):
 
 Needs the ``[analysis]`` extra (scipy, shapely, scikit-image, pandas).
 """
+
 from __future__ import annotations
 
 import math
-from typing import Any, Sequence
+import re
+from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
+import shapely
+from PIL import Image, ImageDraw
+from scipy.spatial import cKDTree
+from shapely.geometry import LineString, Point, Polygon
+from skimage.feature import graycomatrix, graycoprops
 
+from . import annio
+from ._compat import otsu
 from .annotations import AnnotationLayer
+from .objects import ObjectTable
+from .spatial import _df, roi_geometries
 
 _STAINS = ('hematoxylin', 'eosin', 'dab')
 
@@ -38,9 +50,6 @@ _STAINS = ('hematoxylin', 'eosin', 'dab')
 # ------------------------------------------------------------------------------------------------ inputs
 def _regions(regions: Any) -> list[tuple[str, Any]]:
     """[(name, shapely geometry)] from a layer, Features, geometry, dict or list."""
-    import shapely
-    from shapely.geometry import LineString, Point, Polygon
-    from . import annio
     if isinstance(regions, AnnotationLayer):
         regions = annio.from_layer(regions)
     if isinstance(regions, annio.Features):
@@ -59,30 +68,28 @@ def _regions(regions: Any) -> list[tuple[str, Any]]:
                 g = Point(rs[0][0])
             own = name_prop[i] if name_prop is not None and name_prop[i] not in (None, '') else None
             cls = names[i] or None
-            nm = (f'{cls} · {own}' if cls and own and own != cls else cls or own or f'region {i + 1}')
+            nm = f'{cls} · {own}' if cls and own and own != cls else cls or own or f'region {i + 1}'
             out.append((str(nm), g))
         return out
-    from .spatial import roi_geometries
     return roi_geometries(regions)
 
 
 def objects_from_layer(layer: AnnotationLayer, mpp: float | None = None):
     """An AnnotationLayer of segmented objects (cells, nuclei, …) → ObjectTable (centroids, classes, bbox,
     measurement columns, outlines for polygon layers)."""
-    from . import annio
-    from .objects import ObjectTable
     F = annio.from_layer(layer)
     c = F.centroid()
     outlines = None
-    if len(F) and (F.kind == annio.GEO_POLYGON).all() and len(layer._kinds):   # real outlines (not bbox ellipses)
-        outlines = [F.coords[F.ring_off[F.feat_ring_off[i]]:F.ring_off[F.feat_ring_off[i] + 1]] for i in range(len(F))]
+    if len(F) and (F.kind == annio.GEO_POLYGON).all() and len(layer._kinds):  # real outlines (not bbox ellipses)
+        outlines = [
+            F.coords[F.ring_off[F.feat_ring_off[i]] : F.ring_off[F.feat_ring_off[i] + 1]] for i in range(len(F))
+        ]
     cols = {k: np.asarray(v) for k, v in F.props.items() if np.asarray(v).dtype.kind in 'biuf'}
     return ObjectTable(c[:, 0], c[:, 1], F.class_of(), cols, F.bbox(), outlines, mpp or F.mpp, layer.name)
 
 
 # ------------------------------------------------------------------------------------------------ shape
 def _shape(g, mpp: float) -> dict:
-    import shapely
     u, u2 = mpp, mpp * mpp
     d: dict[str, float] = {}
     if g.is_empty:
@@ -99,7 +106,7 @@ def _shape(g, mpp: float) -> dict:
     d['shape_area_um2'] = A * u2
     d['shape_area_mm2'] = A * u2 / 1e6
     d['shape_perimeter_um'] = P * u
-    d['shape_circularity'] = 4 * math.pi * A / P ** 2 if P else np.nan
+    d['shape_circularity'] = 4 * math.pi * A / P**2 if P else np.nan
     d['shape_solidity'] = A / hull.area if hull.area else np.nan
     d['shape_convexity'] = hull.length / P if P else np.nan
     d['shape_extent'] = A / ((maxx - minx) * (maxy - miny)) if maxx > minx and maxy > miny else np.nan
@@ -108,7 +115,7 @@ def _shape(g, mpp: float) -> dict:
     m = _area_moments([shapely.geometry.polygon.orient(p) for p in polys if p.geom_type == 'Polygon'])
     if m is not None:
         mu20, mu02, mu11 = m
-        tr, det = mu20 + mu02, mu20 * mu02 - mu11 ** 2
+        tr, det = mu20 + mu02, mu20 * mu02 - mu11**2
         disc = math.sqrt(max(tr * tr / 4 - det, 0))
         l1, l2 = tr / 2 + disc, max(tr / 2 - disc, 0)
         d['shape_major_axis_um'] = 4 * math.sqrt(l1) * u
@@ -124,10 +131,11 @@ def _shape(g, mpp: float) -> dict:
     hv = np.asarray(hull.exterior.coords) if hull.geom_type == 'Polygon' else np.asarray(g.envelope.exterior.coords)
     if len(hv) > 1:
         dd = hv[:, None, :] - hv[None, :, :]
-        d['shape_max_feret_um'] = float(np.sqrt((dd ** 2).sum(-1)).max()) * u
+        d['shape_max_feret_um'] = float(np.sqrt((dd**2).sum(-1)).max()) * u
     d['shape_holes'] = sum(len(p.interiors) for p in polys if p.geom_type == 'Polygon')
-    d['shape_hole_area_um2'] = sum(abs(shapely.area(shapely.Polygon(h))) for p in polys if p.geom_type == 'Polygon'
-                                   for h in p.interiors) * u2
+    d['shape_hole_area_um2'] = (
+        sum(abs(shapely.area(shapely.Polygon(h))) for p in polys if p.geom_type == 'Polygon' for h in p.interiors) * u2
+    )
     c = g.centroid
     d['shape_centroid_x_px'], d['shape_centroid_y_px'] = c.x, c.y
     return d
@@ -166,7 +174,6 @@ def _pick_level(source, bounds, max_pixels: float) -> int:
 def _read(source, g, max_pixels: float):
     """Pixels of the region's bounding box at a level fitting ``max_pixels``, its mask, and that level's
     downsample. Brightfield → (h, w, 3) uint8; fluorescence → (h, w, C)."""
-    from PIL import Image, ImageDraw
     x0, y0, x1, y1 = g.bounds
     lv = _pick_level(source, g.bounds, max_pixels)
     L = source.info.levels[lv]
@@ -177,10 +184,12 @@ def _read(source, g, max_pixels: float):
     if source.info.mode == 'rgb':
         img = np.asarray(source.read_region(lv, lx0, ly0, w, h))[..., :3]
     else:
-        img = np.stack([np.asarray(source.read_region(lv, lx0, ly0, w, h, c)) for c in range(len(source.info.channels))], -1)
-    ox, oy = lx0 * ds, ly0 * ds                      # bbox origin in level-0 px
+        img = np.stack(
+            [np.asarray(source.read_region(lv, lx0, ly0, w, h, c)) for c in range(len(source.info.channels))], -1
+        )
+    ox, oy = lx0 * ds, ly0 * ds  # bbox origin in level-0 px
     scale = w * h / max_pixels
-    if scale > 1:                                    # coarsest level still too big: stride
+    if scale > 1:  # coarsest level still too big: stride
         st = int(math.ceil(math.sqrt(scale)))
         img = img[::st, ::st]
         ds *= st
@@ -201,10 +210,15 @@ def _stats(prefix: str, v: np.ndarray, px_area_um2: float, positive: bool = True
         return {}
     v = v.astype(np.float64)
     q10, q50, q90 = np.percentile(v, [10, 50, 90])
-    d = {f'{prefix}_mean': v.mean(), f'{prefix}_sd': v.std(), f'{prefix}_median': q50, f'{prefix}_p10': q10,
-         f'{prefix}_p90': q90, f'{prefix}_integrated': v.sum() * px_area_um2}
+    d = {
+        f'{prefix}_mean': v.mean(),
+        f'{prefix}_sd': v.std(),
+        f'{prefix}_median': q50,
+        f'{prefix}_p10': q10,
+        f'{prefix}_p90': q90,
+        f'{prefix}_integrated': v.sum() * px_area_um2,
+    }
     if positive:
-        from ._compat import otsu
         t = otsu(v)
         if t is not None:
             d[f'{prefix}_pos_frac'] = float((v > t).mean())
@@ -216,8 +230,14 @@ def _stain_od(rgb: np.ndarray, vectors: dict | None = None) -> dict[str, np.ndar
     or ``vectors`` = {'hematoxylin': rgb, 'eosin': rgb[, 'dab': rgb]} e.g. from spatial.estimate_stain_vectors)."""
     od = -np.log10(np.clip(rgb.astype(np.float64), 1, 255) / 255.0)
     if vectors:
-        M = np.array([vectors['hematoxylin'], vectors.get('eosin') or vectors.get('second'),
-                      vectors.get('dab') or np.cross(vectors['hematoxylin'], vectors.get('eosin') or vectors.get('second'))], float)
+        M = np.array(
+            [
+                vectors['hematoxylin'],
+                vectors.get('eosin') or vectors.get('second'),
+                vectors.get('dab') or np.cross(vectors['hematoxylin'], vectors.get('eosin') or vectors.get('second')),
+            ],
+            float,
+        )
     else:
         M = np.array([[0.65, 0.70, 0.29], [0.07, 0.99, 0.11], [0.27, 0.57, 0.78]])
     M = M / np.linalg.norm(M, axis=1, keepdims=True)
@@ -226,20 +246,22 @@ def _stain_od(rgb: np.ndarray, vectors: dict | None = None) -> dict[str, np.ndar
 
 
 def _texture(gray: np.ndarray, mask: np.ndarray) -> dict:
-    from skimage.feature import graycomatrix, graycoprops
     if mask.sum() < 64:
         return {}
     g = gray.astype(np.float64)
     lo, hi = np.percentile(g[mask], [1, 99])
-    q = np.clip((g - lo) / max(hi - lo, 1e-9) * 31, 0, 31).astype(np.uint8) + 1    # 32 levels, 0 = outside
+    q = np.clip((g - lo) / max(hi - lo, 1e-9) * 31, 0, 31).astype(np.uint8) + 1  # 32 levels, 0 = outside
     q[~mask] = 0
-    P = graycomatrix(q, distances=[1, 2, 4], angles=[0, np.pi / 4, np.pi / 2, 3 * np.pi / 4], levels=33,
-                     symmetric=True, normed=False)
-    P = P[1:, 1:].astype(np.float64)                 # drop pairs touching the outside
+    P = graycomatrix(
+        q, distances=[1, 2, 4], angles=[0, np.pi / 4, np.pi / 2, 3 * np.pi / 4], levels=33, symmetric=True, normed=False
+    )
+    P = P[1:, 1:].astype(np.float64)  # drop pairs touching the outside
     P /= max(P.sum(axis=(0, 1), keepdims=True).min(), 1)
     P = P / np.maximum(P.sum(axis=(0, 1), keepdims=True), 1e-12)
-    d = {f'tex_{p}': float(graycoprops(P, p).mean()) for p in ('contrast', 'dissimilarity', 'homogeneity', 'energy',
-                                                               'correlation', 'ASM')}
+    d = {
+        f'tex_{p}': float(graycoprops(P, p).mean())
+        for p in ('contrast', 'dissimilarity', 'homogeneity', 'energy', 'correlation', 'ASM')
+    }
     h = np.bincount(q[mask], minlength=33)[1:].astype(np.float64)
     h /= h.sum()
     d['tex_entropy'] = float(-(h[h > 0] * np.log2(h[h > 0])).sum())
@@ -254,7 +276,7 @@ def _intensity(source, g, mpp: float, max_pixels: float, texture: bool, stain_ve
     d: dict[str, float] = {'analysis_mpp': ds * mpp}
     if source.info.mode == 'rgb':
         px = img[mask]
-        bg = (px.min(1) > 215) & ((px.max(1) - px.min(1)) < 18)          # white glass
+        bg = (px.min(1) > 215) & ((px.max(1) - px.min(1)) < 18)  # white glass
         d['int_tissue_frac'] = float(1 - bg.mean())
         for i, c in enumerate('RGB'):
             d.update(_stats(f'int_{c}', px[:, i], a_um2, positive=False))
@@ -273,14 +295,22 @@ def _intensity(source, g, mpp: float, max_pixels: float, texture: bool, stain_ve
 
 
 def _slug(s: str) -> str:
-    import re
     return re.sub(r'[^A-Za-z0-9]+', '_', str(s)).strip('_') or 'x'
 
 
 # ------------------------------------------------------------------------------------------------ objects
-def _object_metrics_in(g, objs, sel: np.ndarray, mpp: float, area_um2: float, classes: Sequence[str],
-                       radii_um: Sequence[float], contact_um: float, quadrat_um: float, max_pairs_classes: int) -> dict:
-    from scipy.spatial import cKDTree
+def _object_metrics_in(
+    g,
+    objs,
+    sel: np.ndarray,
+    mpp: float,
+    area_um2: float,
+    classes: Sequence[str],
+    radii_um: Sequence[float],
+    contact_um: float,
+    quadrat_um: float,
+    max_pairs_classes: int,
+) -> dict:
     d: dict[str, float] = {}
     n = int(sel.sum())
     d['obj_count'] = n
@@ -288,7 +318,7 @@ def _object_metrics_in(g, objs, sel: np.ndarray, mpp: float, area_um2: float, cl
     d['obj_density_mm2'] = n / a_mm2 if a_mm2 else np.nan
     if n == 0:
         return d
-    xy = objs.xy[sel] * mpp                           # µm
+    xy = objs.xy[sel] * mpp  # µm
     cl = objs.classes[sel] if objs.classes is not None else np.full(n, '', object)
     counts = {c: int((cl == c).sum()) for c in classes}
     p = np.array([v / n for v in counts.values() if v], float)
@@ -300,7 +330,7 @@ def _object_metrics_in(g, objs, sel: np.ndarray, mpp: float, area_um2: float, cl
     if len(p):
         H = float(-(p * np.log(p)).sum())
         d['obj_shannon'] = H
-        d['obj_simpson'] = float(1 - (p ** 2).sum())
+        d['obj_simpson'] = float(1 - (p**2).sum())
         d['obj_richness'] = int(len(p))
         d['obj_evenness'] = H / math.log(len(p)) if len(p) > 1 else np.nan
     tree = cKDTree(xy)
@@ -311,7 +341,7 @@ def _object_metrics_in(g, objs, sel: np.ndarray, mpp: float, area_um2: float, cl
         d['obj_nn_median_um'] = float(np.median(nn))
         if area_um2:
             d['obj_clark_evans'] = float(nn.mean() / (0.5 * math.sqrt(area_um2 / n)))
-            for r in radii_um:                              # Ripley L(r) − r (no edge correction; > 0 = clustered)
+            for r in radii_um:  # Ripley L(r) − r (no edge correction; > 0 = clustered)
                 pairs = tree.count_neighbors(tree, r) - n
                 K = area_um2 * pairs / (n * (n - 1))
                 d[f'obj_ripley_L_minus_r_{int(r)}um'] = math.sqrt(max(K, 0) / math.pi) - r
@@ -341,7 +371,6 @@ def _object_metrics_in(g, objs, sel: np.ndarray, mpp: float, area_um2: float, cl
             d[f'obj_contact_frac_{_slug(a)}_with_{_slug(b)}'] = float((dd <= contact_um).mean())
     # depth from the region boundary (infiltration): distance of each object to the outline
     if g.geom_type in ('Polygon', 'MultiPolygon'):
-        import shapely
         bnd = g.boundary
         depth = shapely.distance(shapely.points(objs.x[sel], objs.y[sel]), bnd) * mpp
         d['obj_depth_mean_um'] = float(depth.mean())
@@ -361,13 +390,24 @@ def _object_metrics_in(g, objs, sel: np.ndarray, mpp: float, area_um2: float, cl
 
 
 # ------------------------------------------------------------------------------------------------ public API
-def region_metrics(regions: Any, *, source: Any = None, objects: Any = None, mpp: float | None = None,
-                   classes: Sequence[str] | None = None, intensity: bool = True, texture: bool = True,
-                   radii_um: Sequence[float] = (25, 50, 100), contact_um: float = 15.0, quadrat_um: float = 50.0,
-                   max_pixels: float = 4e6, stain_vectors: dict | None = None, max_pairs_classes: int = 6):
+def region_metrics(
+    regions: Any,
+    *,
+    source: Any = None,
+    objects: Any = None,
+    mpp: float | None = None,
+    classes: Sequence[str] | None = None,
+    intensity: bool = True,
+    texture: bool = True,
+    radii_um: Sequence[float] = (25, 50, 100),
+    contact_um: float = 15.0,
+    quadrat_um: float = 50.0,
+    max_pixels: float = 4e6,
+    stain_vectors: dict | None = None,
+    max_pairs_classes: int = 6,
+):
     """One row per region (see module docstring). ``source``: the slide (SlideSource / PyramidSlide) for intensity
     and texture; ``objects``: an ObjectTable or a layer of segmented objects for the ``obj_*`` metrics."""
-    from .spatial import _df
     if source is not None and hasattr(source, 'source') and not hasattr(source, 'read_region'):
         source = source.source
     if mpp is None and source is not None:
@@ -383,7 +423,6 @@ def region_metrics(regions: Any, *, source: Any = None, objects: Any = None, mpp
     classes = list(classes or [])
     rows = []
     if objects is not None:
-        import shapely
         pts = shapely.points(objects.x, objects.y)
     for i, (name, g) in enumerate(regs):
         row: dict[str, Any] = {'region': name, 'index': i, 'type': g.geom_type}
@@ -392,7 +431,6 @@ def region_metrics(regions: Any, *, source: Any = None, objects: Any = None, mpp
         if source is not None and intensity and area_um2:
             row.update(_intensity(source, g, units, max_pixels, texture, stain_vectors))
         if objects is not None and area_um2:
-            import shapely
             shapely.prepare(g)
             x0, y0, x1, y1 = g.bounds
             cand = (objects.x >= x0) & (objects.x <= x1) & (objects.y >= y0) & (objects.y <= y1)
@@ -400,8 +438,11 @@ def region_metrics(regions: Any, *, source: Any = None, objects: Any = None, mpp
             idx = np.nonzero(cand)[0]
             if len(idx):
                 sel[idx] = shapely.contains(g, pts[idx])
-            row.update(_object_metrics_in(g, objects, sel, units, area_um2, classes, radii_um, contact_um,
-                                          quadrat_um, max_pairs_classes))
+            row.update(
+                _object_metrics_in(
+                    g, objects, sel, units, area_um2, classes, radii_um, contact_um, quadrat_um, max_pairs_classes
+                )
+            )
         rows.append(row)
     keys: dict[str, None] = {}
     for r in rows:
@@ -409,14 +450,18 @@ def region_metrics(regions: Any, *, source: Any = None, objects: Any = None, mpp
     return _df({k: [r.get(k, np.nan) for r in rows] for k in keys})
 
 
-def object_metrics(objects: Any, *, source: Any = None, mpp: float | None = None, intensity: bool = True,
-                   level: int = 0, tile: int = 2048):
+def object_metrics(
+    objects: Any,
+    *,
+    source: Any = None,
+    mpp: float | None = None,
+    intensity: bool = True,
+    level: int = 0,
+    tile: int = 2048,
+):
     """One row per segmented object: shape (area, perimeter, circularity, solidity, eccentricity, axes, Feret)
     computed vectorised, and — with ``source`` — mean / sd intensity per channel or stain inside each object,
     measured tile by tile at ``level`` from a rasterised label image (exact pixel masks, bounded memory)."""
-    import shapely
-    from . import annio
-    from .spatial import _df
     if source is not None and hasattr(source, 'source') and not hasattr(source, 'read_region'):
         source = source.source
     F = annio.from_layer(objects) if isinstance(objects, AnnotationLayer) else objects
@@ -436,10 +481,16 @@ def object_metrics(objects: Any, *, source: Any = None, mpp: float | None = None
     A, P = shapely.area(geoms), shapely.length(geoms)
     hull = shapely.convex_hull(geoms)
     c = F.centroid()
-    out: dict[str, Any] = {'index': np.arange(n), 'class': F.class_of(), 'x_px': c[:, 0], 'y_px': c[:, 1],
-                           'area_um2': A * u * u, 'perimeter_um': P * u}
+    out: dict[str, Any] = {
+        'index': np.arange(n),
+        'class': F.class_of(),
+        'x_px': c[:, 0],
+        'y_px': c[:, 1],
+        'area_um2': A * u * u,
+        'perimeter_um': P * u,
+    }
     with np.errstate(divide='ignore', invalid='ignore'):
-        out['circularity'] = np.where(P > 0, 4 * np.pi * A / P ** 2, np.nan)
+        out['circularity'] = np.where(P > 0, 4 * np.pi * A / P**2, np.nan)
         out['solidity'] = np.where(shapely.area(hull) > 0, A / shapely.area(hull), np.nan)
     mrr = shapely.minimum_rotated_rectangle(geoms)
     ext = shapely.get_coordinates(mrr, return_index=True)
@@ -449,7 +500,7 @@ def object_metrics(objects: Any, *, source: Any = None, mpp: float | None = None
     if len(idx):
         # first three corners of each rectangle → its two side lengths
         first = np.searchsorted(idx, np.arange(n))
-        ok = (np.bincount(idx, minlength=n) >= 4)
+        ok = np.bincount(idx, minlength=n) >= 4
         f = first[ok]
         w[ok] = np.hypot(*(pts[f + 1] - pts[f]).T)
         hgt[ok] = np.hypot(*(pts[f + 2] - pts[f + 1]).T)
@@ -470,7 +521,6 @@ def object_metrics(objects: Any, *, source: Any = None, mpp: float | None = None
 
 def _object_intensity(source, F, polys: np.ndarray, level: int, tile: int) -> dict:
     """Per-object mean / sd of each channel (or H / E / DAB OD and grey for brightfield), tile by tile."""
-    from PIL import Image, ImageDraw
     L = source.info.levels[level]
     ds = L.downsample
     n = len(F)
@@ -516,6 +566,6 @@ def _object_intensity(source, F, polys: np.ndarray, level: int, tile: int) -> di
         for k in names:
             mean = np.where(cnt > 0, s1[k] / cnt, np.nan)
             out[f'{k}_mean'] = mean
-            out[f'{k}_sd'] = np.sqrt(np.clip(np.where(cnt > 0, s2[k] / cnt, np.nan) - mean ** 2, 0, None))
+            out[f'{k}_sd'] = np.sqrt(np.clip(np.where(cnt > 0, s2[k] / cnt, np.nan) - mean**2, 0, None))
     out['pixels'] = cnt
     return out

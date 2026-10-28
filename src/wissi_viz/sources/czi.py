@@ -8,6 +8,7 @@ so the many viewer tiles that fall inside one large subblock decode it once.
 
 The LGPL libCZI backend (``pylibCZIrw``) is optional: ``open_slide(p, czi_backend='libczi')``.
 """
+
 from __future__ import annotations
 
 import math
@@ -17,8 +18,13 @@ from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
 
+import czifile
+import imagecodecs
 import numpy as np
+import tifffile
 
+from ..annotations import discover_sidecars, from_czi_metadata
+from ..memory import ByteLRU, decoded_cache
 from . import czi_meta
 from .base import Channel, Level, SlideInfo, SlideSource
 
@@ -27,14 +33,14 @@ RGB_TYPES = {'BGR24', 'BGR48', 'BGRA32', 'BGR96FLOAT'}
 
 @dataclass
 class _Block:
-    index: int        # position in czifile's subblock_directory
-    x: int            # level-0 (logical) placement, relative to the image origin
+    index: int  # position in czifile's subblock_directory
+    x: int  # level-0 (logical) placement, relative to the image origin
     y: int
-    w: int            # logical size (level-0 px)
+    w: int  # logical size (level-0 px)
     h: int
-    sw: int           # stored size (px at this block's scale)
+    sw: int  # stored size (px at this block's scale)
     sh: int
-    m: int            # mosaic index (draw order)
+    m: int  # mosaic index (draw order)
 
 
 class _DecodeCache:
@@ -42,7 +48,6 @@ class _DecodeCache:
 
     def __init__(self, max_bytes: int | None = None) -> None:
         # storage: the process-wide decoded-array budget (shared with every other slide), or a private one
-        from ..memory import ByteLRU, decoded_cache
         self.store = ByteLRU(max_bytes) if max_bytes else decoded_cache()
         self.owner = object()
         self.inflight: dict[int, Future] = {}
@@ -87,7 +92,6 @@ def _metadata_dict(f) -> dict:
         return xml
     if not xml:
         return {}
-    import tifffile
     return tifffile.xml2dict(xml)
 
 
@@ -100,10 +104,16 @@ def _dims(entry) -> tuple:
 class CziSource(SlideSource):
     extensions = ('.czi',)
 
-    def __init__(self, path: str | os.PathLike, tile_size: int = 512, scene: int | None = None,
-                 z: int = 0, t: int = 0, decode_cache_mb: int | None = None) -> None:
+    def __init__(
+        self,
+        path: str | os.PathLike,
+        tile_size: int = 512,
+        scene: int | None = None,
+        z: int = 0,
+        t: int = 0,
+        decode_cache_mb: int | None = None,
+    ) -> None:
         super().__init__()
-        import czifile
 
         self.path = Path(path)
         self.scene, self.z, self.t = scene, z, t
@@ -156,8 +166,16 @@ class CziSource(SlideSource):
         for i, e in sel:
             s = e.shape[ix] / max(1, e.stored_shape[ix])
             s = round(s, 2) if abs(s - round(s)) > 0.02 else float(round(s))
-            b = _Block(i, e.start[ix] - x0, e.start[iy] - y0, e.shape[ix], e.shape[iy],
-                       e.stored_shape[ix], e.stored_shape[iy], getattr(e, 'mosaic_index', 0) or 0)
+            b = _Block(
+                i,
+                e.start[ix] - x0,
+                e.start[iy] - y0,
+                e.shape[ix],
+                e.shape[iy],
+                e.stored_shape[ix],
+                e.stored_shape[iy],
+                getattr(e, 'mosaic_index', 0) or 0,
+            )
             groups.setdefault((s, pos(e, 'C')), []).append(b)
         scales = sorted({s for s, _ in groups})
         self._scales = scales
@@ -178,16 +196,24 @@ class CziSource(SlideSource):
             dtype = 'uint8' if pname == 'GRAY8' else 'uint16'
             names, colors = czi_meta.channel_meta(meta, len(c_vals))
             channels = [Channel(names[k], colors[k]) for k in range(len(c_vals))]
-        self.info = SlideInfo(width=W, height=H, levels=levels, mode=mode, dtype=dtype, channels=channels,
-                              mpp=czi_meta.mpp(meta), name=self.path.name, tile_size=tile_size,
-                              background='#ffffff' if self._rgb else '#000000')
+        self.info = SlideInfo(
+            width=W,
+            height=H,
+            levels=levels,
+            mode=mode,
+            dtype=dtype,
+            channels=channels,
+            mpp=czi_meta.mpp(meta),
+            name=self.path.name,
+            tile_size=tile_size,
+            background='#ffffff' if self._rgb else '#000000',
+        )
         self._meta = meta
 
     # ---------------------------------------------------------------- per-thread file handles
     def _file(self):
         f = getattr(self._local, 'f', None)
         if f is None:
-            import czifile
             f = czifile.CziFile(str(self.path))
             with self._flock:
                 self._files.append(f)
@@ -214,6 +240,7 @@ class CziSource(SlideSource):
             elif a.dtype not in (np.uint8, np.uint16):
                 a = np.clip(a, 0, 65535).astype(np.uint16)
             return np.ascontiguousarray(a)
+
         return self._cache.get(b.index, make)
 
     # ---------------------------------------------------------------- reading
@@ -239,7 +266,7 @@ class CziSource(SlideSource):
             ww = min(a.shape[1] - sx0, w - dx0)
             hh = min(a.shape[0] - sy0, h - dy0)
             if ww > 0 and hh > 0:
-                out[dy0:dy0 + hh, dx0:dx0 + ww] = a[sy0:sy0 + hh, sx0:sx0 + ww]
+                out[dy0 : dy0 + hh, dx0 : dx0 + ww] = a[sy0 : sy0 + hh, sx0 : sx0 + ww]
         return out
 
     def read_tile(self, level, tx, ty, channel=None):
@@ -247,7 +274,6 @@ class CziSource(SlideSource):
         return self.read_region(level, x, y, w, h, channel)
 
     def annotation_layers(self):
-        from ..annotations import discover_sidecars, from_czi_metadata
         layers = discover_sidecars(self.path)
         emb = from_czi_metadata(self._meta, offset=(-self._origin[0], -self._origin[1]))
         if emb is not None:
@@ -260,21 +286,25 @@ class CziSource(SlideSource):
             for f in self._files:
                 try:
                     f.close()
-                except Exception:
+                except Exception:  # noqa: BLE001  (best-effort close)
                     pass
             self._files.clear()
 
 
 _PIXEL = {  # pixel type → (numpy dtype, samples)
-    'GRAY8': (np.uint8, 1), 'GRAY16': (np.uint16, 1), 'GRAY32FLOAT': (np.float32, 1),
-    'BGR24': (np.uint8, 3), 'BGR48': (np.uint16, 3), 'BGRA32': (np.uint8, 4), 'BGR96FLOAT': (np.float32, 3),
+    'GRAY8': (np.uint8, 1),
+    'GRAY16': (np.uint16, 1),
+    'GRAY32FLOAT': (np.float32, 1),
+    'BGR24': (np.uint8, 3),
+    'BGR48': (np.uint16, 3),
+    'BGRA32': (np.uint8, 4),
+    'BGR96FLOAT': (np.float32, 3),
 }
 
 
 def _fast_decode(entry, seg, b: _Block) -> np.ndarray | None:
     """Decode a subblock straight from its raw bytes with imagecodecs (≈10–20× faster than the generic path)."""
     try:
-        import imagecodecs
         pt = entry.pixel_type
         dt, spp = _PIXEL.get((pt.name if hasattr(pt, 'name') else str(pt)).upper(), (None, None))
         if dt is None:
@@ -297,5 +327,5 @@ def _fast_decode(entry, seg, b: _Block) -> np.ndarray | None:
         else:
             return None
         return a.reshape(b.sh, b.sw, spp)
-    except Exception:
+    except Exception:  # noqa: BLE001  (fast path is optional: caller decodes normally)
         return None

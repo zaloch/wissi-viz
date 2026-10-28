@@ -1,4 +1,5 @@
 """Region and object measurements, checked against geometry and images with known answers."""
+
 from __future__ import annotations
 
 import math
@@ -11,20 +12,21 @@ pytest.importorskip('shapely')
 pytest.importorskip('skimage')
 pytest.importorskip('pandas')
 
-from wissi_viz import AnnotationLayer, open_slide  # noqa: E402
-from wissi_viz.metrics import object_metrics, region_metrics  # noqa: E402
-from wissi_viz.objects import ObjectTable  # noqa: E402
+from wissi_viz import AnnotationLayer, open_slide
+from wissi_viz.metrics import object_metrics, region_metrics
+from wissi_viz.objects import ObjectTable
 
 
 @pytest.fixture(scope='module')
 def slide(tmp_path_factory):
     import tifffile
+
     d = tmp_path_factory.mktemp('m')
-    img = np.full((2000, 2000, 3), 240, np.uint8)            # white glass
-    img[200:1200, 200:1200] = (180, 90, 160)                 # pink-purple tissue square
+    img = np.full((2000, 2000, 3), 240, np.uint8)  # white glass
+    img[200:1200, 200:1200] = (180, 90, 160)  # pink-purple tissue square
     yy, xx = np.mgrid[0:2000, 0:2000]
     nuclei = ((xx - 600) % 40 - 20) ** 2 + ((yy - 600) % 40 - 20) ** 2 < 36
-    img[nuclei & (xx >= 200) & (xx < 1200) & (yy >= 200) & (yy < 1200)] = (70, 50, 140)   # dark purple dots
+    img[nuclei & (xx >= 200) & (xx < 1200) & (yy >= 200) & (yy < 1200)] = (70, 50, 140)  # dark purple dots
     desc = 'Aperio Image Library v12 \r\n2000x2000 [0,0 2000x2000] (256x256) JPEG/RGB Q=95|AppMag = 20|MPP = 0.5'
     tifffile.imwrite(d / 's.svs', img, tile=(256, 256), photometric='rgb', description=desc, metadata=None)
     return open_slide(d / 's.svs')
@@ -51,7 +53,7 @@ def test_shape_metrics_of_a_square_and_a_circle(slide):
     assert sq['shape_aspect_ratio'] == pytest.approx(1) and sq['shape_eccentricity'] == pytest.approx(0, abs=1e-6)
     assert sq['shape_max_feret_um'] == pytest.approx(500 * math.sqrt(2))
     assert ci['shape_circularity'] == pytest.approx(1, abs=1e-3)
-    assert ci['shape_area_um2'] == pytest.approx(math.pi * 100 ** 2, rel=1e-3)
+    assert ci['shape_area_um2'] == pytest.approx(math.pi * 100**2, rel=1e-3)
     assert ci['shape_major_axis_um'] == pytest.approx(200, rel=0.01)
 
 
@@ -61,16 +63,16 @@ def test_intensity_and_texture(slide):
     L.add_rect(1300, 1300, 600, 600, cls='Glass')
     t = region_metrics(L, source=slide)
     tis, gl = t.iloc[0], t.iloc[1]
-    assert tis['analysis_mpp'] == pytest.approx(0.5)            # small enough to measure at full resolution
+    assert tis['analysis_mpp'] == pytest.approx(0.5)  # small enough to measure at full resolution
     assert tis['int_tissue_frac'] > 0.99 and gl['int_tissue_frac'] < 0.01
     assert tis['int_hematoxylin_od_mean'] > gl['int_hematoxylin_od_mean'] + 0.1
-    assert 0.05 < tis['int_hematoxylin_od_pos_frac'] < 0.2      # the dark nuclei: ~7 % of the area
+    assert 0.05 < tis['int_hematoxylin_od_pos_frac'] < 0.2  # the dark nuclei: ~7 % of the area
     assert tis['tex_contrast'] > gl.get('tex_contrast', 0) and 0 <= tis['tex_homogeneity'] <= 1
     assert tis['int_R_mean'] < 190 and gl['int_R_mean'] == pytest.approx(240)
 
 
 def test_object_metrics_inside_regions(slide):
-    objs = _grid_objects()                                       # regular grid: 10 µm apart, alternating classes
+    objs = _grid_objects()  # regular grid: 10 µm apart, alternating classes
     L = AnnotationLayer(name='rois')
     L.add_rect(200, 200, 1000, 1000, cls='All')
     L.add_rect(200, 200, 500, 500, cls='Quarter')
@@ -82,8 +84,8 @@ def test_object_metrics_inside_regions(slide):
     assert a['obj_shannon'] == pytest.approx(math.log(2)) and a['obj_evenness'] == pytest.approx(1)
     assert a['obj_nn_mean_um'] == pytest.approx(10)
     assert a['obj_clark_evans'] == pytest.approx(2.0, rel=0.01)  # regular pattern: R = 2
-    assert a['obj_morisita'] < 1                                 # dispersed
-    assert a['obj_ripley_L_minus_r_25um'] < 5                    # not clustered
+    assert a['obj_morisita'] < 1  # dispersed
+    assert a['obj_ripley_L_minus_r_25um'] < 5  # not clustered
     assert a['obj_dist_mean_um_Tumor_to_Immune'] == pytest.approx(10)
     assert a['obj_contact_frac_Tumor_with_Immune'] == pytest.approx(1)
     assert a['obj_mean_marker'] == pytest.approx(0.5, abs=0.01)
@@ -104,7 +106,7 @@ def test_clustered_points_score_as_clustered():
 
 def test_object_metrics_shape_and_intensity(slide):
     L = AnnotationLayer(name='nuclei')
-    for cx, cy in ((620, 620), (660, 620), (1500, 1500)):        # two on dark nuclei, one on glass
+    for cx, cy in ((620, 620), (660, 620), (1500, 1500)):  # two on dark nuclei, one on glass
         L.add_ellipse(cx, cy, 6, 6, n=64, cls='Nucleus')
     L.add_ellipse(900, 900, 20, 10, n=64, cls='Elongated')
     t = object_metrics(L, source=slide)
@@ -119,6 +121,7 @@ def test_object_metrics_shape_and_intensity(slide):
 def test_regions_from_a_cell_layer_and_geoparquet(tmp_path):
     pytest.importorskip('pyarrow')
     from wissi_viz import annio
+
     objs = _grid_objects()
     cells = objs.to_layer(name='cells')
     L = AnnotationLayer(name='rois')
@@ -133,13 +136,14 @@ def test_metrics_endpoints(slide, tmp_path):
 
     from wissi_viz import SlideRegistry, TileService
     from wissi_viz.server import create_app
+
     reg = SlideRegistry(TileService())
     sid = reg.add(slide.path if hasattr(slide, 'path') else slide.info.name)
     rois = AnnotationLayer(name='rois')
     rois.add_rect(200, 200, 1000, 1000, cls='Tissue')
     reg.add_annotations(sid, rois)
     o = _grid_objects()
-    o.bbox = np.stack([o.x - 6, o.y - 6, o.x + 6, o.y + 6], 1)      # nuclei as 12-px ellipses
+    o.bbox = np.stack([o.x - 6, o.y - 6, o.x + 6, o.y + 6], 1)  # nuclei as 12-px ellipses
     reg.add_annotations(sid, o.to_layer(name='cells'))
     c = TestClient(create_app(reg))
     j = c.get(f'/wissi-viz/slides/{sid}/annotations/metrics', params={'layer': 'rois', 'objects': 'cells'}).json()

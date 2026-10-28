@@ -1,5 +1,6 @@
 """Desktop app (wissi_viz.desktop): session, local server, page, native-window wiring, shortcuts and icons.
 The native window itself needs a GUI; its wiring is checked against a stand-in pywebview module."""
+
 from __future__ import annotations
 
 import json
@@ -20,10 +21,12 @@ pytest.importorskip('fastapi')
 @pytest.fixture()
 def dirs(tmp_path, monkeypatch):
     """Keep caches, config and shortcuts inside tmp_path on every OS."""
+
     def user_dir(kind, app='wissi-viz'):
         d = tmp_path / 'user' / kind
         d.mkdir(parents=True, exist_ok=True)
         return d
+
     monkeypatch.setattr(D, 'user_dir', user_dir)
     return tmp_path
 
@@ -39,19 +42,42 @@ def _svs(path: Path, w=1200, h=900) -> Path:
 
 @pytest.fixture()
 def files(dirs):
-    d = dirs / 'data with spaces'           # paths with spaces work everywhere
+    d = dirs / 'data with spaces'  # paths with spaces work everywhere
     d.mkdir()
     a, b = _svs(d / 'a.svs'), _svs(d / 'b.svs', 800, 600)
     rng = np.random.default_rng(1)
     n = 500
-    (d / 'cells.csv').write_text('x,y,class,area\n' + '\n'.join(
-        f'{x:.1f},{y:.1f},{c},{s:.1f}' for x, y, c, s in zip(rng.uniform(0, 1200, n), rng.uniform(0, 900, n),
-                                                            rng.choice(['Tumor', 'Immune'], n), rng.uniform(20, 80, n))),
-        encoding='utf-8')
-    (d / 'rois.geojson').write_text(json.dumps({'type': 'FeatureCollection', 'features': [
-        {'type': 'Feature', 'properties': {'classification': {'name': 'Tumor'}},
-         'geometry': {'type': 'Polygon', 'coordinates': [[[100, 100], [400, 100], [400, 300], [100, 100]]]}}]}),
-        encoding='utf-8')
+    (d / 'cells.csv').write_text(
+        'x,y,class,area\n'
+        + '\n'.join(
+            f'{x:.1f},{y:.1f},{c},{s:.1f}'
+            for x, y, c, s in zip(
+                rng.uniform(0, 1200, n),
+                rng.uniform(0, 900, n),
+                rng.choice(['Tumor', 'Immune'], n),
+                rng.uniform(20, 80, n),
+            )
+        ),
+        encoding='utf-8',
+    )
+    (d / 'rois.geojson').write_text(
+        json.dumps(
+            {
+                'type': 'FeatureCollection',
+                'features': [
+                    {
+                        'type': 'Feature',
+                        'properties': {'classification': {'name': 'Tumor'}},
+                        'geometry': {
+                            'type': 'Polygon',
+                            'coordinates': [[[100, 100], [400, 100], [400, 300], [100, 100]]],
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding='utf-8',
+    )
     (d / 'broken.svs').write_bytes(b'not a slide')
     return {'dir': d, 'a': a, 'b': b, 'csv': d / 'cells.csv', 'geojson': d / 'rois.geojson', 'bad': d / 'broken.svs'}
 
@@ -65,7 +91,7 @@ def test_session_opens_slides_layers_and_reports_errors(files):
     assert len(r['errors']) == 2 and any('broken.svs' in e for e in r['errors'])
     assert set(s.registry.layers(sid)) >= {'cells', 'rois'}
     assert len(s.registry.layer(sid, 'cells')) == 500
-    assert s.registry.ids() == [sid]                     # the broken file left nothing behind
+    assert s.registry.ids() == [sid]  # the broken file left nothing behind
     # cell tables are compiled once into the cache
     assert any((s.cache_dir / 'objects').iterdir())
     # a folder opens every slide in it; layers go to the slide named, else the first one opened
@@ -87,6 +113,7 @@ def test_layer_before_slide_is_an_error(files):
 
 def test_http_endpoints_need_token_and_loopback_host(files):
     from starlette.testclient import TestClient
+
     s = D.Session()
     c = TestClient(s.app())
     page = c.get('/app').text
@@ -177,8 +204,9 @@ def test_native_window_wiring(files, monkeypatch):
         def __init__(self, title, fn):
             self.title, self.fn = title, fn
 
-    menu_mod = types.SimpleNamespace(Menu=lambda title, items: (title, items), MenuAction=MenuAction,
-                                     MenuSeparator=lambda: None)
+    menu_mod = types.SimpleNamespace(
+        Menu=lambda title, items: (title, items), MenuAction=MenuAction, MenuSeparator=lambda: None
+    )
     fake = types.SimpleNamespace(create_window=create_window, start=start, menu=menu_mod)
     monkeypatch.setitem(sys.modules, 'webview', fake)
     monkeypatch.setitem(sys.modules, 'webview.menu', menu_mod)
@@ -189,13 +217,18 @@ def test_native_window_wiring(files, monkeypatch):
     st = seen['start']
     assert Path(st['icon']).name == 'icon.png' and Path(st['icon']).exists()
     assert st['private_mode'] is False and st['storage_path'].endswith('webview')
-    (title, items), = st['menu']
+    ((title, items),) = st['menu']
     assert title == 'File' and [i.title for i in items if i] == [
-        'Open slides…', 'Open folder…', 'Add cells / annotations…', 'Install app shortcut']
+        'Open slides…',
+        'Open folder…',
+        'Add cells / annotations…',
+        'Install app shortcut',
+    ]
 
 
 def test_icons_are_valid():
     from PIL import Image
+
     png = Image.open(D.icon_path('png'))
     assert png.size == (512, 512) and png.mode == 'RGBA'
     ico = Image.open(D.icon_path('ico'))
@@ -220,14 +253,15 @@ def test_linux_shortcut(dirs, monkeypatch):
 
 def test_macos_app_bundle(dirs, monkeypatch):
     import plistlib
+
     app = dirs / 'Applications' / 'wissi-viz.app'
     monkeypatch.setattr(D, 'shortcut_paths', lambda: [app])
-    (p,) = D._install_macos(["/Users/me/.local/bin/wissi-viz-app"])
+    (p,) = D._install_macos(['/Users/me/.local/bin/wissi-viz-app'])
     info = plistlib.loads((p / 'Contents/Info.plist').read_bytes())
     assert info['CFBundleIconFile'] == 'wissi-viz' and info['CFBundleExecutable'] == 'wissi-viz'
     assert (p / 'Contents/Resources/wissi-viz.icns').stat().st_size > 10_000
     exe = (p / 'Contents/MacOS/wissi-viz').read_text(encoding='utf-8')
-    assert exe.startswith('#!/bin/sh') and "exec '/Users/me/.local/bin/wissi-viz-app' \"$@\"" in exe
+    assert exe.startswith('#!/bin/sh') and 'exec \'/Users/me/.local/bin/wissi-viz-app\' "$@"' in exe
 
 
 def test_windows_shortcut_command(dirs, monkeypatch):
@@ -237,8 +271,11 @@ def test_windows_shortcut_command(dirs, monkeypatch):
     def run(cmd, env=None, **kw):
         runs.append((cmd, env))
         return types.SimpleNamespace(returncode=0, stdout='', stderr='')
+
     monkeypatch.setattr(D.subprocess, 'run', run)
-    monkeypatch.setattr(D, 'shortcut_paths', lambda: [dirs / 'Start' / 'wissi-viz.lnk', dirs / 'Desk' / 'wissi-viz.lnk'])
+    monkeypatch.setattr(
+        D, 'shortcut_paths', lambda: [dirs / 'Start' / 'wissi-viz.lnk', dirs / 'Desk' / 'wissi-viz.lnk']
+    )
     out = D._install_windows([r'C:\Users\me\venv\Scripts\wissi-viz-app.exe'])
     assert len(out) == len(runs) == 2
     cmd, env = runs[0]
@@ -248,6 +285,7 @@ def test_windows_shortcut_command(dirs, monkeypatch):
 
 def test_cli_dispatches_desktop(monkeypatch):
     from wissi_viz import cli
+
     got = {}
     monkeypatch.setattr(D, 'main', lambda argv: got.setdefault('argv', argv))
     cli.main(['desktop', '--browser', 'x.svs'])
@@ -258,6 +296,7 @@ def test_page_in_browser_mode(files):
     """The app page with no native bridge: empty state, paste-a-path, slide list, viewer draws."""
     pytest.importorskip('playwright')
     from playwright.sync_api import sync_playwright
+
     s = D.Session()
     srv = D._Server(s.app())
     url = srv.start()
@@ -265,7 +304,7 @@ def test_page_in_browser_mode(files):
         with sync_playwright() as pw:
             try:
                 b = pw.chromium.launch(args=['--enable-unsafe-swiftshader'])
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 pytest.skip(f'no Chromium: {e}')
             pg = b.new_page(viewport={'width': 1200, 'height': 800})
             errors = []
@@ -273,7 +312,7 @@ def test_page_in_browser_mode(files):
             pg.goto(url + '/app')
             pg.wait_for_selector('#empty .card h1')
             assert pg.is_visible('#empty')
-            pg.click('#empty button[data-act=open]')       # no native dialogs here → the path box
+            pg.click('#empty button[data-act=open]')  # no native dialogs here → the path box
             pg.wait_for_selector('#pathbox textarea', state='visible')
             pg.fill('#paths', f'"{files["a"]}"\n{files["b"]}\n{files["csv"]}')
             pg.click('#b-paths')
@@ -297,6 +336,7 @@ def test_serve_page_lists_slides_and_opens_32_panes(files):
 
     from wissi_viz import SlideRegistry, TileService
     from wissi_viz.server import create_app
+
     reg = SlideRegistry(TileService())
     for p in (files['a'], files['b']):
         reg.add(p)
@@ -306,7 +346,7 @@ def test_serve_page_lists_slides_and_opens_32_panes(files):
         with sync_playwright() as pw:
             try:
                 b = pw.chromium.launch(args=['--enable-unsafe-swiftshader'])
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 pytest.skip(f'no Chromium: {e}')
             pg = b.new_page(viewport={'width': 1400, 'height': 900})
             errors = []
@@ -314,12 +354,12 @@ def test_serve_page_lists_slides_and_opens_32_panes(files):
             pg.goto(url + '/')
             pg.wait_for_function('() => document.querySelectorAll("#slides li").length === 2')
             assert pg.is_hidden('#b-open') and pg.is_hidden('#b-layer')
-            assert [o for o in pg.eval_on_selector_all('#n option', 'os => os.map(o => +o.value)')][-1] == 32
+            assert list(pg.eval_on_selector_all('#n option', 'os => os.map(o => +o.value)'))[-1] == 32
             pg.select_option('#n', '32')
             pg.wait_for_function('() => document.getElementById("grid").panes.length === 32')
             pg.wait_for_function('() => document.getElementById("grid").panes.every(p => p.slide && p.slide.info)')
             rects = pg.evaluate('() => document.getElementById("grid").panes.map(p => [p.rect.w, p.rect.h])')
-            assert all(w > 50 and h > 50 for w, h in rects)            # a real grid, every pane visible
+            assert all(w > 50 and h > 50 for w, h in rects)  # a real grid, every pane visible
             # clicking a slide puts it in the active pane
             pg.click('#slides li:nth-child(2)')
             pg.wait_for_function('() => document.querySelector("#slides li:nth-child(2) .pane").textContent.length > 0')

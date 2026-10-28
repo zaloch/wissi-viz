@@ -14,6 +14,7 @@ Interface (what wissi_viz/sam.py feeds it):
            point_labels float32 (1, N): 1 positive, 0 negative, 2 / 3 box corners
            → masks (1, 3, 256, 256) logits, iou_predictions (1, 3)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -23,13 +24,18 @@ from pathlib import Path
 
 import numpy as np
 
-MODELS = {'tiny': 'facebook/sam2.1-hiera-tiny', 'small': 'facebook/sam2.1-hiera-small',
-          'base-plus': 'facebook/sam2.1-hiera-base-plus', 'large': 'facebook/sam2.1-hiera-large'}
+MODELS = {
+    'tiny': 'facebook/sam2.1-hiera-tiny',
+    'small': 'facebook/sam2.1-hiera-small',
+    'base-plus': 'facebook/sam2.1-hiera-base-plus',
+    'large': 'facebook/sam2.1-hiera-large',
+}
 
 
 def build(model: str):
     import torch
     from sam2.sam2_image_predictor import SAM2ImagePredictor
+
     pred = SAM2ImagePredictor.from_pretrained(MODELS[model], device='cpu')
     m = pred.model.eval()
 
@@ -55,9 +61,14 @@ def build(model: str):
         def forward(self, image_embed, high_res_feats_0, high_res_feats_1, point_coords, point_labels):
             sparse, dense = self.m.sam_prompt_encoder(points=(point_coords, point_labels.int()), boxes=None, masks=None)
             masks, iou, _, _ = self.m.sam_mask_decoder(
-                image_embeddings=image_embed, image_pe=self.m.sam_prompt_encoder.get_dense_pe(),
-                sparse_prompt_embeddings=sparse, dense_prompt_embeddings=dense, multimask_output=True,
-                repeat_image=False, high_res_features=[high_res_feats_0, high_res_feats_1])
+                image_embeddings=image_embed,
+                image_pe=self.m.sam_prompt_encoder.get_dense_pe(),
+                sparse_prompt_embeddings=sparse,
+                dense_prompt_embeddings=dense,
+                multimask_output=True,
+                repeat_image=False,
+                high_res_features=[high_res_feats_0, high_res_feats_1],
+            )
             return masks, iou
 
     return pred, Encoder(m).eval(), Decoder(m).eval()
@@ -65,21 +76,34 @@ def build(model: str):
 
 def export(model: str, out: Path) -> dict:
     import torch
+
     pred, enc, dec = build(model)
     out.mkdir(parents=True, exist_ok=True)
     fe, fd = out / f'sam2.1-{model}-encoder.onnx', out / f'sam2.1-{model}-decoder.onnx'
     x = torch.randn(1, 3, 1024, 1024)
     with torch.no_grad():
         e, h0, h1 = enc(x)
-        torch.onnx.export(enc, (x,), fe, input_names=['image'],
-                          output_names=['image_embed', 'high_res_feats_0', 'high_res_feats_1'], opset_version=17,
-                          dynamo=False)
+        torch.onnx.export(
+            enc,
+            (x,),
+            fe,
+            input_names=['image'],
+            output_names=['image_embed', 'high_res_feats_0', 'high_res_feats_1'],
+            opset_version=17,
+            dynamo=False,
+        )
         pc = torch.tensor([[[500.0, 400.0], [600.0, 420.0]]])
         pl = torch.tensor([[1.0, 0.0]])
-        torch.onnx.export(dec, (e, h0, h1, pc, pl), fd,
-                          input_names=['image_embed', 'high_res_feats_0', 'high_res_feats_1', 'point_coords', 'point_labels'],
-                          output_names=['masks', 'iou_predictions'], opset_version=17,
-                          dynamic_axes={'point_coords': {1: 'n'}, 'point_labels': {1: 'n'}}, dynamo=False)
+        torch.onnx.export(
+            dec,
+            (e, h0, h1, pc, pl),
+            fd,
+            input_names=['image_embed', 'high_res_feats_0', 'high_res_feats_1', 'point_coords', 'point_labels'],
+            output_names=['masks', 'iou_predictions'],
+            opset_version=17,
+            dynamic_axes={'point_coords': {1: 'n'}, 'point_labels': {1: 'n'}},
+            dynamo=False,
+        )
     return {'encoder': fe, 'decoder': fd, 'pred': pred}
 
 
@@ -87,7 +111,9 @@ def check(files: dict, model: str) -> dict:
     """Same image and prompts through SAM2ImagePredictor (PyTorch) and through wissi_viz.sam's ONNX backend: the
     masks must agree (IoU ≥ 0.95)."""
     import os
+
     import torch
+
     rng = np.random.default_rng(0)
     img = np.full((768, 1000, 3), (235, 170, 205), np.uint8)
     yy, xx = np.mgrid[0:768, 0:1000]
@@ -103,21 +129,29 @@ def check(files: dict, model: str) -> dict:
     for k in ('encoder', 'decoder'):
         (d / f'{k}.onnx').write_bytes(files[k].read_bytes())
     from wissi_viz.sam import _Onnx
+
     ox = _Onnx(model, 'cpu')
     emb = ox.embed(img)
     res = {}
-    for name, pts, labels, box in (('point', [(650, 420)], [1], None), ('box', [], [], (250, 230, 370, 370)),
-                                   ('point+neg', [(300, 300), (650, 420)], [1, 0], None)):
+    for name, pts, labels, box in (
+        ('point', [(650, 420)], [1], None),
+        ('box', [], [], (250, 230, 370, 370)),
+        ('point+neg', [(300, 300), (650, 420)], [1, 0], None),
+    ):
         with torch.inference_mode():
-            m_t, s_t, _ = pred.predict(point_coords=np.asarray(pts, np.float32) if pts else None,
-                                       point_labels=np.asarray(labels) if pts else None,
-                                       box=np.asarray(box, np.float32) if box else None, multimask_output=True)
+            m_t, s_t, _ = pred.predict(
+                point_coords=np.asarray(pts, np.float32) if pts else None,
+                point_labels=np.asarray(labels) if pts else None,
+                box=np.asarray(box, np.float32) if box else None,
+                multimask_output=True,
+            )
         mt = m_t[int(np.argmax(s_t))] > 0
         mo, _ = ox.predict(emb, pts, labels, box)
         iou = float((mt & mo).sum() / max((mt | mo).sum(), 1))
         res[name] = round(iou, 4)
         assert iou >= 0.95, f'{name}: ONNX vs PyTorch IoU {iou:.3f}'
     import shutil
+
     shutil.rmtree(d)
     return res
 
@@ -142,7 +176,8 @@ def main() -> None:
     (out / 'NOTICE.txt').write_text(
         'SAM 2.1 model weights and code by Meta Platforms, Inc., licensed under the Apache License 2.0 '
         '(https://github.com/facebookresearch/sam2). These ONNX files are a format conversion of those weights, '
-        'distributed under the same licence.\n')
+        'distributed under the same licence.\n'
+    )
 
 
 if __name__ == '__main__':

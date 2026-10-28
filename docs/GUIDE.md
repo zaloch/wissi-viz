@@ -95,7 +95,8 @@ wissi-viz serve /data/slides --port 8010 --cache-dir /var/cache/wissi-viz
 from nicegui import ui
 from wissi_viz.nicegui import WissiViz, configure
 
-registry = configure(cache_dir='/cache/wissi-viz')        # once at startup
+registry = configure(cache_dir='/cache/wissi-viz')  # once at startup
+
 
 @ui.page('/viewer')
 def page():
@@ -123,27 +124,36 @@ wissi-viz never opens a connection itself. `wissi_viz.connectors` has two **stub
 ```python
 from wissi_viz.connectors import HaloLinkConnection, RemoteImageInfo, AnnotationPayload, TileNotFound
 
+
 class WissiHaloLink(HaloLinkConnection):
     def __init__(self, client):
-        super().__init__(); self.client = client
+        super().__init__()
+        self.client = client
 
-    def image_info(self, image_id):                       # required
+    def image_info(self, image_id):  # required
         m = self.client.get_image(image_id)
-        return RemoteImageInfo(width=m['width'], height=m['height'], tile_size=m['tile_size'],
-                               levels=[(l['width'], l['height']) for l in m['levels']],
-                               level_ids=[l['id'] for l in m['levels']],
-                               mpp=(m['mpp_x'], m['mpp_y']), name=m['name'], version=str(m['modified']))
+        return RemoteImageInfo(
+            width=m['width'],
+            height=m['height'],
+            tile_size=m['tile_size'],
+            levels=[(l['width'], l['height']) for l in m['levels']],
+            level_ids=[l['id'] for l in m['levels']],
+            mpp=(m['mpp_x'], m['mpp_y']),
+            name=m['name'],
+            version=str(m['modified']),
+        )
 
-    def tile(self, image_id, level, col, row, channel=None):   # required
+    def tile(self, image_id, level, col, row, channel=None):  # required
         return self.client.get_tile(image_id, level, col, row)  # bytes | ndarray | None
 
-    def annotations(self, image_id):                     # optional
+    def annotations(self, image_id):  # optional
         return [AnnotationPayload('HALO annotations', self.client.get_annotations_xml(image_id), format='halo_xml')]
 
-    def objects(self, image_id):                         # optional: cell tables, loaded in the background
+    def objects(self, image_id):  # optional: cell tables, loaded in the background
         return [AnnotationPayload('HALO objects', self.client.get_object_data(image_id), format='table')]
 
-sid = WissiHaloLink(client).register(registry, 'image-123')   # lazy → 'halo-image-123'
+
+sid = WissiHaloLink(client).register(registry, 'image-123')  # lazy → 'halo-image-123'
 grid.set_slide(0, sid)
 ```
 
@@ -210,12 +220,14 @@ How it stays light with 16 slides × 10⁵–10⁶ objects:
 
 ```python
 from wissi_viz import read_objects
-cells = read_objects('export.tsv', mpp=0.5)       # QuPath TSV/CSV, HALO object data, CellProfiler, Parquet,
-                                                  # QuPath GeoJSON, label mask (.tif), AnnData (.h5ad)
-cells.phenotype({'CD3': ('Cell: CD3 mean', 400), 'CD8': ('Cell: CD8 mean', 300), 'CK': ('Cell: PanCK mean', 600)},
-                rules={'CD8 T cell': {'CD3': True, 'CD8': True}, 'CD4 T cell': {'CD3': True, 'CD8': False},
-                       'Tumor': {'CK': True}})
-grid.show(slide_id, cells.to_layer(color_by='Nucleus: Ki67 mean', cmap='magma'))   # heat-coloured cells
+
+cells = read_objects('export.tsv', mpp=0.5)  # QuPath TSV/CSV, HALO object data, CellProfiler, Parquet,
+# QuPath GeoJSON, label mask (.tif), AnnData (.h5ad)
+cells.phenotype(
+    {'CD3': ('Cell: CD3 mean', 400), 'CD8': ('Cell: CD8 mean', 300), 'CK': ('Cell: PanCK mean', 600)},
+    rules={'CD8 T cell': {'CD3': True, 'CD8': True}, 'CD4 T cell': {'CD3': True, 'CD8': False}, 'Tumor': {'CK': True}},
+)
+grid.show(slide_id, cells.to_layer(color_by='Nucleus: Ki67 mean', cmap='magma'))  # heat-coloured cells
 ```
 
 - **Units:** coordinates in µm (detected from column names such as `Centroid X µm`) are converted to pixels with `mpp`. If the file is in µm and no `mpp` is given, it's an error, never a silent mix-up.
@@ -237,7 +249,10 @@ What one browser downloads now scales with **screen area, not with the object co
 
 ```python
 from wissi_viz import cached_object_layer
-layer = cached_object_layer('cells.parquet', '/cache/layers', mpp=0.25, name='cells')   # compiled once, then memory-mapped
+
+layer = cached_object_layer(
+    'cells.parquet', '/cache/layers', mpp=0.25, name='cells'
+)  # compiled once, then memory-mapped
 grid.show(slide_id, layer)
 ```
 
@@ -403,7 +418,7 @@ grid.setLod('default');                       // or 'legacy' (pre-0.4 behaviour)
 grid.setLod({ motionBias: 2, minify: 0.5, quadtree: true, background: true, destination: true, decoupled: true, prefetch: false });
 ```
 ```python
-WissiViz(slides, lod='default')               # or grid.set_lod('legacy') / grid.set_lod(motion_bias=1.5, prefetch=True)
+WissiViz(slides, lod='default')  # or grid.set_lod('legacy') / grid.set_lod(motion_bias=1.5, prefetch=True)
 ```
 ```html
 <wissi-viz lod='{"motionBias": 1.5}' ...></wissi-viz>

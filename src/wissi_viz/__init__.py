@@ -11,14 +11,32 @@ brightfield and fluorescence histology, for the browser and NiceGUI.
 * Front end: a dependency-free WebGL2 web component (``<wissi-viz>``) showing 1–32 slides in one GPU
   context, and a NiceGUI element (:class:`wissi_viz.nicegui.WissiViz`).
 """
+
+from ._version import __version__
 from .annotations import AnnotationLayer
+from .memory import decoded_cache, set_decoded_cache_mb
 from .objects import ObjectTable, cached_object_layer, read_objects
 from .registry import SlideRegistry
 from .server import create_app, create_router
 from .sources import CallbackSource, Channel, Level, SlideInfo, SlideSource, open_slide
-from .memory import decoded_cache, set_decoded_cache_mb
 from .tiles import TileService
 
-__version__ = '0.8.0'
-__all__ = ['decoded_cache', 'set_decoded_cache_mb', 'AnnotationLayer', 'ObjectTable', 'read_objects', 'cached_object_layer', 'SlideRegistry', 'create_app', 'create_router',
-           'CallbackSource', 'Channel', 'Level', 'SlideInfo', 'SlideSource', 'open_slide', 'TileService']
+__all__ = [
+    '__version__',
+    'decoded_cache',
+    'set_decoded_cache_mb',
+    'AnnotationLayer',
+    'ObjectTable',
+    'read_objects',
+    'cached_object_layer',
+    'SlideRegistry',
+    'create_app',
+    'create_router',
+    'CallbackSource',
+    'Channel',
+    'Level',
+    'SlideInfo',
+    'SlideSource',
+    'open_slide',
+    'TileService',
+]

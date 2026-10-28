@@ -3,26 +3,64 @@
 The browser can only ever address slides by id; file paths are never accepted
 from the client.
 """
+
 from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import math
 import os
 import re
 import shutil
 import threading
 import time
+import zlib
 from collections import OrderedDict
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
 
+import numpy as np
+
+from ._compat import safe_name
 from .annotations import AnnotationLayer
+from .memory import (
+    anon_nbytes,
+    decoded_cache,
+    overlay_cache,
+    rss_breakdown,
+    rss_bytes,
+    set_decoded_cache_mb,
+    set_overlay_cache_mb,
+    trim,
+)
 from .sources import SlideSource, open_slide
+from .sources.remote import RemoteSlideSource
 from .tiles import LAYER_DIR, PyramidSlide, TileService
 
-SLIDE_EXTS = ('.svs', '.tif', '.tiff', '.ome.tif', '.ome.tiff', '.btf', '.czi', '.ndpi', '.mrxs', '.scn',
-              '.vms', '.bif', '.qptiff', '.vsi', '.zvi', '.dcm', '.afi')
+log = logging.getLogger(__name__)
+
+SLIDE_EXTS = (
+    '.svs',
+    '.tif',
+    '.tiff',
+    '.ome.tif',
+    '.ome.tiff',
+    '.btf',
+    '.czi',
+    '.ndpi',
+    '.mrxs',
+    '.scn',
+    '.vms',
+    '.bif',
+    '.qptiff',
+    '.vsi',
+    '.zvi',
+    '.dcm',
+    '.afi',
+)
 _ID_OK = re.compile(r'^[A-Za-z0-9_.\-~]{1,200}$')
 
 
@@ -39,13 +77,13 @@ class SlideEntry:
     factory: Callable[[], SlideSource] | None = None
     source: SlideSource | None = None
     pyramid: PyramidSlide | None = None
-    layers: 'OrderedDict[str, AnnotationLayer]' = field(default_factory=OrderedDict)
+    layers: OrderedDict[str, AnnotationLayer] = field(default_factory=OrderedDict)
     file_layers_loaded: bool = False
     file_layers_future: object = None
     windows: list | None = None
     closeable: bool = True  # sources passed in by the user are never auto-closed
     open_lock: threading.Lock = field(default_factory=threading.Lock)
-    auto_layers: set = field(default_factory=set)   # loaded from the source / sidecars: reloadable, so evictable
+    auto_layers: set = field(default_factory=set)  # loaded from the source / sidecars: reloadable, so evictable
     last_used: float = 0.0
 
 
@@ -62,17 +100,25 @@ class SlideRegistry:
     first and reload on demand. Layers your app adds (``add_annotations`` / ``show``) are never dropped.
     """
 
-    def __init__(self, tiles: TileService | None = None, max_open: int = 64, warm: bool = True,
-                 tile_size: int = 512, max_level_step: float = 4.0, decoded_cache_mb: float | None = None,
-                 annotation_memory_mb: float | None = 1024, overlay_cache_mb: float | None = None,
-                 layer_cache_dir: str | os.PathLike | None = None, layer_disk_gb: float = 20,
-                 gzip_cache_mb: float = 256, layer_mapped_mb: float | None = 2048) -> None:
+    def __init__(
+        self,
+        tiles: TileService | None = None,
+        max_open: int = 64,
+        warm: bool = True,
+        tile_size: int = 512,
+        max_level_step: float = 4.0,
+        decoded_cache_mb: float | None = None,
+        annotation_memory_mb: float | None = 1024,
+        overlay_cache_mb: float | None = None,
+        layer_cache_dir: str | os.PathLike | None = None,
+        layer_disk_gb: float = 20,
+        gzip_cache_mb: float = 256,
+        layer_mapped_mb: float | None = 2048,
+    ) -> None:
         self.tiles = tiles or TileService()
         if decoded_cache_mb is not None:  # process-wide budget shared by every slide (see wissi_viz.memory)
-            from .memory import set_decoded_cache_mb
             set_decoded_cache_mb(decoded_cache_mb)
         if overlay_cache_mb is not None:
-            from .memory import set_overlay_cache_mb
             set_overlay_cache_mb(overlay_cache_mb)
         self.annotation_budget = int(annotation_memory_mb * 2**20) if annotation_memory_mb else None
         # memory-mapped layer files: their touched pages count in this process's RSS (and a container's memory
@@ -83,10 +129,10 @@ class SlideRegistry:
             layer_cache_dir = self.tiles.disk.root / LAYER_DIR
         self.layer_cache_dir = Path(layer_cache_dir) if layer_cache_dir else None
         self.layer_disk_bytes = int(layer_disk_gb * 2**30)
-        self.gzip_cache_mb = gzip_cache_mb      # the server's cache of gzipped overlay payloads
+        self.gzip_cache_mb = gzip_cache_mb  # the server's cache of gzipped overlay payloads
         self.layer_evictions = 0
         self.layer_disk_hits = 0
-        self._layer_bytes: dict[tuple[str, str], int] = {}   # (slide, layer) → anonymous bytes, measured at load
+        self._layer_bytes: dict[tuple[str, str], int] = {}  # (slide, layer) → anonymous bytes, measured at load
         self.max_level_step = max_level_step  # PyramidSlide: insert virtual levels where native ones are further apart
         self.max_open = max_open
         self.warm = warm
@@ -95,12 +141,15 @@ class SlideRegistry:
         self._open: OrderedDict[str, None] = OrderedDict()
         self._lock = threading.RLock()
         self._listeners: list[Callable[[str, str | None], None]] = []
-        from concurrent.futures import ThreadPoolExecutor
         self._ann_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix='wissi-viz-ann')
 
     # ------------------------------------------------------------- registration
-    def add(self, src: str | os.PathLike | SlideSource | Callable[[], SlideSource], slide_id: str | None = None,
-            name: str | None = None) -> str:
+    def add(
+        self,
+        src: str | os.PathLike | SlideSource | Callable[[], SlideSource],
+        slide_id: str | None = None,
+        name: str | None = None,
+    ) -> str:
         """Register a slide file path, a ready SlideSource, or a zero-arg factory (opened lazily)."""
         with self._lock:
             if isinstance(src, SlideSource):
@@ -157,7 +206,9 @@ class SlideRegistry:
         return sid in self._entries
 
     # ------------------------------------------------------------- annotations
-    def add_annotations(self, slide_id: str, layer: AnnotationLayer | str | os.PathLike, name: str | None = None) -> AnnotationLayer:
+    def add_annotations(
+        self, slide_id: str, layer: AnnotationLayer | str | os.PathLike, name: str | None = None
+    ) -> AnnotationLayer:
         """Attach a layer (or load one from a .geojson / .annotations / .xml file). Replaces a layer of the same name."""
         if not isinstance(layer, AnnotationLayer):
             layer = AnnotationLayer.load(layer)
@@ -174,7 +225,7 @@ class SlideRegistry:
         e.layers.pop(name, None)
         self._notify(slide_id, name)
 
-    def layers(self, slide_id: str) -> 'OrderedDict[str, AnnotationLayer]':
+    def layers(self, slide_id: str) -> OrderedDict[str, AnnotationLayer]:
         e = self._entry(slide_id)
         e.last_used = time.monotonic()
         self._load_file_layers(e)
@@ -201,7 +252,7 @@ class SlideRegistry:
             try:
                 fn(sid, layer)
             except Exception:
-                pass
+                log.exception('annotation listener failed')
 
     # ------------------------------------------------------------- access
     def _entry(self, sid: str) -> SlideEntry:
@@ -238,7 +289,7 @@ class SlideRegistry:
         if e.source is not None and e.closeable:
             try:
                 e.source.close()
-            except Exception:
+            except Exception:  # noqa: BLE001  (best-effort close)
                 pass
             e.source = None
         if e.pyramid is not None:  # decoded arrays are ours to drop, whoever owns the source
@@ -258,7 +309,7 @@ class SlideRegistry:
             return fut.done()
         try:
             fut.result()
-        except Exception:
+        except Exception:  # noqa: BLE001  (a failed warm-up still counts as done)
             pass
         return True
 
@@ -272,7 +323,6 @@ class SlideRegistry:
                 for L in layers:
                     L.compiled()  # bucket now, off the request path
                 layers = self._save_layers(e, src, layers)
-            from .memory import anon_nbytes
             for L in layers:
                 if L.name not in e.layers:
                     e.layers[L.name] = L
@@ -287,15 +337,15 @@ class SlideRegistry:
     def _layer_dir(self, e: SlideEntry, src) -> Path | None:
         if self.layer_cache_dir is None:
             return None
-        v = hashlib.blake2b(f'{getattr(src, "version", "0")}|{AnnotationLayer._SAVE_FORMAT}'.encode(), digest_size=6).hexdigest()
-        from ._compat import safe_name
-        return self.layer_cache_dir / safe_name(e.id, 40) / v     # short + valid on Windows (MAX_PATH, CON, …)
+        v = hashlib.blake2b(
+            f'{getattr(src, "version", "0")}|{AnnotationLayer._SAVE_FORMAT}'.encode(), digest_size=6
+        ).hexdigest()
+        return self.layer_cache_dir / safe_name(e.id, 40) / v  # short + valid on Windows (MAX_PATH, CON, …)
 
     @staticmethod
     def _reusable(src) -> bool:
         """Saved layers are reused across loads only for remote slides: their version comes from the API and
         changes with the image. (Local sidecar files can change without the slide changing — those are re-read.)"""
-        from .sources.remote import RemoteSlideSource
         return isinstance(src, RemoteSlideSource)
 
     def _open_saved_layers(self, e: SlideEntry, src) -> list | None:
@@ -310,7 +360,9 @@ class SlideRegistry:
                     L._mapped_bytes = sum(f.stat().st_size for f in (d / it['dir']).iterdir())
                     out.append(L)
                 else:
-                    L = AnnotationLayer.parse(json.loads((d / it['file']).read_text(encoding='utf-8')), fmt='geojson', name=it['name'])
+                    L = AnnotationLayer.parse(
+                        json.loads((d / it['file']).read_text(encoding='utf-8')), fmt='geojson', name=it['name']
+                    )
                     for k, v in it.get('style', {}).items():
                         setattr(L, k, v)
                     L.classes.update(it.get('classes') or {})
@@ -332,7 +384,7 @@ class SlideRegistry:
             d.mkdir(parents=True, exist_ok=True)
             for i, L in enumerate(layers):
                 if L._block is not None and not len(L._kinds) and L.compiled().n >= 1000:
-                    sub = L.save(d / f'L{i}-{os.urandom(3).hex()}')   # fresh folder: old ones may still be mapped
+                    sub = L.save(d / f'L{i}-{os.urandom(3).hex()}')  # fresh folder: old ones may still be mapped
                     M = AnnotationLayer.open(sub, version=L.version)
                     M._mapped_bytes = sum(f.stat().st_size for f in sub.iterdir())
                     c = getattr(L, '_compiled', None)
@@ -343,12 +395,32 @@ class SlideRegistry:
                 else:
                     if self._reusable(src):
                         (d / f'L{i}.geojson').write_text(json.dumps(L.to_geojson()), encoding='utf-8')
-                        index.append({'name': L.name, 'kind': 'geojson', 'file': f'L{i}.geojson', 'classes': dict(L.classes),
-                                      'style': {k: getattr(L, k) for k in ('line_width', 'fill_opacity', 'point_size', 'visible',
-                                                                           'detail_min_px', 'z', 'overview', 'pyramid')}})
+                        index.append(
+                            {
+                                'name': L.name,
+                                'kind': 'geojson',
+                                'file': f'L{i}.geojson',
+                                'classes': dict(L.classes),
+                                'style': {
+                                    k: getattr(L, k)
+                                    for k in (
+                                        'line_width',
+                                        'fill_opacity',
+                                        'point_size',
+                                        'visible',
+                                        'detail_min_px',
+                                        'z',
+                                        'overview',
+                                        'pyramid',
+                                    )
+                                },
+                            }
+                        )
                     out.append(L)
             if self._reusable(src):
-                (d / 'index.json').write_text(json.dumps({'source_version': str(getattr(src, 'version', '')), 'layers': index}), encoding='utf-8')
+                (d / 'index.json').write_text(
+                    json.dumps({'source_version': str(getattr(src, 'version', '')), 'layers': index}), encoding='utf-8'
+                )
             # sweep earlier saves no index points to (on Windows a still-mapped one fails quietly; next save retries)
             live = {x.get('dir') for x in index}
             for old in d.glob('L*-*'):
@@ -357,7 +429,6 @@ class SlideRegistry:
         except Exception:  # noqa: BLE001  (disk full / read-only: keep the layers in RAM)
             return layers if len(out) < len(layers) else out
         threading.Thread(target=self._trim_layer_disk, daemon=True).start()
-        from .memory import trim
         trim()
         return out
 
@@ -367,14 +438,14 @@ class SlideRegistry:
             return
         dirs = []
         for sd in root.iterdir():
-            for vd in (sd.iterdir() if sd.is_dir() else ()):
+            for vd in sd.iterdir() if sd.is_dir() else ():
                 size = sum(f.stat().st_size for f in vd.rglob('*') if f.is_file())
                 dirs.append((vd.stat().st_mtime, size, vd))
         total = sum(sz for _, sz, _ in dirs)
         for _, sz, vd in sorted(dirs):
             if total <= self.layer_disk_bytes * 0.9:
                 break
-            shutil.rmtree(vd, ignore_errors=True)   # (open memory maps stay valid until released)
+            shutil.rmtree(vd, ignore_errors=True)  # (open memory maps stay valid until released)
             total -= sz
 
     def _enforce_layer_budget(self, keep: SlideEntry | None = None) -> int:
@@ -383,11 +454,19 @@ class SlideRegistry:
             return 0
         with self._lock:
             entries = list(self._entries.values())
-        use = [(e, sum(self._layer_bytes.get((e.id, n), 0) for n in e.auto_layers),
-                sum(self._layer_mapped.get((e.id, n), 0) for n in e.auto_layers)) for e in entries]
+        use = [
+            (
+                e,
+                sum(self._layer_bytes.get((e.id, n), 0) for n in e.auto_layers),
+                sum(self._layer_mapped.get((e.id, n), 0) for n in e.auto_layers),
+            )
+            for e in entries
+        ]
         anon, mapped = sum(u[1] for u in use), sum(u[2] for u in use)
-        over = lambda: ((self.annotation_budget and anon > self.annotation_budget)  # noqa: E731
-                        or (self.mapped_budget and mapped > self.mapped_budget))
+        over = lambda: (
+            (self.annotation_budget and anon > self.annotation_budget)
+            or (self.mapped_budget and mapped > self.mapped_budget)
+        )
         dropped = 0
         for e, a_, m_ in sorted(use, key=lambda t: t[0].last_used):
             if not over():
@@ -398,7 +477,6 @@ class SlideRegistry:
             anon -= a_
             mapped -= m_
         if dropped:
-            from .memory import trim
             trim()
         return dropped
 
@@ -421,7 +499,6 @@ class SlideRegistry:
 
     def memory_stats(self) -> dict:
         """Where this process's memory is: every cache, layers (auto vs app-owned, in RAM vs memory-mapped), RSS."""
-        from .memory import anon_nbytes, decoded_cache, overlay_cache, rss_breakdown, rss_bytes
         with self._lock:
             entries = list(self._entries.values())
         auto_b = app_b = n_auto = n_app = 0
@@ -433,39 +510,48 @@ class SlideRegistry:
                 else:
                     app_b += anon_nbytes(L)
                     n_app += 1
-        mb = lambda b: round(b / 2**20, 1)  # noqa: E731
+        mb = lambda b: round(b / 2**20, 1)
         t, dc, oc = self.tiles.memory.stats(), decoded_cache().stats(), overlay_cache().stats()
         rb = rss_breakdown()
-        return {'rss_mb': mb(rss_bytes()), 'rss_anon_mb': mb(rb['RssAnon']) if 'RssAnon' in rb else None,
-                'rss_file_mb': mb(rb['RssFile']) if 'RssFile' in rb else None,
-                'tile_cache_mb': mb(t['bytes']), 'tile_cache_max_mb': mb(t['max_bytes']),
-                'decoded_mb': mb(dc['bytes']), 'decoded_max_mb': mb(dc['max_bytes']),
-                'overlay_mb': mb(oc['bytes']), 'overlay_max_mb': mb(oc['max_bytes']),
-                'auto_layers': n_auto, 'auto_layers_ram_mb': mb(auto_b),
-                'auto_layers_mapped_mb': mb(sum(self._layer_mapped.values())),
-                'mapped_budget_mb': mb(self.mapped_budget) if self.mapped_budget else None,
-                'annotation_budget_mb': mb(self.annotation_budget) if self.annotation_budget else None,
-                'app_layers': n_app, 'app_layers_ram_mb': mb(app_b),
-                'layer_evictions': self.layer_evictions, 'layer_disk_hits': self.layer_disk_hits,
-                'layer_cache_dir': str(self.layer_cache_dir) if self.layer_cache_dir else None,
-                'open_slides': len(self._open), 'slides': len(entries)}
+        return {
+            'rss_mb': mb(rss_bytes()),
+            'rss_anon_mb': mb(rb['RssAnon']) if 'RssAnon' in rb else None,
+            'rss_file_mb': mb(rb['RssFile']) if 'RssFile' in rb else None,
+            'tile_cache_mb': mb(t['bytes']),
+            'tile_cache_max_mb': mb(t['max_bytes']),
+            'decoded_mb': mb(dc['bytes']),
+            'decoded_max_mb': mb(dc['max_bytes']),
+            'overlay_mb': mb(oc['bytes']),
+            'overlay_max_mb': mb(oc['max_bytes']),
+            'auto_layers': n_auto,
+            'auto_layers_ram_mb': mb(auto_b),
+            'auto_layers_mapped_mb': mb(sum(self._layer_mapped.values())),
+            'mapped_budget_mb': mb(self.mapped_budget) if self.mapped_budget else None,
+            'annotation_budget_mb': mb(self.annotation_budget) if self.annotation_budget else None,
+            'app_layers': n_app,
+            'app_layers_ram_mb': mb(app_b),
+            'layer_evictions': self.layer_evictions,
+            'layer_disk_hits': self.layer_disk_hits,
+            'layer_cache_dir': str(self.layer_cache_dir) if self.layer_cache_dir else None,
+            'open_slides': len(self._open),
+            'slides': len(entries),
+        }
 
     def _channel_windows(self, sid: str, e: SlideEntry, pyr: PyramidSlide) -> list[tuple[float, float]]:
         """Auto-contrast from the coarsest pyramid level, fetched *through the tile cache* so the
         same read also serves the first tiles the browser asks for (and is persisted on disk)."""
-        import math
-        import zlib
 
-        import numpy as np
         info = pyr.info
         L = len(info.levels) - 1
         lv, ts = info.levels[L], info.tile_size
         nx, ny = math.ceil(lv.width / ts), math.ceil(lv.height / ts)
         dt = '<u2' if info.dtype == 'uint16' else 'u1'
-        futs = {c: [self.tiles.get(sid, pyr, e.source.version, L, tx, ty, c) for ty in range(ny) for tx in range(nx)]
-                for c in range(len(info.channels))}
+        futs = {
+            c: [self.tiles.get(sid, pyr, e.source.version, L, tx, ty, c) for ty in range(ny) for tx in range(nx)]
+            for c in range(len(info.channels))
+        }
         out = []
-        for c, fs in futs.items():
+        for fs in futs.values():
             vals = np.concatenate([np.frombuffer(zlib.decompress(f.result()[0]), dt) for f in fs]).astype(np.float32)
             nz = vals[vals > 0]
             vals = nz if nz.size > 100 else vals
@@ -485,12 +571,12 @@ class SlideRegistry:
         for i, lv in enumerate(d['levels']):
             lv['virtual'] = bool(pyr.virtual[i])
             ni = pyr.native_index[i]
-            lv['remote_level'] = (src_ids[ni] if src_ids and ni >= 0 else (None if ni < 0 else str(ni)))
+            lv['remote_level'] = src_ids[ni] if src_ids and ni >= 0 else (None if ni < 0 else str(ni))
         if info.mode == 'channels':
             if e.windows is None:
                 try:
                     e.windows = self._channel_windows(sid, e, pyr)
-                except Exception:
+                except Exception:  # noqa: BLE001  (auto contrast is optional: use the full range)
                     e.windows = [(0, 65535 if info.dtype == 'uint16' else 255)] * len(info.channels)
             for c, w in zip(d['channels'], e.windows):
                 if c.get('window') is None:

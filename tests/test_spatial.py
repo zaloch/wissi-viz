@@ -1,4 +1,5 @@
 """Spatial analyses against brute force, closed-form geometry and planted patterns."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -7,15 +8,17 @@ import pytest
 pytest.importorskip('scipy')
 pytest.importorskip('shapely')
 
-from wissi_viz import spatial as sp  # noqa: E402
-from wissi_viz.objects import ObjectTable  # noqa: E402
+from wissi_viz import spatial as sp
+from wissi_viz.objects import ObjectTable
 
 MPP = 0.5
 
 
 def table(xy, classes=None, cols=None):
     xy = np.asarray(xy, float)
-    return ObjectTable(xy[:, 0], xy[:, 1], None if classes is None else np.asarray(classes, object), cols or {}, mpp=MPP)
+    return ObjectTable(
+        xy[:, 0], xy[:, 1], None if classes is None else np.asarray(classes, object), cols or {}, mpp=MPP
+    )
 
 
 @pytest.fixture
@@ -54,6 +57,7 @@ def test_proximity_brute_force(rng):
 
 def test_distance_to_roi_and_bands():
     from shapely.geometry import box
+
     roi = box(1000, 1000, 3000, 3000)  # 1000 µm square at mpp 0.5
     pts = [[2000, 2000], [1000, 2000], [900, 2000], [3200, 3000], [2900, 1500]]
     t = table(pts, ['A'] * 5)
@@ -71,6 +75,7 @@ def test_distance_to_roi_and_bands():
 
 def test_infiltration_profile_uniform_density(rng):
     from shapely.geometry import box
+
     n = 40000
     xy = rng.random((n, 2)) * 8000  # 4 mm × 4 mm at 0.5 µm/px → 2500 cells/mm²
     t = table(xy, ['A'] * n)
@@ -82,6 +87,7 @@ def test_infiltration_profile_uniform_density(rng):
 
 def test_roi_composition_part_of_whole(rng):
     from shapely.geometry import box
+
     xy = rng.random((4000, 2)) * 4000
     cl = np.where(xy[:, 0] < 2000, 'Tumor', 'Stroma')
     cl[rng.random(4000) < 0.2] = 'CD8'
@@ -106,9 +112,9 @@ def test_density_grid_and_hotspot(rng):
     hot = rng.normal([1500, 1500], 120, (1500, 2))
     t = table(np.vstack([xy, hot]), ['bg'] * n + ['hot'] * 1500)
     g = sp.density_grid(t, None, cell_um=100, hotspots=True)
-    assert g.counts.sum() == n + 1500                                   # every object in exactly one cell
+    assert g.counts.sum() == n + 1500  # every object in exactly one cell
     bg = sp.density_grid(table(xy, ['bg'] * n), None, cell_um=100)
-    assert np.median(bg.values) == pytest.approx(n / 9, rel=0.15)     # 3 mm × 3 mm
+    assert np.median(bg.values) == pytest.approx(n / 9, rel=0.15)  # 3 mm × 3 mm
     centre = np.argmin(np.hypot(g.centers[:, 0] - 1500, g.centers[:, 1] - 1500))
     assert g.gi_z[centre] > 5 and np.median(g.gi_z) < 1
     assert len(g.hotspot_layer()) > 0 and g.layer().colormap is not None
@@ -118,23 +124,24 @@ def test_density_grid_and_hotspot(rng):
 
 def test_ripley_csr_cluster_regular(rng):
     from shapely.geometry import box
+
     area = box(0, 0, 4000, 4000)
     csr = table(rng.random((1500, 2)) * 4000, ['A'] * 1500)
     r = sp.ripley(csr, 'A', area=area, radii_um=[25, 50, 100, 150], n_sim=19)
-    assert np.all(np.abs(r.H) < 12)                                     # L(r) ≈ r under CSR
+    assert np.all(np.abs(r.H) < 12)  # L(r) ≈ r under CSR
     parents = rng.random((30, 2)) * 4000
     cl = (parents[rng.integers(0, 30, 1500)] + rng.normal(0, 60, (1500, 2))).clip(0, 3999)
     rc = sp.ripley(table(cl, ['A'] * 1500), 'A', area=area, radii_um=[25, 50, 100], n_sim=19)
-    assert np.all(rc.L > rc.L_hi)                                       # clustered: above envelope
+    assert np.all(rc.L > rc.L_hi)  # clustered: above envelope
     g = np.stack(np.meshgrid(np.arange(50, 4000, 100), np.arange(50, 4000, 100)), -1).reshape(-1, 2)
     rr = sp.ripley(table(g, ['A'] * len(g)), 'A', area=area, radii_um=[20, 40], n_sim=19)
-    assert np.all(rr.L < rr.L_lo)                                       # lattice: below envelope (inhibition)
+    assert np.all(rr.L < rr.L_lo)  # lattice: below envelope (inhibition)
     assert r.plot()['series'] and rc.plot('g')['series']
 
 
 def test_neighborhood_enrichment_planted(rng):
     a = rng.random((800, 2)) * 6000
-    b = a[:400] + rng.normal(0, 10, (400, 2))   # B right next to A
+    b = a[:400] + rng.normal(0, 10, (400, 2))  # B right next to A
     c = rng.random((800, 2)) * 6000
     t = table(np.vstack([a, b, c]), ['A'] * 800 + ['B'] * 400 + ['C'] * 800)
     e = sp.neighborhood_enrichment(t, radius_um=15, n_perm=99)
@@ -149,7 +156,7 @@ def test_neighborhood_enrichment_planted(rng):
 def test_cellular_neighborhoods_recover_regions(rng):
     left = rng.random((3000, 2)) * [3000, 6000]
     right = rng.random((3000, 2)) * [3000, 6000] + [3000, 0]
-    cl = np.concatenate([rng.choice(['T', 'S'], 3000, p=[.9, .1]), rng.choice(['I', 'S'], 3000, p=[.8, .2])])
+    cl = np.concatenate([rng.choice(['T', 'S'], 3000, p=[0.9, 0.1]), rng.choice(['I', 'S'], 3000, p=[0.8, 0.2])])
     t = table(np.vstack([left, right]), cl)
     cn = sp.cellular_neighborhoods(t, k=15, n_neighborhoods=2)
     side = np.r_[np.zeros(3000), np.ones(3000)].astype(int)
@@ -162,13 +169,14 @@ def test_delaunay_graph_lattice():
     g = np.stack(np.meshgrid(np.arange(10) * 40.0, np.arange(10) * 40.0), -1).reshape(-1, 2)  # 20 µm spacing
     t = table(g, (['A', 'B'] * 50))
     gr = sp.delaunay_graph(t, max_edge_um=21)
-    assert len(gr.edges) == 2 * 10 * 9                                  # only axis-aligned neighbours
+    assert len(gr.edges) == 2 * 10 * 9  # only axis-aligned neighbours
     m, cls = gr.interactions()
     assert m.sum() - np.trace(m) // 1 >= 0 and gr.degree().max() == 4
 
 
 def test_morans_i(rng):
     from scipy import sparse
+
     xy = rng.random((1500, 2)) * 6000
     smooth = np.sin(xy[:, 0] / 800) + np.cos(xy[:, 1] / 900)
     t = table(xy, None, {'smooth': smooth, 'noise': rng.normal(size=1500)})
@@ -195,10 +203,15 @@ def test_h_score_and_positivity():
 
 
 def test_phenotyping_rules():
-    t = table(np.zeros((4, 2)), None, {'CD3': np.array([900, 900, 10, 10.]), 'CD8': np.array([900, 5, 900, 5.]),
-                                       'CK': np.array([0, 0, 0, 800.])})
-    lab = t.phenotype({'CD3': ('CD3', 100), 'CD8': ('CD8', 100), 'CK': ('CK', 100)},
-                      rules={'CD8 T': {'CD3': True, 'CD8': True}, 'CD4 T': {'CD3': True, 'CD8': False}, 'Tumor': {'CK': True}})
+    t = table(
+        np.zeros((4, 2)),
+        None,
+        {'CD3': np.array([900, 900, 10, 10.0]), 'CD8': np.array([900, 5, 900, 5.0]), 'CK': np.array([0, 0, 0, 800.0])},
+    )
+    lab = t.phenotype(
+        {'CD3': ('CD3', 100), 'CD8': ('CD8', 100), 'CK': ('CK', 100)},
+        rules={'CD8 T': {'CD3': True, 'CD8': True}, 'CD4 T': {'CD3': True, 'CD8': False}, 'Tumor': {'CK': True}},
+    )
     assert list(lab) == ['CD8 T', 'CD4 T', 'Other', 'Tumor']
     auto = t.phenotype({'CD3': ('CD3', 100), 'CD8': ('CD8', 100)}, inplace=False)
     assert list(auto) == ['CD3+CD8+', 'CD3+', 'CD8+', 'Negative']
@@ -210,7 +223,7 @@ def test_tissue_mask_and_stain_vectors(rng):
 
     H = W = 800
     yy, xx = np.mgrid[:H, :W]
-    tissue = ((xx - 300) ** 2 + (yy - 400) ** 2 < 220 ** 2) | ((xx - 620) ** 2 / 120 ** 2 + (yy - 300) ** 2 / 200 ** 2 < 1)
+    tissue = ((xx - 300) ** 2 + (yy - 400) ** 2 < 220**2) | ((xx - 620) ** 2 / 120**2 + (yy - 300) ** 2 / 200**2 < 1)
     h_vec, e_vec = np.array(sp.RUIFROK['hematoxylin']), np.array(sp.RUIFROK['eosin'])
     ch = rng.random((H, W)) * 0.8 * tissue
     ce = rng.random((H, W)) * 0.6 * tissue
@@ -223,13 +236,15 @@ def test_tissue_mask_and_stain_vectors(rng):
             self.info = SlideInfo(W, H, [Level(W, H, 1.0)], mpp=(2.0, 2.0))
 
         def read_region(self, level, x, y, w, h, channel=None):
-            return img[y:y + h, x:x + w]
+            return img[y : y + h, x : x + w]
+
     geom, layer = sp.tissue_mask(Mem(), min_area_um2=2000, smooth_um=6)
     import shapely
+
     truth = tissue.sum()
-    inter = shapely.contains_xy(geom, xx.ravel() + .5, yy.ravel() + .5).reshape(H, W)
+    inter = shapely.contains_xy(geom, xx.ravel() + 0.5, yy.ravel() + 0.5).reshape(H, W)
     iou = (inter & tissue).sum() / (inter | tissue).sum()
     assert iou > 0.97 and len(layer) == 1 and truth > 0  # the two blobs overlap → one region
     v = sp.estimate_stain_vectors(Mem())
-    ang = lambda a, b: np.degrees(np.arccos(abs(np.dot(a, b)) / np.linalg.norm(a) / np.linalg.norm(b)))  # noqa: E731
+    ang = lambda a, b: np.degrees(np.arccos(abs(np.dot(a, b)) / np.linalg.norm(a) / np.linalg.norm(b)))
     assert ang(v['hematoxylin'], h_vec) < 6 and ang(v['second'], e_vec) < 6

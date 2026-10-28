@@ -3,16 +3,21 @@
 Only the native tiles that intersect a requested region are decoded. Each worker
 thread gets its own file handle so tile decoding runs in parallel across cores.
 """
+
 from __future__ import annotations
 
 import os
 import re
 import threading
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import numpy as np
+import tifffile
+import zarr
 
-from .base import DEFAULT_CHANNEL_COLORS, Channel, Level, SlideInfo, SlideSource
+from ..annotations import discover_sidecars
+from .base import DEFAULT_CHANNEL_COLORS, Channel, Level, SlideInfo, SlideSource, _fit
 
 
 class TiffSource(SlideSource):
@@ -20,7 +25,6 @@ class TiffSource(SlideSource):
 
     def __init__(self, path: str | os.PathLike, tile_size: int = 512, series: int = 0) -> None:
         super().__init__()
-        import tifffile
 
         self.path = Path(path)
         self.series_index = series
@@ -63,18 +67,25 @@ class TiffSource(SlideSource):
             self._dtype = dt
             channels = []
             for c in range(n):
-                name, color = (ome_channels[c] if c < len(ome_channels) else (f'Channel {c + 1}', None))
+                name, color = ome_channels[c] if c < len(ome_channels) else (f'Channel {c + 1}', None)
                 channels.append(Channel(name, color or DEFAULT_CHANNEL_COLORS[c % len(DEFAULT_CHANNEL_COLORS)]))
-        self.info = SlideInfo(width=int(W), height=int(H), levels=levels, mode=mode, dtype=dtype,
-                              channels=channels, mpp=mpp, name=self.path.name, tile_size=tile_size,
-                              background='#ffffff' if mode == 'rgb' else '#000000')
+        self.info = SlideInfo(
+            width=int(W),
+            height=int(H),
+            levels=levels,
+            mode=mode,
+            dtype=dtype,
+            channels=channels,
+            mpp=mpp,
+            name=self.path.name,
+            tile_size=tile_size,
+            background='#ffffff' if mode == 'rgb' else '#000000',
+        )
 
     # one zarr view per thread → parallel decoding
     def _arrays(self):
         arrs = getattr(self._local, 'arrs', None)
         if arrs is None:
-            import tifffile
-            import zarr
             tf = tifffile.TiffFile(self.path)
             self._local.tf = tf
             with self._hlock:
@@ -111,11 +122,18 @@ class TiffSource(SlideSource):
                 pages = lv.pages
                 if flat < len(pages):
                     page = pages[flat]
-                    page = getattr(page, 'keyframe', page) if page is not None and not hasattr(page, 'dataoffsets') else page
-            if page is not None and not (page.is_tiled and (page.samplesperpixel == 1 or page.planarconfig == 1)
-                                         and page.compression in (1, 5, 7, 8, 32946, 50000, 50001, 34887, 34712, 33003, 33005)):
+                    page = (
+                        getattr(page, 'keyframe', page)
+                        if page is not None and not hasattr(page, 'dataoffsets')
+                        else page
+                    )
+            if page is not None and not (
+                page.is_tiled
+                and (page.samplesperpixel == 1 or page.planarconfig == 1)
+                and page.compression in (1, 5, 7, 8, 32946, 50000, 50001, 34887, 34712, 33003, 33005)
+            ):
                 page = None
-        except Exception:
+        except Exception:  # noqa: BLE001  (unusual page: use the general path)
             page = None
         cache[key] = page
         return page
@@ -144,7 +162,7 @@ class TiffSource(SlideSource):
                 sx0, sy0, dx0, dy0 = max(0, -ox), max(0, -oy), max(0, ox), max(0, oy)
                 ww, hh = min(tw - sx0, w - dx0, W - tx * tw - sx0), min(th - sy0, h - dy0, H - ty * th - sy0)
                 if ww > 0 and hh > 0:
-                    out[dy0:dy0 + hh, dx0:dx0 + ww] = a[sy0:sy0 + hh, sx0:sx0 + ww]
+                    out[dy0 : dy0 + hh, dx0 : dx0 + ww] = a[sy0 : sy0 + hh, sx0 : sx0 + ww]
         if out is None:
             out = np.zeros((h, w, spp), page.dtype)
         return out
@@ -158,7 +176,7 @@ class TiffSource(SlideSource):
                     return out[..., :3].astype(np.uint8, copy=False)
                 out = out[..., 0]
                 return out if out.dtype in (np.uint8, np.uint16) else np.clip(out, 0, 65535).astype(np.uint16)
-            except Exception:
+            except Exception:  # noqa: BLE001
                 self._fast = False  # anything unexpected → the general zarr path from now on
         return self._read_zarr(level, x, y, w, h, channel)
 
@@ -182,11 +200,9 @@ class TiffSource(SlideSource):
     def read_tile(self, level, tx, ty, channel=None):
         # thread-local handles: no global lock needed
         x, y, w, h = self.tile_rect(level, tx, ty)
-        from .base import _fit
         return _fit(self.read_region(level, x, y, w, h, channel), w, h)
 
     def annotation_layers(self):
-        from ..annotations import discover_sidecars
         return discover_sidecars(self.path)
 
     def close(self):
@@ -204,7 +220,6 @@ def _mpp_from_tiff(tf) -> tuple[float, float] | None:
                 v = float(m.group(1))
                 return (v, v)
         if tf.is_ome:
-            import xml.etree.ElementTree as ET
             root = ET.fromstring(tf.ome_metadata)
             px = root.find('.//{*}Pixels')
             if px is not None and px.get('PhysicalSizeX'):
@@ -221,13 +236,12 @@ def _mpp_from_tiff(tf) -> tuple[float, float] | None:
                 um = (25400.0 if unit == 2 else 10000.0) / ppu
                 if 0.01 < um < 100:
                     return (um, um)
-    except Exception:
+    except Exception:  # noqa: BLE001  (malformed resolution tags: no calibration)
         pass
     return None
 
 
 def _ome_channels(tf) -> list[tuple[str, str | None]]:
-    import xml.etree.ElementTree as ET
     out = []
     try:
         root = ET.fromstring(tf.ome_metadata)
@@ -237,9 +251,9 @@ def _ome_channels(tf) -> list[tuple[str, str | None]]:
                 hexc = None
                 if color is not None:
                     v = int(color) & 0xFFFFFFFF  # OME: signed RGBA int
-                    hexc = '#%02x%02x%02x' % ((v >> 24) & 255, (v >> 16) & 255, (v >> 8) & 255)
+                    hexc = f'#{(v >> 24) & 255:02x}{(v >> 16) & 255:02x}{(v >> 8) & 255:02x}'
                 out.append((ch.get('Name') or ch.get('ID', ''), hexc))
-    except Exception:
+    except Exception:  # noqa: BLE001  (malformed OME-XML: default channel names)
         pass
     return out
 

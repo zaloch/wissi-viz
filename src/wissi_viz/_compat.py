@@ -1,7 +1,14 @@
 """Small cross-platform helpers (Linux, macOS, Windows)."""
+
 from __future__ import annotations
 
+import hashlib
+import os
+import re
 import sys
+from pathlib import Path
+
+import numpy as np
 
 
 def utf8_stdio() -> None:
@@ -21,8 +28,6 @@ WINDOWS_RESERVED = {'con', 'prn', 'aux', 'nul', *(f'com{i}' for i in range(1, 10
 def safe_name(text: str, max_len: int = 48) -> str:
     """A file/dir name that is valid on Windows, macOS and Linux: ASCII word chars, short (Windows MAX_PATH),
     never a reserved device name (CON, NUL, …), never ending in a dot or space, plus a hash so it stays unique."""
-    import hashlib
-    import re
     base = re.sub(r'[^A-Za-z0-9_.\-]+', '_', text)[:max_len].rstrip('. ') or 'x'
     if base.split('.')[0].lower() in WINDOWS_RESERVED:
         base = '_' + base
@@ -36,8 +41,6 @@ def user_dir(kind: str, app: str = 'wissi-viz'):
     macOS    ~/Library/Caches/wissi-viz       ·  ~/Library/Application Support/wissi-viz
     Linux    $XDG_CACHE_HOME/wissi-viz        ·  $XDG_CONFIG_HOME/wissi-viz   (~/.cache, ~/.config)
     """
-    import os
-    from pathlib import Path
     home = Path.home()
     if sys.platform == 'win32':
         if kind == 'cache':
@@ -56,7 +59,6 @@ def user_dir(kind: str, app: str = 'wissi-viz'):
 def otsu(values, default=None):
     """Otsu threshold that never raises: nearly constant data (where numpy cannot make 256 finite histogram bins —
     seen on some platforms with float32 data) returns ``default``."""
-    import numpy as np
     v = np.asarray(values, np.float64).ravel()
     v = v[np.isfinite(v)]
     if v.size < 2:
@@ -66,6 +68,7 @@ def otsu(values, default=None):
         return default
     try:
         from skimage.filters import threshold_otsu
+
         return float(threshold_otsu(v))
     except ValueError:
         return default

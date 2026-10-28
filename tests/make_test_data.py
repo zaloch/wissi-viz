@@ -3,6 +3,7 @@
 
     python tests/make_test_data.py OUTDIR [--size 16000]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -34,7 +35,7 @@ def nuclei_field(h: int, w: int, seed: int = 1):
     cx = (np.arange(gw)[None, :] * CELL + CELL / 2 + rng.uniform(-7, 7, (gh, gw))).astype(np.float32)
     r = rng.uniform(5, 10, (gh, gw)).astype(np.float32)
     cls = (tissue * 3 + rng.random((gh, gw)) * 0.8).astype(np.int32) % 3
-    return dict(present=present, cx=cx, cy=cy, r=r, tissue=tissue, cls=cls)
+    return {'present': present, 'cx': cx, 'cy': cy, 'r': r, 'tissue': tissue, 'cls': cls}
 
 
 def render_band(f, y0: int, y1: int, w: int):
@@ -68,27 +69,45 @@ def make_svs(path: Path, w: int, h: int, f):
         white = np.array([245, 245, 245], np.float32)
         base = white * (1 - tis[..., None]) + eos * tis[..., None]
         px = base * (1 - nuc[..., None] * tis[..., None]) + hem * (nuc * tis)[..., None]
-        px *= (1 + grain[..., None])
+        px *= 1 + grain[..., None]
         img[y0:y1] = np.clip(px, 0, 255).astype(np.uint8)
 
-    desc = (f'Aperio Image Library v12.0.15 \r\n{w}x{h} [0,0 {w}x{h}] (256x256) JPEG/RGB Q=85'
-            f'|AppMag = 20|MPP = 0.5000|Filename = synthetic')
+    desc = (
+        f'Aperio Image Library v12.0.15 \r\n{w}x{h} [0,0 {w}x{h}] (256x256) JPEG/RGB Q=85'
+        f'|AppMag = 20|MPP = 0.5000|Filename = synthetic'
+    )
     with tifffile.TiffWriter(path, bigtiff=True) as tw:
-        opts = dict(tile=(256, 256), compression='jpeg', compressionargs={'level': 85},
-                    photometric='rgb', subsampling=(2, 2))
+        opts = {
+            'tile': (256, 256),
+            'compression': 'jpeg',
+            'compressionargs': {'level': 85},
+            'photometric': 'rgb',
+            'subsampling': (2, 2),
+        }
         tw.write(img, description=desc, metadata=None, **opts)
         thumb = img[::32, ::32]
-        tw.write(np.ascontiguousarray(thumb), description=f'Aperio Image Library v12.0.15 \r\n{w}x{h} -> {thumb.shape[1]}x{thumb.shape[0]}',
-                 photometric='rgb', compression='jpeg', metadata=None)
+        tw.write(
+            np.ascontiguousarray(thumb),
+            description=f'Aperio Image Library v12.0.15 \r\n{w}x{h} -> {thumb.shape[1]}x{thumb.shape[0]}',
+            photometric='rgb',
+            compression='jpeg',
+            metadata=None,
+        )
         lvl = img
         for _ in range(2):
             lvl = lvl[::4, ::4]
-            tw.write(np.ascontiguousarray(lvl), description=f'Aperio Image Library v12.0.15 \r\n{w}x{h} -> {lvl.shape[1]}x{lvl.shape[0]}', metadata=None, **opts)
+            tw.write(
+                np.ascontiguousarray(lvl),
+                description=f'Aperio Image Library v12.0.15 \r\n{w}x{h} -> {lvl.shape[1]}x{lvl.shape[0]}',
+                metadata=None,
+                **opts,
+            )
     return img
 
 
 def make_czi(path: Path, w: int, h: int, f):
     from pylibCZIrw import czi as pyczi
+
     rng = np.random.default_rng(5)
     tile = 2048
     if path.exists():
@@ -103,14 +122,19 @@ def make_czi(path: Path, w: int, h: int, f):
                 dapi = 400 + n * t * 20000 + rng.normal(0, 150, n.shape)
                 ring = np.clip(ndimage.uniform_filter(n, 9) - n, 0, 1) * 4
                 fitc = 300 + t * 2500 + ring * t * 9000 + rng.normal(0, 150, n.shape)
-                gx = (np.arange(x0, x1)[None, :] / w)
+                gx = np.arange(x0, x1)[None, :] / w
                 cy5 = 200 + t * gx * 6000 * (n > 0.2) + rng.normal(0, 100, n.shape)
                 for c, ch in enumerate((dapi, fitc, cy5)):
                     data = np.clip(ch, 0, 65535).astype(np.uint16)[..., None]
-                    czi.write(data=data, plane={'C': c, 'Z': 0, 'T': 0}, location=(x0, y0),
-                              compression_options='zstd1:ExplicitLevel=1')
-        czi.write_metadata('synthetic', channel_names={0: 'DAPI', 1: 'AF488', 2: 'AF647'},
-                           scale_x=0.325e-6, scale_y=0.325e-6)
+                    czi.write(
+                        data=data,
+                        plane={'C': c, 'Z': 0, 'T': 0},
+                        location=(x0, y0),
+                        compression_options='zstd1:ExplicitLevel=1',
+                    )
+        czi.write_metadata(
+            'synthetic', channel_names={0: 'DAPI', 1: 'AF488', 2: 'AF647'}, scale_x=0.325e-6, scale_y=0.325e-6
+        )
 
 
 def cells_geojson(f, path: Path, w: int, h: int, limit: int | None = None):
@@ -126,13 +150,42 @@ def cells_geojson(f, path: Path, w: int, h: int, limit: int | None = None):
     for i in range(cx.size):
         ring = np.stack([cx[i] + r[i] * np.cos(ang), cy[i] + r[i] * 0.85 * np.sin(ang)], 1).round(1)
         ring = np.vstack([ring, ring[:1]]).tolist()
-        feats.append({'type': 'Feature', 'geometry': {'type': 'Polygon', 'coordinates': [ring]},
-                      'properties': {'classification': {'name': names[cls[i]]}, 'area': float(np.pi * r[i] ** 2 * .85)}})
+        feats.append(
+            {
+                'type': 'Feature',
+                'geometry': {'type': 'Polygon', 'coordinates': [ring]},
+                'properties': {'classification': {'name': names[cls[i]]}, 'area': float(np.pi * r[i] ** 2 * 0.85)},
+            }
+        )
     # A few large ROIs
-    feats.append({'type': 'Feature', 'properties': {'classification': {'name': 'ROI'}, 'name': 'Tumor region'},
-                  'geometry': {'type': 'Polygon', 'coordinates': [[[w * .1, h * .1], [w * .45, h * .12], [w * .5, h * .5], [w * .2, h * .45], [w * .1, h * .1]]]}})
-    feats.append({'type': 'Feature', 'properties': {'classification': {'name': 'ROI'}, 'name': 'Margin'},
-                  'geometry': {'type': 'LineString', 'coordinates': [[w * .55, h * .2], [w * .7, h * .35], [w * .8, h * .3], [w * .9, h * .6]]}})
+    feats.append(
+        {
+            'type': 'Feature',
+            'properties': {'classification': {'name': 'ROI'}, 'name': 'Tumor region'},
+            'geometry': {
+                'type': 'Polygon',
+                'coordinates': [
+                    [
+                        [w * 0.1, h * 0.1],
+                        [w * 0.45, h * 0.12],
+                        [w * 0.5, h * 0.5],
+                        [w * 0.2, h * 0.45],
+                        [w * 0.1, h * 0.1],
+                    ]
+                ],
+            },
+        }
+    )
+    feats.append(
+        {
+            'type': 'Feature',
+            'properties': {'classification': {'name': 'ROI'}, 'name': 'Margin'},
+            'geometry': {
+                'type': 'LineString',
+                'coordinates': [[w * 0.55, h * 0.2], [w * 0.7, h * 0.35], [w * 0.8, h * 0.3], [w * 0.9, h * 0.6]],
+            },
+        }
+    )
     path.write_text(json.dumps({'type': 'FeatureCollection', 'features': feats}), encoding='utf-8')
     return len(feats)
 

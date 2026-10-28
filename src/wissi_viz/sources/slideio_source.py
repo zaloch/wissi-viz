@@ -7,6 +7,7 @@ zstd-compressed CZI (ZEN 3.x default for some acquisitions); the czifile reader 
 
     pip install wissi-viz[slideio]
 """
+
 from __future__ import annotations
 
 import os
@@ -15,24 +16,45 @@ from pathlib import Path
 
 import numpy as np
 
+from ..annotations import discover_sidecars
 from .base import DEFAULT_CHANNEL_COLORS, Channel, Level, SlideInfo, SlideSource, _fit
 
-DRIVERS = {'.svs': 'SVS', '.czi': 'CZI', '.vsi': 'VSI', '.zvi': 'ZVI', '.dcm': 'DCM', '.ndpi': 'NDPI',
-           '.scn': 'SCN', '.afi': 'AFI', '.qptiff': 'QPTIFF', '.tif': 'GDAL', '.tiff': 'GDAL'}
+DRIVERS = {
+    '.svs': 'SVS',
+    '.czi': 'CZI',
+    '.vsi': 'VSI',
+    '.zvi': 'ZVI',
+    '.dcm': 'DCM',
+    '.ndpi': 'NDPI',
+    '.scn': 'SCN',
+    '.afi': 'AFI',
+    '.qptiff': 'QPTIFF',
+    '.tif': 'GDAL',
+    '.tiff': 'GDAL',
+}
 
 
 class SlideioSource(SlideSource):
     extensions = tuple(DRIVERS)
 
-    def __init__(self, path: str | os.PathLike, tile_size: int = 512, scene: int = 0, driver: str | None = None,
-                 z: int = 0, t: int = 0, rgb: bool | None = None) -> None:
+    def __init__(
+        self,
+        path: str | os.PathLike,
+        tile_size: int = 512,
+        scene: int = 0,
+        driver: str | None = None,
+        z: int = 0,
+        t: int = 0,
+        rgb: bool | None = None,
+    ) -> None:
         super().__init__()
-        import slideio
 
         self.path = Path(path)
         p = self.path.name.lower()
         if driver is None:
-            driver = 'OMETIFF' if p.endswith(('.ome.tif', '.ome.tiff')) else DRIVERS.get(self.path.suffix.lower(), 'AUTO')
+            driver = (
+                'OMETIFF' if p.endswith(('.ome.tif', '.ome.tiff')) else DRIVERS.get(self.path.suffix.lower(), 'AUTO')
+            )
         self.driver, self.scene_index, self.z, self.t = driver, scene, z, t
         self._local = threading.local()
         st = self.path.stat()
@@ -57,16 +79,28 @@ class SlideioSource(SlideSource):
         else:
             mode = 'channels'
             dtype = 'uint8' if all(d == 'uint8' for d in dtypes) else 'uint16'
-            channels = [Channel(names[i] or f'Channel {i + 1}', DEFAULT_CHANNEL_COLORS[i % len(DEFAULT_CHANNEL_COLORS)])
-                        for i in range(n)]
-        self.info = SlideInfo(width=int(W), height=int(H), levels=levels or [Level(int(W), int(H), 1.0)], mode=mode,
-                              dtype=dtype, channels=channels, mpp=mpp, name=self.path.name, tile_size=tile_size,
-                              background='#ffffff' if rgb else '#000000')
+            channels = [
+                Channel(names[i] or f'Channel {i + 1}', DEFAULT_CHANNEL_COLORS[i % len(DEFAULT_CHANNEL_COLORS)])
+                for i in range(n)
+            ]
+        self.info = SlideInfo(
+            width=int(W),
+            height=int(H),
+            levels=levels or [Level(int(W), int(H), 1.0)],
+            mode=mode,
+            dtype=dtype,
+            channels=channels,
+            mpp=mpp,
+            name=self.path.name,
+            tile_size=tile_size,
+            background='#ffffff' if rgb else '#000000',
+        )
 
     def _scene(self):
         sc = getattr(self._local, 'scene', None)
         if sc is None:
             import slideio
+
             slide = slideio.open_slide(str(self.path), self.driver)
             sc = slide.get_scene(self.scene_index)
             self._local.slide, self._local.scene = slide, sc  # keep the slide alive with its scene
@@ -82,12 +116,22 @@ class SlideioSource(SlideSource):
         ow, oh = max(1, int(round(RW / ds))), max(1, int(round(RH / ds)))
         sc = self._scene()
         if self._rgb:
-            a = sc.read_block((X, Y, RW, RH), size=(ow, oh), channel_indices=[0, 1, 2],
-                              slices=(self.z, self.z + 1), frames=(self.t, self.t + 1))
+            a = sc.read_block(
+                (X, Y, RW, RH),
+                size=(ow, oh),
+                channel_indices=[0, 1, 2],
+                slices=(self.z, self.z + 1),
+                frames=(self.t, self.t + 1),
+            )
             a = np.asarray(a)[..., :3].astype(np.uint8, copy=False)
         else:
-            a = sc.read_block((X, Y, RW, RH), size=(ow, oh), channel_indices=[channel or 0],
-                              slices=(self.z, self.z + 1), frames=(self.t, self.t + 1))
+            a = sc.read_block(
+                (X, Y, RW, RH),
+                size=(ow, oh),
+                channel_indices=[channel or 0],
+                slices=(self.z, self.z + 1),
+                frames=(self.t, self.t + 1),
+            )
             a = np.asarray(a)
             a = a.reshape(a.shape[:2]) if a.ndim == 3 else a
             if a.dtype not in (np.uint8, np.uint16):
@@ -109,5 +153,4 @@ class SlideioSource(SlideSource):
         return _fit(self.read_region(level, x, y, w, h, channel), w, h)
 
     def annotation_layers(self):
-        from ..annotations import discover_sidecars
         return discover_sidecars(self.path)

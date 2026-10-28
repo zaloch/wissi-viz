@@ -3,6 +3,7 @@
 Accepts the metadata dict from czifile (attributes as plain keys) and from pylibCZIrw
 (xmltodict style, attributes prefixed with ``@``).
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -47,8 +48,9 @@ def channel_meta(meta: dict, n: int) -> tuple[list[str], list[str]]:
         d = disp[c] if c < len(disp) else {}
         i = info[c] if c < len(info) else {}
         names.append(attr(d, 'Name') or attr(i, 'Name') or f'Channel {c + 1}')
-        colors.append(argb_to_hex(attr(d, 'Color') or attr(i, 'Color'))
-                      or DEFAULT_CHANNEL_COLORS[c % len(DEFAULT_CHANNEL_COLORS)])
+        colors.append(
+            argb_to_hex(attr(d, 'Color') or attr(i, 'Color')) or DEFAULT_CHANNEL_COLORS[c % len(DEFAULT_CHANNEL_COLORS)]
+        )
     return names, colors
 
 

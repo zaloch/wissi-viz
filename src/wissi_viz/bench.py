@@ -21,19 +21,31 @@ The WebGL renderer string is reported: "SwiftShader" means *software* rendering 
 e.g. a headless server/container); a vendor string (NVIDIA, AMD, Apple, Intel, ANGLE (…)) means
 the GPU is used. Run with --headed on a desktop to measure your real GPU.
 """
+
 from __future__ import annotations
 
+import asyncio
+import datetime
 import json
 import math
 import os
 import random
+import re
+import socket
 import statistics
+import tempfile
 import threading
 import time
+import urllib.request
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import numpy as np
+
+from .registry import SlideRegistry
+from .server import create_app
+from .tiles import TileService
 
 
 def _pct(v: Sequence[float], q: float) -> float:
@@ -42,8 +54,6 @@ def _pct(v: Sequence[float], q: float) -> float:
 
 # ============================================================================= server stage
 def server_bench(paths: Sequence[str], n_tiles: int = 48, concurrency: int = 8, seed: int = 0) -> list[dict]:
-    from .registry import SlideRegistry
-    from .tiles import TileService
     rng = random.Random(seed)
     out = []
     for path in paths:
@@ -55,10 +65,15 @@ def server_bench(paths: Sequence[str], n_tiles: int = 48, concurrency: int = 8, 
         open_ms = (time.perf_counter() - t0) * 1000
         info = pyr.info
         chans = [None] if info.mode == 'rgb' else list(range(min(3, len(info.channels))))
-        res: dict[str, Any] = {'slide': Path(path).name, 'reader': type(e.source).__name__,
-                               'size': f'{info.width}x{info.height}', 'mode': info.mode, 'levels': len(info.levels),
-                               'file_MB': round(os.path.getsize(path) / 2**20, 1) if os.path.isfile(path) else None,
-                               'open_ms': round(open_ms, 1)}
+        res: dict[str, Any] = {
+            'slide': Path(path).name,
+            'reader': type(e.source).__name__,
+            'size': f'{info.width}x{info.height}',
+            'mode': info.mode,
+            'levels': len(info.levels),
+            'file_MB': round(os.path.getsize(path) / 2**20, 1) if os.path.isfile(path) else None,
+            'open_ms': round(open_ms, 1),
+        }
         nl = len(info.levels)
         picks = sorted({0, nl // 2, nl - 1})
         per_level = []
@@ -68,7 +83,7 @@ def server_bench(paths: Sequence[str], n_tiles: int = 48, concurrency: int = 8, 
             pool = [(tx, ty, c) for tx in range(nx) for ty in range(ny) for c in chans]
             rng.shuffle(pool)
             coords = pool[: 2 * n_tiles]
-            cold_set, tput_set = coords[: max(4, len(coords) // 3)], coords[max(4, len(coords) // 3):]
+            cold_set, tput_set = coords[: max(4, len(coords) // 3)], coords[max(4, len(coords) // 3) :]
             lat, sizes = [], []
             for tx, ty, c in cold_set:
                 t = time.perf_counter()
@@ -87,10 +102,18 @@ def server_bench(paths: Sequence[str], n_tiles: int = 48, concurrency: int = 8, 
                 t1 = time.perf_counter()
                 tiles.get(sid, pyr, e.source.version, L, tx, ty, c).result()
                 warm.append((time.perf_counter() - t1) * 1000)
-            per_level.append({'level': L, 'downsample': round(lv.downsample, 2), 'cold_p50_ms': round(_pct(lat, 50), 2),
-                              'cold_p95_ms': round(_pct(lat, 95), 2), f'throughput_x{concurrency}_tiles_s': tput,
-                              'n_tiles': len(cold_set) + len(tput_set), 'warm_p50_ms': round(_pct(warm, 50), 3),
-                              'tile_KB': round(statistics.mean(sizes) / 1024, 1) if sizes else None})
+            per_level.append(
+                {
+                    'level': L,
+                    'downsample': round(lv.downsample, 2),
+                    'cold_p50_ms': round(_pct(lat, 50), 2),
+                    'cold_p95_ms': round(_pct(lat, 95), 2),
+                    f'throughput_x{concurrency}_tiles_s': tput,
+                    'n_tiles': len(cold_set) + len(tput_set),
+                    'warm_p50_ms': round(_pct(warm, 50), 3),
+                    'tile_KB': round(statistics.mean(sizes) / 1024, 1) if sizes else None,
+                }
+            )
         res['levels_bench'] = per_level
         out.append(res)
         reg.remove(sid)
@@ -154,29 +177,43 @@ async (timeout) => {
 
 def _summ_pan(r: dict) -> dict:
     f = r['frames'][2:] or r['frames']
-    return {'fps_median': round(1000 / _pct(f, 50), 1) if f else None, 'frame_p50_ms': round(_pct(f, 50), 1),
-            'frame_p95_ms': round(_pct(f, 95), 1), 'frame_p99_ms': round(_pct(f, 99), 1),
-            'long_frames_pct': round(100 * float(np.mean(np.asarray(f) > 33.4)), 1) if f else None,
-            'sharp_while_moving_pct': round(100 * float(np.mean(r['sharp'])), 1) if r['sharp'] else None,
-            'blank_while_moving_pct': round(100 * float(np.mean(r['blank'])), 2) if r['blank'] else None,
-            'settle_ms': None if r['settle_ms'] is None else round(r['settle_ms']),
-            'js_frame_p50_ms': round(_pct(r.get('js') or [], 50), 2), 'js_frame_p95_ms': round(_pct(r.get('js') or [], 95), 2),
-            'tiles_requested': r['requests'], 'tiles_cancelled': r['cancelled'], 'MB': round(r['MB'], 1)}
+    return {
+        'fps_median': round(1000 / _pct(f, 50), 1) if f else None,
+        'frame_p50_ms': round(_pct(f, 50), 1),
+        'frame_p95_ms': round(_pct(f, 95), 1),
+        'frame_p99_ms': round(_pct(f, 99), 1),
+        'long_frames_pct': round(100 * float(np.mean(np.asarray(f) > 33.4)), 1) if f else None,
+        'sharp_while_moving_pct': round(100 * float(np.mean(r['sharp'])), 1) if r['sharp'] else None,
+        'blank_while_moving_pct': round(100 * float(np.mean(r['blank'])), 2) if r['blank'] else None,
+        'settle_ms': None if r['settle_ms'] is None else round(r['settle_ms']),
+        'js_frame_p50_ms': round(_pct(r.get('js') or [], 50), 2),
+        'js_frame_p95_ms': round(_pct(r.get('js') or [], 95), 2),
+        'tiles_requested': r['requests'],
+        'tiles_cancelled': r['cancelled'],
+        'MB': round(r['MB'], 1),
+    }
 
 
-def browser_bench(paths: Sequence[str] | None = None, panes: Sequence[int] = (1, 4, 9, 16), headed: bool = False,
-                  pan_seconds: float = 8, pan_speed: float = 900, magnification: float = 20, port: int = 0,
-                  browser_args: Sequence[str] | None = None, viewport=(1600, 1000), cache_dir: str | None = None,
-                  registry=None, slide_ids: Sequence[str] | None = None, http2: bool = False, log=print) -> dict:
+def browser_bench(
+    paths: Sequence[str] | None = None,
+    panes: Sequence[int] = (1, 4, 9, 16),
+    headed: bool = False,
+    pan_seconds: float = 8,
+    pan_speed: float = 900,
+    magnification: float = 20,
+    port: int = 0,
+    browser_args: Sequence[str] | None = None,
+    viewport=(1600, 1000),
+    cache_dir: str | None = None,
+    registry=None,
+    slide_ids: Sequence[str] | None = None,
+    http2: bool = False,
+    log=print,
+) -> dict:
     """``paths``: slide files; or pass an existing ``registry`` + ``slide_ids`` (e.g. API-backed slides)."""
-    import socket
 
     import uvicorn
     from playwright.sync_api import sync_playwright
-
-    from .registry import SlideRegistry
-    from .server import create_app
-    from .tiles import TileService
 
     if registry is not None:
         reg = registry
@@ -200,7 +237,7 @@ def browser_bench(paths: Sequence[str] | None = None, panes: Sequence[int] = (1,
         th.start()
         while not server.started:
             time.sleep(0.05)
-        stop = lambda: setattr(server, 'should_exit', True)  # noqa: E731
+        stop = lambda: setattr(server, 'should_exit', True)
         scheme = 'http'
     args = list(browser_args or ['--ignore-gpu-blocklist', '--enable-gpu-rasterization', '--enable-unsafe-swiftshader'])
     if http2:
@@ -212,21 +249,33 @@ def browser_bench(paths: Sequence[str] | None = None, panes: Sequence[int] = (1,
             pg = b.new_page(viewport={'width': viewport[0], 'height': viewport[1]}, ignore_https_errors=True)
             pg.goto(f'{scheme}://127.0.0.1:{port}/demo')
             pg.wait_for_function('() => window.grid && customElements.get("wissi-viz")', timeout=30000)
-            report['webgl_renderer'] = pg.evaluate("""() => { const gl = document.createElement('canvas').getContext('webgl2');
+            report['webgl_renderer'] = (
+                pg.evaluate("""() => { const gl = document.createElement('canvas').getContext('webgl2');
                 const e = gl && gl.getExtension('WEBGL_debug_renderer_info');
                 return gl ? (e ? gl.getParameter(e.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)) : 'no WebGL2'; }""")
-            report['software_rendering'] = 'swiftshader' in report['webgl_renderer'].lower() or 'llvmpipe' in report['webgl_renderer'].lower()
+            )
+            report['software_rendering'] = (
+                'swiftshader' in report['webgl_renderer'].lower() or 'llvmpipe' in report['webgl_renderer'].lower()
+            )
             report['hardware_concurrency'] = pg.evaluate('navigator.hardwareConcurrency')
             report['http_protocol'] = pg.evaluate(
-                "() => (performance.getEntriesByType('resource').find(e => e.name.includes('/static/')) || {}).nextHopProtocol || ''")
-            log(f"WebGL renderer: {report['webgl_renderer']}{'  (software — no GPU)' if report['software_rendering'] else ''}")
+                "() => (performance.getEntriesByType('resource').find(e => e.name.includes('/static/')) || {}).nextHopProtocol || ''"
+            )
+            log(
+                f'WebGL renderer: {report["webgl_renderer"]}{"  (software — no GPU)" if report["software_rendering"] else ""}'
+            )
             for n in panes:
-                pg.evaluate("""(ids) => { grid.setAttribute('controls','false'); grid.setSync('none');
-                    grid.setLayout('auto'); grid.setSlides(ids); }""", ids[:n])
+                pg.evaluate(
+                    """(ids) => { grid.setAttribute('controls','false'); grid.setSync('none');
+                    grid.setLayout('auto'); grid.setSlides(ids); }""",
+                    ids[:n],
+                )
                 open_ms = pg.evaluate(_WAIT_SHARP_JS, 60000)
                 if open_ms is None:
                     log('  open timed out: ' + json.dumps(pg.evaluate('() => window.__wissiTimeout')))
-                info = pg.evaluate('() => grid.panes[0].slide.info && [grid.panes[0].slide.info.width, grid.panes[0].slide.info.height]')
+                info = pg.evaluate(
+                    '() => grid.panes[0].slide.info && [grid.panes[0].slide.info.width, grid.panes[0].slide.info.height]'
+                )
                 cx, cy = (info[0] / 2, info[1] / 2) if info else (0, 0)
                 pg.evaluate(f'() => grid.goTo("all", {cx}, {cy}, {{magnification: {magnification}, animate: false}})')
                 zoom_ms = pg.evaluate(_WAIT_SHARP_JS, 60000)
@@ -236,22 +285,33 @@ def browser_bench(paths: Sequence[str] | None = None, panes: Sequence[int] = (1,
                 pg.evaluate(f'() => grid.goTo("all", {cx}, {cy}, {{magnification: {magnification}, animate: false}})')
                 pg.evaluate(_WAIT_SHARP_JS, 60000)
                 again = pg.evaluate(_PAN_JS, [pan_seconds, pan_speed, 2])
-                run = {'panes': n, 'open_ms': None if open_ms is None else round(open_ms),
-                       'zoom_to_sharp_ms': None if zoom_ms is None else round(zoom_ms),
-                       'pan': _summ_pan(pan), 'revisit': _summ_pan(again),
-                       'stats': pg.evaluate('() => grid.stats()')}
+                run = {
+                    'panes': n,
+                    'open_ms': None if open_ms is None else round(open_ms),
+                    'zoom_to_sharp_ms': None if zoom_ms is None else round(zoom_ms),
+                    'pan': _summ_pan(pan),
+                    'revisit': _summ_pan(again),
+                    'stats': pg.evaluate('() => grid.stats()'),
+                }
                 report['runs'].append(run)
-                log(f"{n:>2} panes  open {run['open_ms']} ms  zoom {run['zoom_to_sharp_ms']} ms  pan: "
-                    f"{run['pan']['fps_median']} fps (p95 {run['pan']['frame_p95_ms']} ms), sharp {run['pan']['sharp_while_moving_pct']}%, "
-                    f"blank {run['pan']['blank_while_moving_pct']}%, settle {run['pan']['settle_ms']} ms | revisit "
-                    f"{run['revisit']['fps_median']} fps, sharp {run['revisit']['sharp_while_moving_pct']}%")
+                log(
+                    f'{n:>2} panes  open {run["open_ms"]} ms  zoom {run["zoom_to_sharp_ms"]} ms  pan: '
+                    f'{run["pan"]["fps_median"]} fps (p95 {run["pan"]["frame_p95_ms"]} ms), sharp {run["pan"]["sharp_while_moving_pct"]}%, '
+                    f'blank {run["pan"]["blank_while_moving_pct"]}%, settle {run["pan"]["settle_ms"]} ms | revisit '
+                    f'{run["revisit"]["fps_median"]} fps, sharp {run["revisit"]["sharp_while_moving_pct"]}%'
+                )
             b.close()
     finally:
         stop()
         th.join(timeout=5)
     report['server_tile_cache'] = reg.tiles.stats()
-    report['settings'] = {'pan_seconds': pan_seconds, 'pan_speed_px_s': pan_speed, 'magnification': magnification,
-                          'viewport': viewport, 'headed': headed}
+    report['settings'] = {
+        'pan_seconds': pan_seconds,
+        'pan_speed_px_s': pan_speed,
+        'magnification': magnification,
+        'viewport': viewport,
+        'headed': headed,
+    }
     return report
 
 
@@ -325,51 +385,91 @@ _SNAP_JS = """() => { const g = document.querySelector('wissi-viz');
 
 
 def _delta(a: dict, b: dict) -> dict:
-    d = {k: b[k] - a[k] for k in ('requests', 'completed', 'cancelled', 'aborted', 'failed', 'uploaded', 'wasted',
-                                  'frames', 'draws', 'fill', 'area')}
-    return {'requests': d['requests'], 'cancelled': d['cancelled'] + d['aborted'], 'MB': round((b['bytes'] - a['bytes']) / 2**20, 2),
-            'uploaded': d['uploaded'], 'evicted_undrawn': d['wasted'],
-            'overdraw': round(d['fill'] / d['area'], 3) if d['area'] else None,
-            'draws_per_frame': round(d['draws'] / d['frames'], 1) if d['frames'] else None}
+    d = {
+        k: b[k] - a[k]
+        for k in (
+            'requests',
+            'completed',
+            'cancelled',
+            'aborted',
+            'failed',
+            'uploaded',
+            'wasted',
+            'frames',
+            'draws',
+            'fill',
+            'area',
+        )
+    }
+    return {
+        'requests': d['requests'],
+        'cancelled': d['cancelled'] + d['aborted'],
+        'MB': round((b['bytes'] - a['bytes']) / 2**20, 2),
+        'uploaded': d['uploaded'],
+        'evicted_undrawn': d['wasted'],
+        'overdraw': round(d['fill'] / d['area'], 3) if d['area'] else None,
+        'draws_per_frame': round(d['draws'] / d['frames'], 1) if d['frames'] else None,
+    }
 
 
 def _summ_zoom(r: dict) -> dict:
     f = r['frames'][2:] or r['frames']
     js = r.get('js') or []
-    return {'motion_ms': round(r['motion_ms']), 'fps_median': round(1000 / _pct(f, 50), 1) if f else None,
-            'frame_p95_ms': round(_pct(f, 95), 1) if f else None,
-            'js_frame_p50_ms': round(_pct(js, 50), 2) if js else None, 'js_frame_p95_ms': round(_pct(js, 95), 2) if js else None,
-            'detail_pct': round(100 * float(np.mean(r['detail'])), 1) if r['detail'] else None,
-            'full_res_pct': round(100 * float(np.mean(r['sharp'])), 1) if r['sharp'] else None,
-            'blank_pct': round(100 * float(np.mean(r['blank'])), 2) if r['blank'] else None,
-            'settle_ms': None if r['settle_ms'] is None else round(r['settle_ms'])}
+    return {
+        'motion_ms': round(r['motion_ms']),
+        'fps_median': round(1000 / _pct(f, 50), 1) if f else None,
+        'frame_p95_ms': round(_pct(f, 95), 1) if f else None,
+        'js_frame_p50_ms': round(_pct(js, 50), 2) if js else None,
+        'js_frame_p95_ms': round(_pct(js, 95), 2) if js else None,
+        'detail_pct': round(100 * float(np.mean(r['detail'])), 1) if r['detail'] else None,
+        'full_res_pct': round(100 * float(np.mean(r['sharp'])), 1) if r['sharp'] else None,
+        'blank_pct': round(100 * float(np.mean(r['blank'])), 2) if r['blank'] else None,
+        'settle_ms': None if r['settle_ms'] is None else round(r['settle_ms']),
+    }
 
 
-def zoom_bench(configs: Sequence[tuple[str, Sequence[str], int]], modes: Sequence[str] = ('legacy', 'default'),
-               rate: float = 4.0, magnification: float = 40, viewport=(1600, 1000), repeats: int = 1,
-               headed: bool = False, browser_args: Sequence[str] | None = None, http2: bool = False,
-               save_to: str | None = None, log=print) -> dict:
+def zoom_bench(
+    configs: Sequence[tuple[str, Sequence[str], int]],
+    modes: Sequence[str] = ('legacy', 'default'),
+    rate: float = 4.0,
+    magnification: float = 40,
+    viewport=(1600, 1000),
+    repeats: int = 1,
+    headed: bool = False,
+    browser_args: Sequence[str] | None = None,
+    http2: bool = False,
+    save_to: str | None = None,
+    log=print,
+) -> dict:
     """Zooming through the pyramid: continuous zoom fit→``magnification``→fit at ``rate``×/s, then jump zooms.
 
     ``configs``: (label, slide paths, panes). ``modes``: viewer LOD policies (``'legacy'``, ``'default'`` or a JSON
     dict for ``setLod``). Every (mode, config, repeat) gets a fresh server registry and a fresh browser, so tile
     caches start cold on both sides and the comparison is fair."""
-    import socket
 
     import uvicorn
     from playwright.sync_api import sync_playwright
 
-    from .registry import SlideRegistry
-    from .server import create_app
-    from .tiles import TileService
-
     args = list(browser_args or ['--ignore-gpu-blocklist', '--enable-gpu-rasterization', '--enable-unsafe-swiftshader'])
     if http2:
         args.append('--ignore-certificate-errors')
-    jumps = [[0.5, 0.5, magnification], [0.35, 0.6, magnification / 4], [0.62, 0.42, magnification / 2],
-             [0.5, 0.5, max(1.25, magnification / 16)], [0.45, 0.55, magnification]]
-    report: dict[str, Any] = {'runs': [], 'settings': {'rate_per_s': rate, 'magnification': magnification,
-                                                       'viewport': viewport, 'jumps': jumps, 'http2': http2}}
+    jumps = [
+        [0.5, 0.5, magnification],
+        [0.35, 0.6, magnification / 4],
+        [0.62, 0.42, magnification / 2],
+        [0.5, 0.5, max(1.25, magnification / 16)],
+        [0.45, 0.55, magnification],
+    ]
+    report: dict[str, Any] = {
+        'runs': [],
+        'settings': {
+            'rate_per_s': rate,
+            'magnification': magnification,
+            'viewport': viewport,
+            'jumps': jumps,
+            'http2': http2,
+        },
+    }
     with sync_playwright() as pw:
         for rep in range(repeats):
             for cfg in configs:
@@ -385,21 +485,28 @@ def zoom_bench(configs: Sequence[tuple[str, Sequence[str], int]], modes: Sequenc
                         th, stop = _serve_h2(create_app(reg), port)
                         scheme = 'https'
                     else:
-                        server = uvicorn.Server(uvicorn.Config(create_app(reg), host='127.0.0.1', port=port, log_level='warning'))
+                        server = uvicorn.Server(
+                            uvicorn.Config(create_app(reg), host='127.0.0.1', port=port, log_level='warning')
+                        )
                         th = threading.Thread(target=server.run, daemon=True)
                         th.start()
                         while not server.started:
                             time.sleep(0.05)
-                        stop = lambda server=server: setattr(server, 'should_exit', True)  # noqa: E731
+                        stop = lambda server=server: setattr(server, 'should_exit', True)
                         scheme = 'http'
                     b = pw.chromium.launch(headless=not headed, args=args)
                     try:
-                        pg = b.new_page(viewport={'width': viewport[0], 'height': viewport[1]}, ignore_https_errors=True)
+                        pg = b.new_page(
+                            viewport={'width': viewport[0], 'height': viewport[1]}, ignore_https_errors=True
+                        )
                         pg.goto(f'{scheme}://127.0.0.1:{port}/demo')
                         pg.wait_for_function('() => window.grid && customElements.get("wissi-viz")', timeout=30000)
                         lod = mode if mode in ('legacy', 'default') else json.loads(mode)
-                        pg.evaluate("""([ids, lod]) => { grid.setAttribute('controls','false'); grid.setSync('none');
-                            grid.setLod(lod); grid.setLayout('auto'); grid.setSlides(ids); }""", [ids, lod])
+                        pg.evaluate(
+                            """([ids, lod]) => { grid.setAttribute('controls','false'); grid.setSync('none');
+                            grid.setLod(lod); grid.setLayout('auto'); grid.setSlides(ids); }""",
+                            [ids, lod],
+                        )
                         open_ms = pg.evaluate(_WAIT_SHARP_JS, 60000)
                         fit = pg.evaluate('() => grid.panes.map((p) => p.view && p.view.scale)')
                         mpp = pg.evaluate('() => grid.panes.map((p) => p.slide.info.mpp ? p.slide.info.mpp[0] : 1)')
@@ -415,50 +522,67 @@ def zoom_bench(configs: Sequence[tuple[str, Sequence[str], int]], modes: Sequenc
                         b.close()
                         stop()
                         th.join(timeout=5)
-                        reg.close()   # release caches + workers before the next (cold) run
-                    run = {'config': label, 'panes': n, 'mode': mode, 'repeat': rep,
-                           'open_ms': None if open_ms is None else round(open_ms),
-                           'zoom_in': {**_summ_zoom(zin), **_delta(s0, s1)},
-                           'zoom_out': {**_summ_zoom(zout), **_delta(s1, s2)},
-                           'jumps': {'ms': [None if j['ms'] is None else round(j['ms']) for j in jump],
-                                     'detail_pct': round(100 * float(np.mean([x for j in jump for x in j['detail']] or [0])), 1),
-                                     'blank_pct': round(100 * float(np.mean([x for j in jump for x in j['blank']] or [0])), 2),
-                                     **_delta(s2, s3)},
-                           'end': {'textures': s3['textures'], 'textureMB': round(s3['textureMB'], 1),
-                                   'undrawn_textures': s3['undrawn'], 'requests': s3['requests'],
-                                   'MB': round(s3['bytes'] / 2**20, 1)}}
+                        reg.close()  # release caches + workers before the next (cold) run
+                    run = {
+                        'config': label,
+                        'panes': n,
+                        'mode': mode,
+                        'repeat': rep,
+                        'open_ms': None if open_ms is None else round(open_ms),
+                        'zoom_in': {**_summ_zoom(zin), **_delta(s0, s1)},
+                        'zoom_out': {**_summ_zoom(zout), **_delta(s1, s2)},
+                        'jumps': {
+                            'ms': [None if j['ms'] is None else round(j['ms']) for j in jump],
+                            'detail_pct': round(100 * float(np.mean([x for j in jump for x in j['detail']] or [0])), 1),
+                            'blank_pct': round(100 * float(np.mean([x for j in jump for x in j['blank']] or [0])), 2),
+                            **_delta(s2, s3),
+                        },
+                        'end': {
+                            'textures': s3['textures'],
+                            'textureMB': round(s3['textureMB'], 1),
+                            'undrawn_textures': s3['undrawn'],
+                            'requests': s3['requests'],
+                            'MB': round(s3['bytes'] / 2**20, 1),
+                        },
+                    }
                     report['runs'].append(run)
                     if save_to:  # keep partial results of long sweeps
                         Path(save_to).write_text(json.dumps(report, indent=1), encoding='utf-8')
                     zi, zo, jp = run['zoom_in'], run['zoom_out'], run['jumps']
-                    log(f"{label:<14} {n:>2}p {str(mode)[:8]:<8} in: detail {zi['detail_pct']}% blank {zi['blank_pct']}% "
-                        f"settle {zi['settle_ms']} ms {zi['MB']} MB req {zi['requests']} overdraw {zi['overdraw']} js {zi['js_frame_p50_ms']} | "
-                        f"out: detail {zo['detail_pct']}% blank {zo['blank_pct']}% {zo['MB']} MB req {zo['requests']} | "
-                        f"jumps {jp['ms']} {jp['MB']} MB | total {run['end']['MB']} MB")
+                    log(
+                        f'{label:<14} {n:>2}p {str(mode)[:8]:<8} in: detail {zi["detail_pct"]}% blank {zi["blank_pct"]}% '
+                        f'settle {zi["settle_ms"]} ms {zi["MB"]} MB req {zi["requests"]} overdraw {zi["overdraw"]} js {zi["js_frame_p50_ms"]} | '
+                        f'out: detail {zo["detail_pct"]}% blank {zo["blank_pct"]}% {zo["MB"]} MB req {zo["requests"]} | '
+                        f'jumps {jp["ms"]} {jp["MB"]} MB | total {run["end"]["MB"]} MB'
+                    )
     return report
 
 
 def format_zoom_report(rep: dict) -> str:
-    rows = ['| config | panes | LOD | phase | detail % | full-res % | blank % | settle ms | MB | requests | cancelled | '
-            'uploaded | overdraw | draws/frame | JS ms p50 (p95) | fps |', '|' + '---|' * 16]
+    rows = [
+        '| config | panes | LOD | phase | detail % | full-res % | blank % | settle ms | MB | requests | cancelled | '
+        'uploaded | overdraw | draws/frame | JS ms p50 (p95) | fps |',
+        '|' + '---|' * 16,
+    ]
     for r in rep['runs']:
         for ph in ('zoom_in', 'zoom_out'):
             z = r[ph]
-            rows.append(f"| {r['config']} | {r['panes']} | {r['mode']} | {ph.replace('_', ' ')} | {z['detail_pct']} | {z['full_res_pct']} | "
-                        f"{z['blank_pct']} | {z['settle_ms']} | {z['MB']} | {z['requests']} | {z['cancelled']} | {z['uploaded']} | "
-                        f"{z['overdraw']} | {z['draws_per_frame']} | {z['js_frame_p50_ms']} ({z['js_frame_p95_ms']}) | {z['fps_median']} |")
+            rows.append(
+                f'| {r["config"]} | {r["panes"]} | {r["mode"]} | {ph.replace("_", " ")} | {z["detail_pct"]} | {z["full_res_pct"]} | '
+                f'{z["blank_pct"]} | {z["settle_ms"]} | {z["MB"]} | {z["requests"]} | {z["cancelled"]} | {z["uploaded"]} | '
+                f'{z["overdraw"]} | {z["draws_per_frame"]} | {z["js_frame_p50_ms"]} ({z["js_frame_p95_ms"]}) | {z["fps_median"]} |'
+            )
         j = r['jumps']
-        rows.append(f"| {r['config']} | {r['panes']} | {r['mode']} | jumps ({', '.join(str(x) for x in j['ms'])} ms) | {j['detail_pct']} | | "
-                    f"{j['blank_pct']} | {sum(x or 0 for x in j['ms'])} | {j['MB']} | {j['requests']} | {j['cancelled']} | {j['uploaded']} | "
-                    f"{j['overdraw']} | {j['draws_per_frame']} | | |")
+        rows.append(
+            f'| {r["config"]} | {r["panes"]} | {r["mode"]} | jumps ({", ".join(str(x) for x in j["ms"])} ms) | {j["detail_pct"]} | | '
+            f'{j["blank_pct"]} | {sum(x or 0 for x in j["ms"])} | {j["MB"]} | {j["requests"]} | {j["cancelled"]} | {j["uploaded"]} | '
+            f'{j["overdraw"]} | {j["draws_per_frame"]} | | |'
+        )
     return '\n'.join(rows)
 
 
 def _serve_h2(app, port: int):
     """Serve ``app`` over HTTPS + HTTP/2 (hypercorn, MIT) with a self-signed certificate (cryptography)."""
-    import asyncio
-    import datetime
-    import tempfile
 
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
@@ -470,13 +594,21 @@ def _serve_h2(app, port: int):
     key = ec.generate_private_key(ec.SECP256R1())
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, '127.0.0.1')])
     now = datetime.datetime.now(datetime.timezone.utc)
-    cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
-            .serial_number(x509.random_serial_number()).not_valid_before(now - datetime.timedelta(days=1))
-            .not_valid_after(now + datetime.timedelta(days=2)).sign(key, hashes.SHA256()))
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=2))
+        .sign(key, hashes.SHA256())
+    )
     d = tempfile.mkdtemp(prefix='wissi-h2-')
     Path(d, 'cert.pem').write_bytes(cert.public_bytes(serialization.Encoding.PEM))
-    Path(d, 'key.pem').write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
-                                                     serialization.NoEncryption()))
+    Path(d, 'key.pem').write_bytes(
+        key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+    )
     cfg = Config()
     cfg.bind = [f'127.0.0.1:{port}']
     cfg.certfile, cfg.keyfile = str(Path(d, 'cert.pem')), str(Path(d, 'key.pem'))
@@ -490,6 +622,7 @@ def _serve_h2(app, port: int):
         asyncio.set_event_loop(loop)
         loop.call_soon(started.set)
         loop.run_until_complete(serve(app, cfg, shutdown_trigger=done.wait))
+
     th = threading.Thread(target=run, daemon=True)
     th.start()
     started.wait(10)
@@ -524,11 +657,10 @@ SAMPLE_SETS = {
 SLIDE_SUFFIXES = ('.svs', '.tif', '.tiff', '.ndpi', '.scn', '.czi', '.ome.tif', '.ome.tiff', '.vsi', '.zip')
 
 
-def fetch_samples(dest: str | Path, which: str = 'standard', max_mb: float = 2000, extra_urls: Sequence[str] = (),
-                  log=print) -> list[Path]:
+def fetch_samples(
+    dest: str | Path, which: str = 'standard', max_mb: float = 2000, extra_urls: Sequence[str] = (), log=print
+) -> list[Path]:
     """Download public whole-slide test images (skips files already present / larger than ``max_mb``)."""
-    import re
-    import urllib.request
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
     urls: list[str] = []
@@ -578,29 +710,50 @@ def format_report(server: list[dict] | None, browser: dict | None) -> str:
     lines = []
     if server:
         lines.append('## Server: open + tiles\n')
-        lines.append('| slide | reader | size | MB | open ms | level (÷) | cold p50/p95 ms | tiles/s (×8) | warm p50 ms | tile KB |')
+        lines.append(
+            '| slide | reader | size | MB | open ms | level (÷) | cold p50/p95 ms | tiles/s (×8) | warm p50 ms | tile KB |'
+        )
         lines.append('|---|---|---|---|---|---|---|---|---|---|')
         for r in server:
             for i, L in enumerate(r['levels_bench']):
                 tp = next((v for k, v in L.items() if k.startswith('throughput')), None) or '–'
-                head = [r['slide'], r['reader'], r['size'], str(r['file_MB']), str(r['open_ms'])] if i == 0 else [''] * 5
-                lines.append('| ' + ' | '.join(head + [f"{L['level']} (÷{L['downsample']:g})",
-                                                       f"{L['cold_p50_ms']} / {L['cold_p95_ms']}", str(tp),
-                                                       str(L['warm_p50_ms']), str(L['tile_KB'])]) + ' |')
+                head = (
+                    [r['slide'], r['reader'], r['size'], str(r['file_MB']), str(r['open_ms'])] if i == 0 else [''] * 5
+                )
+                lines.append(
+                    '| '
+                    + ' | '.join(
+                        head
+                        + [
+                            f'{L["level"]} (÷{L["downsample"]:g})',
+                            f'{L["cold_p50_ms"]} / {L["cold_p95_ms"]}',
+                            str(tp),
+                            str(L['warm_p50_ms']),
+                            str(L['tile_KB']),
+                        ]
+                    )
+                    + ' |'
+                )
     if browser:
         vw, vh = browser['settings']['viewport']
         proto = browser.get('http_protocol') or 'http/1.1'
         mag = browser['settings'].get('magnification', 20)
-        lines.append(f"\n## Browser ({vw}×{vh}, {proto}): {browser.get('webgl_renderer')}"
-                     f"{' — SOFTWARE rendering (no GPU)' if browser.get('software_rendering') else ''}\n")
-        lines.append(f'| panes | open→sharp ms | {mag:g}×→sharp ms | pan fps (p95 ms) | viewer JS ms/frame p50 (p95) | long frames % | sharp while panning % | blank % | settle ms | revisit fps / sharp % | MB |')
+        lines.append(
+            f'\n## Browser ({vw}×{vh}, {proto}): {browser.get("webgl_renderer")}'
+            f'{" — SOFTWARE rendering (no GPU)" if browser.get("software_rendering") else ""}\n'
+        )
+        lines.append(
+            f'| panes | open→sharp ms | {mag:g}×→sharp ms | pan fps (p95 ms) | viewer JS ms/frame p50 (p95) | long frames % | sharp while panning % | blank % | settle ms | revisit fps / sharp % | MB |'
+        )
         lines.append('|---|---|---|---|---|---|---|---|---|---|---|')
         for r in browser['runs']:
             p, v = r['pan'], r['revisit']
-            lines.append(f"| {r['panes']} | {r['open_ms']} | {r['zoom_to_sharp_ms']} | {p['fps_median']} ({p['frame_p95_ms']}) | "
-                         f"{p['js_frame_p50_ms']} ({p['js_frame_p95_ms']}) | "
-                         f"{p['long_frames_pct']} | {p['sharp_while_moving_pct']} | {p['blank_while_moving_pct']} | {p['settle_ms']} | "
-                         f"{v['fps_median']} / {v['sharp_while_moving_pct']} | {p['MB']} |")
+            lines.append(
+                f'| {r["panes"]} | {r["open_ms"]} | {r["zoom_to_sharp_ms"]} | {p["fps_median"]} ({p["frame_p95_ms"]}) | '
+                f'{p["js_frame_p50_ms"]} ({p["js_frame_p95_ms"]}) | '
+                f'{p["long_frames_pct"]} | {p["sharp_while_moving_pct"]} | {p["blank_while_moving_pct"]} | {p["settle_ms"]} | '
+                f'{v["fps_median"]} / {v["sharp_while_moving_pct"]} | {p["MB"]} |'
+            )
     return '\n'.join(lines)
 
 
@@ -611,12 +764,21 @@ def main(args) -> None:
             print(json.dumps(r))
     browser = None
     if not args.server_only:
-        browser = browser_bench(args.slides, [int(x) for x in args.panes.split(',')], headed=args.headed,
-                                pan_seconds=args.seconds, pan_speed=args.speed, magnification=args.magnification,
-                                browser_args=args.browser_args.split() if args.browser_args else None,
-                                viewport=tuple(int(v) for v in args.viewport.lower().split('x')), http2=args.http2)
+        browser = browser_bench(
+            args.slides,
+            [int(x) for x in args.panes.split(',')],
+            headed=args.headed,
+            pan_seconds=args.seconds,
+            pan_speed=args.speed,
+            magnification=args.magnification,
+            browser_args=args.browser_args.split() if args.browser_args else None,
+            viewport=tuple(int(v) for v in args.viewport.lower().split('x')),
+            http2=args.http2,
+        )
     md = format_report(server, browser)
     print('\n' + md)
     if args.out:
-        Path(args.out).write_text(json.dumps({'server': server, 'browser': browser}, indent=2, default=str), encoding='utf-8')
+        Path(args.out).write_text(
+            json.dumps({'server': server, 'browser': browser}, indent=2, default=str), encoding='utf-8'
+        )
         Path(args.out).with_suffix('.md').write_text(md, encoding='utf-8')

@@ -25,6 +25,7 @@ Same contract as :mod:`wissi_viz.connectors.halolink`. Async clients work as-is:
     pc = WissiPathCore(client).bind_loop(nicegui_loop)   # only if the client is bound to that loop
     sid = pc.register(registry, 'S-998')                 # → 'pathcore-S-998'
 """
+
 from __future__ import annotations
 
 from .base import RemoteConnection

@@ -26,6 +26,7 @@ dotted paths (``"meta.size.width"``).
 Services whose tiles are not plain URLs (GraphQL-only, signed requests, SDK clients) should subclass
 :class:`~wissi_viz.connectors.RemoteConnection` with the app's existing client instead.
 """
+
 from __future__ import annotations
 
 import json
@@ -42,10 +43,12 @@ _ENV = re.compile(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}')
 
 def _expand(v: Any) -> Any:
     if isinstance(v, str):
+
         def sub(m):
             if m.group(1) not in os.environ:
                 raise KeyError(f'environment variable {m.group(1)} is not set (used in the connector config)')
             return os.environ[m.group(1)]
+
         return _ENV.sub(sub, v)
     if isinstance(v, dict):
         return {k: _expand(x) for k, x in v.items()}
@@ -98,11 +101,18 @@ class HttpTileConnection(RemoteConnection):
         self.timeout = float(cfg.get('timeout', self.timeout or 30))
         super().__init__()
         import httpx
-        self.http = httpx.Client(base_url=cfg['base_url'].rstrip('/'), headers=cfg.get('headers') or {},
-                                 timeout=self.timeout, verify=cfg.get('verify_tls', True), follow_redirects=True,
-                                 http2=bool(cfg.get('http2', False)),
-                                 limits=httpx.Limits(max_connections=self.max_concurrency + 2,
-                                                     max_keepalive_connections=self.max_concurrency))
+
+        self.http = httpx.Client(
+            base_url=cfg['base_url'].rstrip('/'),
+            headers=cfg.get('headers') or {},
+            timeout=self.timeout,
+            verify=cfg.get('verify_tls', True),
+            follow_redirects=True,
+            http2=bool(cfg.get('http2', False)),
+            limits=httpx.Limits(
+                max_connections=self.max_concurrency + 2, max_keepalive_connections=self.max_concurrency
+            ),
+        )
         t = cfg.get('tile') or {}
         self._empty = set(t.get('empty_status', [404, 204]))
         self._retry = set(t.get('retry_status', [429, 503]))
@@ -125,27 +135,51 @@ class HttpTileConnection(RemoteConnection):
         i = self.config.get('info') or {}
         fixed = i.get('pyramid') or self.config.get('pyramid')
         if fixed:
-            return RemoteImageInfo(width=int(fixed['width']), height=int(fixed['height']), tile_size=int(fixed.get('tile_size', 256)),
-                                   downsamples=fixed.get('downsamples'), mpp=fixed.get('mpp'), name=str(image_id),
-                                   version=str(fixed.get('version', '0')), overlap=int(fixed.get('overlap', 0)))
+            return RemoteImageInfo(
+                width=int(fixed['width']),
+                height=int(fixed['height']),
+                tile_size=int(fixed.get('tile_size', 256)),
+                downsamples=fixed.get('downsamples'),
+                mpp=fixed.get('mpp'),
+                name=str(image_id),
+                version=str(fixed.get('version', '0')),
+                overlap=int(fixed.get('overlap', 0)),
+            )
         if i.get('dzi_path'):
             pyr = RemotePyramid.from_dzi(self._req(self._fmt(i['dzi_path'], image_id)).content)
-            return RemoteImageInfo(width=pyr.width, height=pyr.height, pyramid=pyr, tile_size=pyr.tile_size, name=str(image_id),
-                                   mpp=i.get('mpp'), version=str(i.get('version', '0')))
+            return RemoteImageInfo(
+                width=pyr.width,
+                height=pyr.height,
+                pyramid=pyr,
+                tile_size=pyr.tile_size,
+                name=str(image_id),
+                mpp=i.get('mpp'),
+                version=str(i.get('version', '0')),
+            )
         m = self._req(self._fmt(i['path'], image_id), i.get('query')).json()
-        common = dict(width=int(_get(m, i.get('width', 'width'))), height=int(_get(m, i.get('height', 'height'))),
-                      mpp=_get(m, i.get('mpp')), name=str(_get(m, i.get('name'), image_id)),
-                      version=str(_get(m, i.get('version'), '0')))
+        common = {
+            'width': int(_get(m, i.get('width', 'width'))),
+            'height': int(_get(m, i.get('height', 'height'))),
+            'mpp': _get(m, i.get('mpp')),
+            'name': str(_get(m, i.get('name'), image_id)),
+            'version': str(_get(m, i.get('version'), '0')),
+        }
         ts = int(_get(m, i.get('tile_size', 'tile_size'), 256))
         dz = i.get('deepzoom_if')
         if i.get('deepzoom') or (dz and _get(m, dz['field']) == dz['equals']):
             return RemoteImageInfo(**common, deepzoom=True, tile_size=ts, overlap=int(_get(m, i.get('overlap'), 1)))
         if i.get('levels') and _get(m, i['levels']):
             lv = _get(m, i['levels'])
-            return RemoteImageInfo(**common, tile_size=ts, overlap=int(_get(m, i.get('overlap'), 0)),
-                                   levels=[(int(_get(x, i.get('level_width', 'width'))), int(_get(x, i.get('level_height', 'height'))))
-                                           for x in lv],
-                                   level_ids=[_get(x, i['level_id']) for x in lv] if i.get('level_id') else None)
+            return RemoteImageInfo(
+                **common,
+                tile_size=ts,
+                overlap=int(_get(m, i.get('overlap'), 0)),
+                levels=[
+                    (int(_get(x, i.get('level_width', 'width'))), int(_get(x, i.get('level_height', 'height'))))
+                    for x in lv
+                ],
+                level_ids=[_get(x, i['level_id']) for x in lv] if i.get('level_id') else None,
+            )
         if i.get('downsamples'):
             return RemoteImageInfo(**common, tile_size=ts, downsamples=[float(d) for d in _get(m, i['downsamples'])])
         return RemoteImageInfo(**common, tile_size=ts)
@@ -166,5 +200,8 @@ class HttpTileConnection(RemoteConnection):
         data = r.json() if a.get('format', 'geojson') in ('geojson', 'json') else r.text
         if isinstance(data, dict) and data.get('type') == 'FeatureCollection' and not data.get('features'):
             return []
-        return [AnnotationPayload(a.get('name', 'Annotations (API)'), data, format=a.get('format', 'geojson'),
-                                  units=a.get('units', 'px'))]
+        return [
+            AnnotationPayload(
+                a.get('name', 'Annotations (API)'), data, format=a.get('format', 'geojson'), units=a.get('units', 'px')
+            )
+        ]

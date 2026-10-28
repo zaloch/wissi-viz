@@ -9,6 +9,7 @@ Server side: build time and memory. Browser side:
 
     python benchmarks/overlay_bench.py /var/tmp/objbench/cells.parquet --mode new|legacy --out o.json
 """
+
 from __future__ import annotations
 
 import argparse
@@ -25,7 +26,9 @@ def main():
     ap.add_argument('table')
     ap.add_argument('--mode', choices=['new', 'legacy'], default='new')
     ap.add_argument('--panes', default='1,16')
-    ap.add_argument('--overlays', choices=['server', 'client'], default='server', help='new mode: where the pyramid is built')
+    ap.add_argument(
+        '--overlays', choices=['server', 'client'], default='server', help='new mode: where the pyramid is built'
+    )
     ap.add_argument('--viewport', default='1600x1000')
     ap.add_argument('--out', default=None)
     a = ap.parse_args()
@@ -40,14 +43,24 @@ def main():
     from wissi_viz.sources.callback import CallbackSource
 
     def rss():
-        return int([x for x in open('/proc/self/status', encoding='utf-8') if x.startswith('VmRSS')][0].split()[1]) / 1024
+        return (
+            int([x for x in open('/proc/self/status', encoding='utf-8') if x.startswith('VmRSS')][0].split()[1]) / 1024
+        )
+
     W, H = 100_000, 80_000
-    info = SlideInfo(width=W, height=H, levels=[Level(-(-W // 2**k), -(-H // 2**k), float(2**k)) for k in range(10)],
-                     tile_size=512, mpp=(0.25, 0.25))
+    info = SlideInfo(
+        width=W,
+        height=H,
+        levels=[Level(-(-W // 2**k), -(-H // 2**k), float(2**k)) for k in range(10)],
+        tile_size=512,
+        mpp=(0.25, 0.25),
+    )
     blank = np.full((512, 512, 3), 235, np.uint8)
     reg = SlideRegistry(warm=False)
     panes = [int(x) for x in a.panes.split(',')]
-    ids = [reg.add(CallbackSource(info, read_tile=lambda L, x, y, c: blank), slide_id=f's{i}') for i in range(max(panes))]
+    ids = [
+        reg.add(CallbackSource(info, read_tile=lambda L, x, y, c: blank), slide_id=f's{i}') for i in range(max(panes))
+    ]
     res = {'mode': a.mode if a.mode == 'legacy' else f'new/{a.overlays}'}
     r0 = rss()
     t = time.perf_counter()
@@ -61,6 +74,7 @@ def main():
     layer.compiled()
     res['server_compile_s'] = round(time.perf_counter() - t, 2)
     import gc
+
     gc.collect()
     res['server_rss_MB'] = round(rss() - r0)
     for sid in ids:
@@ -82,7 +96,9 @@ def main():
                 if msg['type'] == 'http.response.body':
                     counted['ann'] += len(msg.get('body', b''))
                 await send(msg)
+
             return await self.app(scope, receive, s2)
+
     with socket.socket() as s_:
         s_.bind(('127.0.0.1', 0))
         port = s_.getsockname()[1]
@@ -96,7 +112,9 @@ def main():
     res['runs'] = []
     with sync_playwright() as pw:
         for n in panes:
-            b = pw.chromium.launch(args=['--ignore-gpu-blocklist', '--enable-unsafe-swiftshader', '--enable-precise-memory-info'])
+            b = pw.chromium.launch(
+                args=['--ignore-gpu-blocklist', '--enable-unsafe-swiftshader', '--enable-precise-memory-info']
+            )
             pg = b.new_page(viewport={'width': vw, 'height': vh})
             pg.goto(f'http://127.0.0.1:{port}/demo')
             pg.wait_for_function('() => window.grid')
@@ -109,24 +127,33 @@ def main():
                 time.sleep(0.3)
                 pg.wait_for_function(idle, timeout=timeout * 1000, polling=50)
                 return time.perf_counter() - t0
+
             c0 = dict(counted)
             t0 = time.perf_counter()
-            pg.evaluate('([ids, om]) => { grid.setAttribute("controls", "false"); grid.setLod({overlays: om}); grid.setSync("all"); grid.setSlides(ids); }',
-                        [ids[:n], a.overlays])
+            pg.evaluate(
+                '([ids, om]) => { grid.setAttribute("controls", "false"); grid.setLod({overlays: om}); grid.setSync("all"); grid.setSlides(ids); }',
+                [ids[:n], a.overlays],
+            )
             until_idle()
             run['ready_ms'] = round(1000 * (time.perf_counter() - t0))
             run['fit_transfer_MB'] = round((counted['ann'] - c0['ann']) / 2**20, 2)
             run['fit_requests'] = counted['ann_req'] - c0['ann_req']
             run['gpu_overlay_MB'] = pg.evaluate('() => grid.stats().annotationMB')
-            run['js_heap_MB'] = pg.evaluate('() => performance.memory ? Math.round(performance.memory.usedJSHeapSize / 2 ** 20) : null')
-            run['client_build_ms'] = pg.evaluate("() => { const b = grid.panes.map(p => p.slide.layers.get('cells').buildMs).filter(Boolean); return b.length ? Math.round(b.reduce((x, y) => x + y) / b.length) : null; }")
-            click = '''async ([x, y]) => { const p = grid.panes[0], r = p.rect, el = grid.$canvas.getBoundingClientRect();
+            run['js_heap_MB'] = pg.evaluate(
+                '() => performance.memory ? Math.round(performance.memory.usedJSHeapSize / 2 ** 20) : null'
+            )
+            run['client_build_ms'] = pg.evaluate(
+                "() => { const b = grid.panes.map(p => p.slide.layers.get('cells').buildMs).filter(Boolean); return b.length ? Math.round(b.reduce((x, y) => x + y) / b.length) : null; }"
+            )
+            click = """async ([x, y]) => { const p = grid.panes[0], r = p.rect, el = grid.$canvas.getBoundingClientRect();
                 const sx = r.x + r.w / 2 + (x - p.view.cx) * p.view.scale, sy = r.y + r.h / 2 + (y - p.view.cy) * p.view.scale;
                 const t0 = performance.now();
                 const got = new Promise((res) => { grid.addEventListener('objectclick', (e) => res(e.detail), { once: true }); setTimeout(() => res(null), 10000); });
                 grid._click(p, { clientX: el.left + sx, clientY: el.top + sy, button: 0 });
-                const d = await got; return d ? Math.round(performance.now() - t0) : null; }'''
-            hit = pg.evaluate("async () => (await fetch(grid.panes[0].slide.url + '/annotations/hit?layer=cells&x=52000&y=41000&tol=2000')).json()")
+                const d = await got; return d ? Math.round(performance.now() - t0) : null; }"""
+            hit = pg.evaluate(
+                "async () => (await fetch(grid.panes[0].slide.url + '/annotations/hit?layer=cells&x=52000&y=41000&tol=2000')).json()"
+            )
             target = [hit['cx'], hit['cy']] if hit.get('index') is not None else [52000, 41000]
             run['click_fit_ms'] = pg.evaluate(click, target)
             # pan at fit: frame cost of drawing every pane's overlay
@@ -146,14 +173,21 @@ def main():
                 t0 = time.perf_counter()
                 pg.evaluate(f'() => grid.goTo("all", 52000, 41000, {{magnification: {mag}, animate: false}})')
                 until_idle()
-                run['zoom'].append({'mag': mag, 'ms': round(1000 * (time.perf_counter() - t0)),
-                                    'transfer_MB': round((counted['ann'] - c0['ann']) / 2**20, 3),
-                                    'requests': counted['ann_req'] - c0['ann_req']})
+                run['zoom'].append(
+                    {
+                        'mag': mag,
+                        'ms': round(1000 * (time.perf_counter() - t0)),
+                        'transfer_MB': round((counted['ann'] - c0['ann']) / 2**20, 3),
+                        'requests': counted['ann_req'] - c0['ann_req'],
+                    }
+                )
             pg.evaluate(f'() => grid.goTo("all", {target[0]}, {target[1]}, {{magnification: 40, animate: false}})')
             until_idle()
             run['click_40x_ms'] = pg.evaluate(click, target)
             run['gpu_overlay_MB_end'] = pg.evaluate('() => grid.stats().annotationMB')
-            run['js_heap_MB_end'] = pg.evaluate('() => performance.memory ? Math.round(performance.memory.usedJSHeapSize / 2 ** 20) : null')
+            run['js_heap_MB_end'] = pg.evaluate(
+                '() => performance.memory ? Math.round(performance.memory.usedJSHeapSize / 2 ** 20) : null'
+            )
             res['runs'].append(run)
             print(json.dumps(run), flush=True)
             b.close()

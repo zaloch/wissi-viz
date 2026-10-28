@@ -1,4 +1,5 @@
 """The core install (and the permissive extras) must stay permissively licensed."""
+
 from __future__ import annotations
 
 import re
@@ -6,10 +7,26 @@ from importlib.metadata import PackageNotFoundError, metadata, requires
 
 import pytest
 
-PERMISSIVE = re.compile(r'\b(MIT|BSD|Apache|ISC|HPND|MIT-CMU|PSF|Python Software Foundation|Zlib|0BSD|'
-                        r'Unlicense|CC0|Historical Permission)\b', re.I)
+PERMISSIVE = re.compile(
+    r'\b(MIT|BSD|Apache|ISC|HPND|MIT-CMU|PSF|Python Software Foundation|Zlib|0BSD|'
+    r'Unlicense|CC0|Historical Permission)\b',
+    re.I,
+)
 COPYLEFT = re.compile(r'\b(L?GPL|AGPL|MPL|EPL|CDDL|SSPL|EUPL|Lesser General Public|General Public License)\b', re.I)
-CORE_EXTRAS = ('analysis', 'io', 'slideio', 'nicegui', 'server', 'remote', 'bench', 'polars', 'desktop', 'sam', 'sam-onnx', 'all')
+CORE_EXTRAS = (
+    'analysis',
+    'io',
+    'slideio',
+    'nicegui',
+    'server',
+    'remote',
+    'bench',
+    'polars',
+    'desktop',
+    'sam',
+    'sam-onnx',
+    'all',
+)
 
 
 def _name(req: str) -> str:
@@ -60,7 +77,10 @@ def test_lgpl_backends_are_opt_in():
 def test_core_import_does_not_load_lgpl():
     import subprocess
     import sys
-    code = ('import sys, wissi_viz, wissi_viz.server, wissi_viz.sources.czi, wissi_viz.sources.tiff;'
-            'bad=[m for m in ("pylibCZIrw","openslide") if m in sys.modules]; print(bad); sys.exit(1 if bad else 0)')
+
+    code = (
+        'import sys, wissi_viz, wissi_viz.server, wissi_viz.sources.czi, wissi_viz.sources.tiff;'
+        'bad=[m for m in ("pylibCZIrw","openslide") if m in sys.modules]; print(bad); sys.exit(1 if bad else 0)'
+    )
     r = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr

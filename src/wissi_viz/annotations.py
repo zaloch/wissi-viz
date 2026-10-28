@@ -11,21 +11,30 @@ each layer is split into a quadtree of *buckets* (≈ vector tiles):
 
 Coordinates are always level-0 pixels of the slide.
 """
+
 from __future__ import annotations
 
 import colorsys
 import json
+import logging
 import os
+import shutil
 import struct
 import threading
 import xml.etree.ElementTree as ET
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 import numpy as np
 
-from .colormaps import CATEGORICAL as _CAT, DIVERGING as _DIVERGING, lut as _lut
+from .colormaps import CATEGORICAL as _CAT
+from .colormaps import DIVERGING as _DIVERGING
+from .colormaps import lut as _lut
+from .memory import overlay_cache
+
+log = logging.getLogger(__name__)
 
 POINT, POLYLINE, POLYGON = 0, 1, 2
 #: parametric kinds (bulk objects): defined by their bounding box alone, drawn analytically on the GPU
@@ -33,7 +42,6 @@ ELLIPSE, RECT = 3, 4
 #: benchmarks only: WISSI_LEGACY_OVERLAYS=1 restores the pre-0.5 path (vertex rings per object, one overview)
 LEGACY_OVERLAYS = os.environ.get('WISSI_LEGACY_OVERLAYS') == '1'
 MAGIC = b'WSA1'
-
 
 
 def _color_hex(c: Any) -> str | None:
@@ -46,10 +54,10 @@ def _color_hex(c: Any) -> str | None:
         return None
     if isinstance(c, (list, tuple)) and len(c) >= 3:
         r, g, b = (int(v * 255) if isinstance(v, float) and max(c[:3]) <= 1 else int(v) for v in c[:3])
-        return '#%02x%02x%02x' % (r & 255, g & 255, b & 255)
+        return f'#{r & 255:02x}{g & 255:02x}{b & 255:02x}'
     if isinstance(c, (int, np.integer)):  # packed int, assumed 0xRRGGBB (QuPath uses signed ARGB)
         v = int(c) & 0xFFFFFF
-        return '#%06x' % v
+        return f'#{v:06x}'
     return None
 
 
@@ -58,7 +66,7 @@ def _auto_color(i: int) -> str:
         return _CAT[i]
     h = (i * 0.61803398875) % 1.0
     r, g, b = colorsys.hsv_to_rgb(h, 0.75, 1.0)
-    return '#%02x%02x%02x' % (int(r * 255), int(g * 255), int(b * 255))
+    return f'#{int(r * 255):02x}{int(g * 255):02x}{int(b * 255):02x}'
 
 
 @dataclass
@@ -69,6 +77,7 @@ class AnnotationLayer:
     (``from_points`` / ``from_polygons`` / ``from_boxes`` / ``from_geojson`` /
     ``from_aperio_xml`` / ``from_halo_xml``).
     """
+
     name: str = 'annotations'
     #: class name → '#rrggbb'
     classes: dict[str, str] = field(default_factory=dict)
@@ -124,8 +133,15 @@ class AnnotationLayer:
             pass
         return self._class_index[cls]
 
-    def _add(self, kind: int, rings: Sequence[np.ndarray], cls: str | None, color: str | None,
-             props: dict | None, radius: float = 0.0) -> int:
+    def _add(
+        self,
+        kind: int,
+        rings: Sequence[np.ndarray],
+        cls: str | None,
+        color: str | None,
+        props: dict | None,
+        radius: float = 0.0,
+    ) -> int:
         with self._lock:
             self._materialize()
             if color and not cls:
@@ -140,16 +156,31 @@ class AnnotationLayer:
             self._dirty = True
             return len(self._kinds) - 1
 
-    def add_polygon(self, coords: Any, holes: Iterable[Any] = (), cls: str | None = None,
-                    color: str | None = None, props: dict | None = None) -> int:
+    def add_polygon(
+        self,
+        coords: Any,
+        holes: Iterable[Any] = (),
+        cls: str | None = None,
+        color: str | None = None,
+        props: dict | None = None,
+    ) -> int:
         rings = [_ring(coords, closed=True)] + [_ring(h, closed=True) for h in holes]
         return self._add(POLYGON, rings, cls, color, props)
 
-    def add_polyline(self, coords: Any, cls: str | None = None, color: str | None = None, props: dict | None = None) -> int:
+    def add_polyline(
+        self, coords: Any, cls: str | None = None, color: str | None = None, props: dict | None = None
+    ) -> int:
         return self._add(POLYLINE, [_ring(coords, closed=False)], cls, color, props)
 
-    def add_point(self, x: float, y: float, cls: str | None = None, color: str | None = None,
-                  props: dict | None = None, radius: float = 0.0) -> int:
+    def add_point(
+        self,
+        x: float,
+        y: float,
+        cls: str | None = None,
+        color: str | None = None,
+        props: dict | None = None,
+        radius: float = 0.0,
+    ) -> int:
         return self._add(POINT, [np.array([[x, y]], np.float32)], cls, color, props, radius)
 
     def add_rect(self, x: float, y: float, w: float, h: float, **kw) -> int:
@@ -174,7 +205,9 @@ class AnnotationLayer:
         bb = np.ascontiguousarray(np.asarray(bb, np.float32).reshape(-1, 4))
         n = len(bb)
         with self._lock:
-            if len(self._kinds) or self._block is not None or LEGACY_OVERLAYS:   # mixing with other features: classic storage
+            if (
+                len(self._kinds) or self._block is not None or LEGACY_OVERLAYS
+            ):  # mixing with other features: classic storage
                 kinds = np.broadcast_to(np.asarray(kind, np.uint8), (n,))
                 for k in np.unique(kinds):
                     sel = np.nonzero(kinds == k)[0]
@@ -189,7 +222,11 @@ class AnnotationLayer:
                 uniq, inv = np.unique(arr.astype(str), return_inverse=True)
                 lut = np.asarray([self._class_id(u, _color_hex(u)) for u in uniq], np.uint16)
                 ids = lut[inv]
-            self._block = {'kind': np.ascontiguousarray(np.broadcast_to(np.asarray(kind, np.uint8), (n,))), 'bb': bb, 'cls': ids}
+            self._block = {
+                'kind': np.ascontiguousarray(np.broadcast_to(np.asarray(kind, np.uint8), (n,))),
+                'bb': bb,
+                'cls': ids,
+            }
             self._dirty = True
 
     @staticmethod
@@ -197,8 +234,12 @@ class AnnotationLayer:
         """(kind, rings, radius) in classic storage for parametric features."""
         if kind == POINT:
             c = np.stack([(bb[:, 0] + bb[:, 2]) / 2, (bb[:, 1] + bb[:, 3]) / 2], 1).astype(np.float32)
-            return POINT, [c[i:i + 1] for i in range(len(c))], ((bb[:, 2] - bb[:, 0]) / 2).astype(np.float32)
-        return POLYGON, _box_rings(bb[:, 0], bb[:, 1], bb[:, 2], bb[:, 3], 'ellipse' if kind == ELLIPSE else 'rect'), None
+            return POINT, [c[i : i + 1] for i in range(len(c))], ((bb[:, 2] - bb[:, 0]) / 2).astype(np.float32)
+        return (
+            POLYGON,
+            _box_rings(bb[:, 0], bb[:, 1], bb[:, 2], bb[:, 3], 'ellipse' if kind == ELLIPSE else 'rect'),
+            None,
+        )
 
     def _materialize(self) -> None:
         """Convert the columnar block to classic per-feature storage (before incremental edits)."""
@@ -229,7 +270,9 @@ class AnnotationLayer:
                 out[k] = v.item() if hasattr(v, 'item') else v
         return out
 
-    def transform(self, scale: float | tuple[float, float] = 1.0, offset: tuple[float, float] = (0.0, 0.0)) -> 'AnnotationLayer':
+    def transform(
+        self, scale: float | tuple[float, float] = 1.0, offset: tuple[float, float] = (0.0, 0.0)
+    ) -> AnnotationLayer:
         """In place: ``p' = p * scale + offset`` for every vertex (e.g. µm → px: ``scale=1/mpp``;
         coordinates given at a pyramid level: ``scale=downsample``; ROI-relative: ``offset``)."""
         sx, sy = (scale, scale) if isinstance(scale, (int, float)) else scale
@@ -241,8 +284,15 @@ class AnnotationLayer:
             self._radius = [r * (abs(sx) + abs(sy)) / 2 for r in self._radius]
             if self._block is not None:
                 bb = self._block['bb'] * np.array([sx, sy, sx, sy], np.float32) + np.array([ox, oy, ox, oy], np.float32)
-                self._block['bb'] = np.stack([np.minimum(bb[:, 0], bb[:, 2]), np.minimum(bb[:, 1], bb[:, 3]),
-                                              np.maximum(bb[:, 0], bb[:, 2]), np.maximum(bb[:, 1], bb[:, 3])], 1)
+                self._block['bb'] = np.stack(
+                    [
+                        np.minimum(bb[:, 0], bb[:, 2]),
+                        np.minimum(bb[:, 1], bb[:, 3]),
+                        np.maximum(bb[:, 0], bb[:, 2]),
+                        np.maximum(bb[:, 1], bb[:, 3]),
+                    ],
+                    1,
+                )
             self._dirty = True
         return self
 
@@ -258,35 +308,57 @@ class AnnotationLayer:
 
     # ------------------------------------------------------------- bulk constructors
     @classmethod
-    def from_points(cls, xy: Any, classes: Sequence[str] | str | None = None, radius: Any = 0.0,
-                    name: str = 'points', props: Sequence[dict] | None = None, **kw) -> 'AnnotationLayer':
+    def from_points(
+        cls,
+        xy: Any,
+        classes: Sequence[str] | str | None = None,
+        radius: Any = 0.0,
+        name: str = 'points',
+        props: Sequence[dict] | None = None,
+        **kw,
+    ) -> AnnotationLayer:
         layer = cls(name=name, **kw)
         xy = np.asarray(xy, np.float32).reshape(-1, 2)
         n = len(xy)
         cl = _broadcast(classes, n)
         rad = np.broadcast_to(np.asarray(radius, np.float32), (n,))
-        if props is None:   # columnar: no per-point arrays
+        if props is None:  # columnar: no per-point arrays
             layer._bulk_shapes(POINT, np.stack([xy[:, 0] - rad, xy[:, 1] - rad, xy[:, 0] + rad, xy[:, 1] + rad], 1), cl)
         else:
-            layer._bulk(POINT, [xy[i:i + 1] for i in range(n)], cl, rad, props)
+            layer._bulk(POINT, [xy[i : i + 1] for i in range(n)], cl, rad, props)
         return layer
 
     @classmethod
-    def from_polygons(cls, polygons: Sequence[Any], classes: Sequence[str] | str | None = None,
-                      name: str = 'objects', props: Sequence[dict] | None = None, **kw) -> 'AnnotationLayer':
+    def from_polygons(
+        cls,
+        polygons: Sequence[Any],
+        classes: Sequence[str] | str | None = None,
+        name: str = 'objects',
+        props: Sequence[dict] | None = None,
+        **kw,
+    ) -> AnnotationLayer:
         layer = cls(name=name, **kw)
         rings = [_ring(p, closed=True) for p in polygons]
         layer._bulk(POLYGON, rings, _broadcast(classes, len(rings)), None, props)
         return layer
 
     @classmethod
-    def from_boxes(cls, xmin: Any, ymin: Any, xmax: Any, ymax: Any, classes: Sequence[str] | str | None = None,
-                   shape: str = 'ellipse', name: str = 'objects', props: Sequence[dict] | None = None,
-                   **kw) -> 'AnnotationLayer':
+    def from_boxes(
+        cls,
+        xmin: Any,
+        ymin: Any,
+        xmax: Any,
+        ymax: Any,
+        classes: Sequence[str] | str | None = None,
+        shape: str = 'ellipse',
+        name: str = 'objects',
+        props: Sequence[dict] | None = None,
+        **kw,
+    ) -> AnnotationLayer:
         """Cell/object bounding boxes, e.g. HALO object-data exports (XMin, XMax, YMin, YMax)."""
         layer = cls(name=name, **kw)
         n = len(np.atleast_1d(xmin))
-        if props is None:   # columnar, drawn as exact ellipses/rects on the GPU
+        if props is None:  # columnar, drawn as exact ellipses/rects on the GPU
             bb = np.stack([np.asarray(a, np.float32).reshape(-1) for a in (xmin, ymin, xmax, ymax)], 1)
             layer._bulk_shapes(ELLIPSE if shape == 'ellipse' else RECT, bb, _broadcast(classes, n))
         else:
@@ -294,10 +366,24 @@ class AnnotationLayer:
         return layer
 
     @classmethod
-    def from_table(cls, table: Any, *, name: str = 'objects', shape: str = 'auto', radius: float = 0.0,
-                   x: str | None = None, y: str | None = None, xmin: str | None = None, ymin: str | None = None,
-                   xmax: str | None = None, ymax: str | None = None, class_column: str | None = None,
-                   columns: str | Sequence[str] | None = 'auto', max_columns: int = 24, **kw) -> 'AnnotationLayer':
+    def from_table(
+        cls,
+        table: Any,
+        *,
+        name: str = 'objects',
+        shape: str = 'auto',
+        radius: float = 0.0,
+        x: str | None = None,
+        y: str | None = None,
+        xmin: str | None = None,
+        ymin: str | None = None,
+        xmax: str | None = None,
+        ymax: str | None = None,
+        class_column: str | None = None,
+        columns: str | Sequence[str] | None = 'auto',
+        max_columns: int = 24,
+        **kw,
+    ) -> AnnotationLayer:
         """Object/cell tables (HALO object data, PathCore/QuPath measurements, model outputs).
 
         ``table``: pandas DataFrame, dict of columns, or list of row dicts. Geometry columns are
@@ -307,20 +393,59 @@ class AnnotationLayer:
         """
         cols = _columns_of(table)
         n = len(next(iter(cols.values()))) if cols else 0
-        find = lambda given, *cands: given if given is not None else _find_col(cols, cands)  # noqa: E731
-        bx0, by0 = find(xmin, 'xmin', 'x_min', 'minx', 'bbox_x0', 'left'), find(ymin, 'ymin', 'y_min', 'miny', 'bbox_y0', 'top')
-        bx1, by1 = find(xmax, 'xmax', 'x_max', 'maxx', 'bbox_x1', 'right'), find(ymax, 'ymax', 'y_max', 'maxy', 'bbox_y1', 'bottom')
-        cx = find(x, 'x', 'cx', 'centroid_x', 'centroid x', 'x_centroid', 'xcenter', 'center_x', 'centroid x px', 'centroid x µm')
-        cy = find(y, 'y', 'cy', 'centroid_y', 'centroid y', 'y_centroid', 'ycenter', 'center_y', 'centroid y px', 'centroid y µm')
-        ccol = find(class_column, 'classification', 'class', 'label', 'phenotype', 'cell_type', 'celltype',
-                    'cell type', 'type', 'name')
+        find = lambda given, *cands: given if given is not None else _find_col(cols, cands)
+        bx0, by0 = (
+            find(xmin, 'xmin', 'x_min', 'minx', 'bbox_x0', 'left'),
+            find(ymin, 'ymin', 'y_min', 'miny', 'bbox_y0', 'top'),
+        )
+        bx1, by1 = (
+            find(xmax, 'xmax', 'x_max', 'maxx', 'bbox_x1', 'right'),
+            find(ymax, 'ymax', 'y_max', 'maxy', 'bbox_y1', 'bottom'),
+        )
+        cx = find(
+            x,
+            'x',
+            'cx',
+            'centroid_x',
+            'centroid x',
+            'x_centroid',
+            'xcenter',
+            'center_x',
+            'centroid x px',
+            'centroid x µm',
+        )
+        cy = find(
+            y,
+            'y',
+            'cy',
+            'centroid_y',
+            'centroid y',
+            'y_centroid',
+            'ycenter',
+            'center_y',
+            'centroid y px',
+            'centroid y µm',
+        )
+        ccol = find(
+            class_column,
+            'classification',
+            'class',
+            'label',
+            'phenotype',
+            'cell_type',
+            'celltype',
+            'cell type',
+            'type',
+            'name',
+        )
         classes = None if ccol is None else [None if v is None else str(v) for v in np.asarray(cols[ccol]).tolist()]
         have_box = None not in (bx0, by0, bx1, by1)
         if shape == 'auto':
             shape = 'ellipse' if have_box else 'point'
         if have_box and shape in ('ellipse', 'rect'):
-            layer = cls.from_boxes(cols[bx0], cols[by0], cols[bx1], cols[by1], classes=classes,
-                                   shape=shape, name=name, **kw)
+            layer = cls.from_boxes(
+                cols[bx0], cols[by0], cols[bx1], cols[by1], classes=classes, shape=shape, name=name, **kw
+            )
             geo = {bx0, by0, bx1, by1}
         elif cx is not None and cy is not None:
             xy = np.stack([np.asarray(cols[cx], np.float32), np.asarray(cols[cy], np.float32)], 1)
@@ -328,8 +453,13 @@ class AnnotationLayer:
             geo = {cx, cy}
         elif have_box:
             x0, y0, x1, y1 = (np.asarray(cols[k], np.float32) for k in (bx0, by0, bx1, by1))
-            layer = cls.from_points(np.stack([(x0 + x1) / 2, (y0 + y1) / 2], 1), classes=classes,
-                                    radius=np.maximum(x1 - x0, y1 - y0) / 2, name=name, **kw)
+            layer = cls.from_points(
+                np.stack([(x0 + x1) / 2, (y0 + y1) / 2], 1),
+                classes=classes,
+                radius=np.maximum(x1 - x0, y1 - y0) / 2,
+                name=name,
+                **kw,
+            )
             geo = {bx0, by0, bx1, by1}
         else:
             raise ValueError(f'no geometry columns found in {list(cols)[:20]}')
@@ -340,7 +470,7 @@ class AnnotationLayer:
         return layer
 
     @classmethod
-    def parse(cls, data: Any, fmt: str = 'auto', name: str | None = None, **kw) -> 'AnnotationLayer':
+    def parse(cls, data: Any, fmt: str = 'auto', name: str | None = None, **kw) -> AnnotationLayer:
         """Annotations as returned by an API: GeoJSON (dict/list/text), HALO XML text, Aperio XML text,
         or an object table. ``fmt``: 'auto' | 'geojson' | 'halo_xml' | 'aperio_xml' | 'table'."""
         if isinstance(data, AnnotationLayer):
@@ -352,8 +482,11 @@ class AnnotationLayer:
         if isinstance(data, str):
             t = data.lstrip()
             if fmt == 'auto':
-                fmt = 'geojson' if t[:1] in '{[' else ('halo_xml' if ('<V ' in t[:20000] or '<V>' in t[:20000])
-                                                       else 'aperio_xml')
+                fmt = (
+                    'geojson'
+                    if t[:1] in '{['
+                    else ('halo_xml' if ('<V ' in t[:20000] or '<V>' in t[:20000]) else 'aperio_xml')
+                )
         if fmt == 'halo_xml':
             return cls.from_halo_xml(data, name=name, **kw)
         if fmt == 'aperio_xml':
@@ -379,7 +512,7 @@ class AnnotationLayer:
             self._dirty = True
 
     @classmethod
-    def from_geojson(cls, data: Any, name: str | None = None, **kw) -> 'AnnotationLayer':
+    def from_geojson(cls, data: Any, name: str | None = None, **kw) -> AnnotationLayer:
         """GeoJSON Feature/FeatureCollection/geometry (QuPath, HALO GeoJSON export, …), or a path."""
         if isinstance(data, (str, Path)) and Path(str(data)).exists():
             p = Path(data)
@@ -388,8 +521,11 @@ class AnnotationLayer:
         elif isinstance(data, (str, bytes)):
             data = json.loads(data)
         layer = cls(name=name or 'geojson', **kw)
-        feats = data.get('features') if isinstance(data, dict) and 'features' in data else (
-            data if isinstance(data, list) else [data])
+        feats = (
+            data.get('features')
+            if isinstance(data, dict) and 'features' in data
+            else (data if isinstance(data, list) else [data])
+        )
         for f in feats:
             geom = f.get('geometry') if f.get('type') == 'Feature' else f
             if not geom:
@@ -400,7 +536,7 @@ class AnnotationLayer:
         return layer
 
     @classmethod
-    def from_aperio_xml(cls, path: str | Path, name: str | None = None, **kw) -> 'AnnotationLayer':
+    def from_aperio_xml(cls, path: str | Path, name: str | None = None, **kw) -> AnnotationLayer:
         """Aperio ImageScope / eSlide Manager XML (path, or XML text/bytes from an API)."""
         root, stem = _xml_root(path)
         layer = cls(name=name or stem, **kw)
@@ -414,14 +550,23 @@ class AnnotationLayer:
                     continue
                 t = reg.get('Type', '0')
                 props = {k: reg.get(k) for k in ('Id', 'Text', 'Area', 'Length') if reg.get(k)}
-                kind = ('ellipse' if t == '2' and len(v) >= 2 else 'line' if t in ('3', '4') or len(v) == 2
-                        else 'point' if len(v) == 1 else 'polygon')
+                kind = (
+                    'ellipse'
+                    if t == '2' and len(v) >= 2
+                    else 'line'
+                    if t in ('3', '4') or len(v) == 2
+                    else 'point'
+                    if len(v) == 1
+                    else 'polygon'
+                )
                 regions.append((kind, v, props, reg.get('NegativeROA') == '1'))
             _add_regions(layer, regions, aname, color)
         return layer
 
     @classmethod
-    def from_asap_xml(cls, path: str | Path, name: str | None = None, groups: dict | None = None, **kw) -> 'AnnotationLayer':
+    def from_asap_xml(
+        cls, path: str | Path, name: str | None = None, groups: dict | None = None, **kw
+    ) -> AnnotationLayer:
         """ASAP XML (CAMELYON16/17, many challenge datasets): ``<ASAP_Annotations>`` with polygons, rectangles, dots and
         splines; the class is the annotation's ``PartOfGroup`` (renamed through ``groups``, e.g. {'_2': 'Exclusion'})."""
         root, stem = _xml_root(path)
@@ -429,8 +574,13 @@ class AnnotationLayer:
         colors = {g.get('Name'): g.get('Color') for g in root.iter('Group')}
         groups = groups or {}
         for ann in root.iter('Annotation'):
-            v = np.array([[float(c.get('X')), float(c.get('Y'))] for c in sorted(
-                ann.iter('Coordinate'), key=lambda c: int(c.get('Order') or 0))], np.float32)
+            v = np.array(
+                [
+                    [float(c.get('X')), float(c.get('Y'))]
+                    for c in sorted(ann.iter('Coordinate'), key=lambda c: int(c.get('Order') or 0))
+                ],
+                np.float32,
+            )
             if not len(v):
                 continue
             grp = ann.get('PartOfGroup') or ann.get('Name') or 'annotation'
@@ -444,13 +594,15 @@ class AnnotationLayer:
                 (x0, y0), (x1, y1) = v.min(0), v.max(0)
                 layer.add_rect(x0, y0, x1 - x0, y1 - y0, cls=cname, color=color)
             elif len(v) >= 3:
-                layer.add_polygon(v, cls=cname, color=color, props={'name': ann.get('Name')} if ann.get('Name') else None)
+                layer.add_polygon(
+                    v, cls=cname, color=color, props={'name': ann.get('Name')} if ann.get('Name') else None
+                )
             else:
                 layer.add_polyline(v, cls=cname, color=color)
         return layer
 
     @classmethod
-    def from_halo_xml(cls, path: str | Path, name: str | None = None, **kw) -> 'AnnotationLayer':
+    def from_halo_xml(cls, path: str | Path, name: str | None = None, **kw) -> AnnotationLayer:
         """HALO ``.annotations`` XML (path, or XML text/bytes as returned by an API)."""
         root, stem = _xml_root(path)
         layer = cls(name=name or stem, **kw)
@@ -463,15 +615,23 @@ class AnnotationLayer:
                 if len(v) == 0:
                     continue
                 t = (reg.get('Type') or 'Polygon').lower()
-                kind = ('rect' if t == 'rectangle' and len(v) >= 2 else 'ellipse' if t == 'ellipse' and len(v) >= 2
-                        else 'line' if t in ('ruler', 'line', 'polyline') or len(v) == 2
-                        else 'point' if t in ('pin', 'point') or len(v) == 1 else 'polygon')
+                kind = (
+                    'rect'
+                    if t == 'rectangle' and len(v) >= 2
+                    else 'ellipse'
+                    if t == 'ellipse' and len(v) >= 2
+                    else 'line'
+                    if t in ('ruler', 'line', 'polyline') or len(v) == 2
+                    else 'point'
+                    if t in ('pin', 'point') or len(v) == 1
+                    else 'polygon'
+                )
                 regions.append((kind, v, None, reg.get('NegativeROA') == '1'))
             _add_regions(layer, regions, aname, color)
         return layer
 
     @classmethod
-    def load(cls, path: str | Path, **kw) -> 'AnnotationLayer':
+    def load(cls, path: str | Path, **kw) -> AnnotationLayer:
         """Load by extension: .geojson/.json, .annotations (HALO), .xml (Aperio or HALO), .parquet (GeoParquet),
         .coco.json (COCO). See ``wissi_viz.annio`` for every format and for writing them."""
         p = Path(path)
@@ -479,6 +639,7 @@ class AnnotationLayer:
         low = p.name.lower()
         if ext in ('.parquet', '.geoparquet') or low.endswith('.coco.json'):
             from . import annio
+
             return annio.load(p, name=kw.pop('name', None))
         if ext in ('.geojson', '.json'):
             return cls.from_geojson(p, **kw)
@@ -495,6 +656,7 @@ class AnnotationLayer:
         """Write this layer as GeoParquet (.parquet, the efficient default), GeoJSON / QuPath, HALO or Aperio XML,
         CSV, COCO or a label-mask TIFF — by extension or ``fmt``. See :func:`wissi_viz.annio.export`."""
         from . import annio
+
         return annio.export(self, path, fmt, **kw)
 
     def to_geojson(self) -> dict:
@@ -503,7 +665,7 @@ class AnnotationLayer:
         feats = []
         for f in range(len(self._kinds)):
             r0, r1 = c.feat_ring_off[f], c.feat_ring_off[f + 1]
-            rings = [c.coords[c.ring_off[r]:c.ring_off[r + 1]].tolist() for r in range(r0, r1)]
+            rings = [c.coords[c.ring_off[r] : c.ring_off[r + 1]].tolist() for r in range(r0, r1)]
             k = self._kinds[f]
             if k == POINT:
                 g = {'type': 'Point', 'coordinates': rings[0][0]}
@@ -523,19 +685,34 @@ class AnnotationLayer:
                 if k == POINT:
                     g = {'type': 'Point', 'coordinates': [(x0 + x1) / 2, (y0 + y1) / 2]}
                 elif k == ELLIPSE:
-                    ring = np.stack([(x0 + x1) / 2 + (x1 - x0) / 2 * np.cos(t), (y0 + y1) / 2 + (y1 - y0) / 2 * np.sin(t)], 1).tolist()
+                    ring = np.stack(
+                        [(x0 + x1) / 2 + (x1 - x0) / 2 * np.cos(t), (y0 + y1) / 2 + (y1 - y0) / 2 * np.sin(t)], 1
+                    ).tolist()
                     g = {'type': 'Polygon', 'coordinates': [ring + ring[:1]]}
                 else:
                     g = {'type': 'Polygon', 'coordinates': [[[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]]}
                 cname = inv.get(ci, '')
-                feats.append({'type': 'Feature', 'geometry': g,
-                              'properties': {'classification': {'name': cname, 'color': self.classes.get(cname)}}})
+                feats.append(
+                    {
+                        'type': 'Feature',
+                        'geometry': g,
+                        'properties': {'classification': {'name': cname, 'color': self.classes.get(cname)}},
+                    }
+                )
         return {'type': 'FeatureCollection', 'features': feats}
 
     # ------------------------------------------------------------- continuous colouring
-    def color_by(self, values: Any, cmap: str = 'viridis', vmin: float | None = None, vmax: float | None = None,
-                 label: str | None = None, log: bool = False, nan_color: str = '#7f7f7f',
-                 percentiles: tuple[float, float] = (1.0, 99.0)) -> 'AnnotationLayer':
+    def color_by(
+        self,
+        values: Any,
+        cmap: str = 'viridis',
+        vmin: float | None = None,
+        vmax: float | None = None,
+        label: str | None = None,
+        log: bool = False,
+        nan_color: str = '#7f7f7f',
+        percentiles: tuple[float, float] = (1.0, 99.0),
+    ) -> AnnotationLayer:
         """Colour every feature by a number (distance, density, marker intensity, score …).
 
         ``values``: one number per feature, or the name of a property column. Limits default to the
@@ -552,11 +729,16 @@ class AnnotationLayer:
                 if col in self._columns:
                     v = np.full(len(self), np.nan, np.float64)
                     c = np.asarray(self._columns[col], np.float64)
-                    v[self._col_offset:self._col_offset + len(c)] = c
+                    v[self._col_offset : self._col_offset + len(c)] = c
                     values = v
                 else:
-                    values = np.array([float(q) if isinstance(q := (p or {}).get(col), (int, float)) else np.nan
-                                       for p in self._props], np.float64)
+                    values = np.array(
+                        [
+                            float(q) if isinstance(q := (p or {}).get(col), (int, float)) else np.nan
+                            for p in self._props
+                        ],
+                        np.float64,
+                    )
             v = np.asarray(values, np.float64).ravel()
             if len(v) != len(self):
                 raise ValueError(f'color_by: {len(v)} values for {len(self)} features')
@@ -573,8 +755,15 @@ class AnnotationLayer:
             elif log:
                 vmin, vmax = np.log10(vmin), np.log10(vmax)
             self._values = v
-            self.colormap = {'name': cmap, 'vmin': float(vmin), 'vmax': float(vmax if vmax > vmin else vmin + 1e-9),
-                             'label': label or '', 'log': bool(log), 'lut': _lut(cmap, 256), 'nan': nan_color}
+            self.colormap = {
+                'name': cmap,
+                'vmin': float(vmin),
+                'vmax': float(vmax if vmax > vmin else vmin + 1e-9),
+                'label': label or '',
+                'log': bool(log),
+                'lut': _lut(cmap, 256),
+                'nan': nan_color,
+            }
             self._dirty = True
         return self
 
@@ -601,7 +790,7 @@ class AnnotationLayer:
         with self._lock:
             self._dirty = True
 
-    def compiled(self) -> '_Compiled':
+    def compiled(self) -> _Compiled:
         with self._lock:
             if self._dirty or self._compiled is None:
                 self._compiled = _Compiled(self)
@@ -612,15 +801,27 @@ class AnnotationLayer:
     def meta(self) -> dict:
         c = self.compiled()
         inv = sorted(self._class_index.items(), key=lambda kv: kv[1])
-        return {'name': self.name, 'version': self.version, 'count': int(c.n),
-                'pyramid': c.pyr_meta, 'median_size': c.median_size,
-                'client_ok': bool(self._block is not None and not self._kinds),
-                'buckets': int(len(c.buckets)), 'bbox': c.bbox,
-                'classes': [{'name': k, 'color': self.classes.get(k, '#ffffff')} for k, _ in inv],
-                'colormap': self.colormap,
-                'style': {'line_width': self.line_width, 'fill_opacity': self.fill_opacity,
-                          'point_size': self.point_size, 'visible': self.visible,
-                          'detail_min_px': self.detail_min_px, 'z': self.z, 'overview': self.overview}}
+        return {
+            'name': self.name,
+            'version': self.version,
+            'count': int(c.n),
+            'pyramid': c.pyr_meta,
+            'median_size': c.median_size,
+            'client_ok': bool(self._block is not None and not self._kinds),
+            'buckets': int(len(c.buckets)),
+            'bbox': c.bbox,
+            'classes': [{'name': k, 'color': self.classes.get(k, '#ffffff')} for k, _ in inv],
+            'colormap': self.colormap,
+            'style': {
+                'line_width': self.line_width,
+                'fill_opacity': self.fill_opacity,
+                'point_size': self.point_size,
+                'visible': self.visible,
+                'detail_min_px': self.detail_min_px,
+                'z': self.z,
+                'overview': self.overview,
+            },
+        }
 
     def overview_bytes(self) -> bytes:
         return self.compiled().overview(self.meta())
@@ -629,33 +830,42 @@ class AnnotationLayer:
         return self.compiled().bucket(i)
 
     # ------------------------------------------------------------- persistent compiled form
-    _SAVE_FORMAT = 3   # bump whenever the compiled/pyramid layout changes (old caches are rebuilt)
+    _SAVE_FORMAT = 3  # bump whenever the compiled/pyramid layout changes (old caches are rebuilt)
 
     def save(self, path: str | Path) -> Path:
         """Write the layer *and its compiled form* (buckets, object pyramid) as a folder of .npy files. ``open()``
         memory-maps it back in milliseconds — no parsing, no recompiling — and several server processes share one
         copy through the OS page cache. Columnar (bulk object) layers only."""
         if len(self._kinds) or self._block is None:
-            raise ValueError('save() supports bulk object layers (from_table / from_boxes / from_points / ObjectTable.to_layer)')
+            raise ValueError(
+                'save() supports bulk object layers (from_table / from_boxes / from_points / ObjectTable.to_layer)'
+            )
         c = self.compiled()
         d = Path(path)
         tag = f'{os.getpid()}-{os.urandom(3).hex()}'
-        tmp = d.with_name(f'{d.name}.{tag}.tmp')       # unique: several workers may build the same cache at once
+        tmp = d.with_name(f'{d.name}.{tag}.tmp')  # unique: several workers may build the same cache at once
         tmp.mkdir(parents=True, exist_ok=True)
-        arrs = {'block_kind': self._block['kind'], 'block_bb': self._block['bb'], 'block_cls': self._block['cls'],
-                'order': c.order.astype(np.int64), 'buckets': np.asarray(c.buckets, np.float64).reshape(-1, 8),
-                'size': np.asarray(c.size, np.float32), 'cx': np.asarray(c.cx, np.float32), 'cy': np.asarray(c.cy, np.float32)}
+        arrs = {
+            'block_kind': self._block['kind'],
+            'block_bb': self._block['bb'],
+            'block_cls': self._block['cls'],
+            'order': c.order.astype(np.int64),
+            'buckets': np.asarray(c.buckets, np.float64).reshape(-1, 8),
+            'size': np.asarray(c.size, np.float32),
+            'cx': np.asarray(c.cx, np.float32),
+            'cy': np.asarray(c.cy, np.float32),
+        }
         if self._values is not None:
             arrs['values'] = np.asarray(self._values)
         cols = []
-        for i, (k, v) in enumerate(self._columns.items()):   # each entry records its own file index
+        for i, (k, v) in enumerate(self._columns.items()):  # each entry records its own file index
             if hasattr(v, 'codes'):
                 arrs[f'colcodes_{i}'], arrs[f'colcats_{i}'] = v.codes, np.asarray(v.categories, dtype=str)
                 cols.append([k, 'cat', i])
             elif np.asarray(v).dtype.kind in 'biuf':
                 arrs[f'col_{i}'] = np.asarray(v)
                 cols.append([k, 'num', i])
-            elif np.asarray(v).dtype.kind in 'OUS':                  # text → categorical codes (kept clickable)
+            elif np.asarray(v).dtype.kind in 'OUS':  # text → categorical codes (kept clickable)
                 cats, codes = np.unique(np.asarray(v).astype(str), return_inverse=True)
                 arrs[f'colcodes_{i}'] = codes.astype(np.int32 if len(cats) > 32767 else np.int16)
                 arrs[f'colcats_{i}'] = cats
@@ -666,36 +876,56 @@ class AnnotationLayer:
                     if name in L:
                         arrs[f'pyr{li}_{name}'] = L[name]
                 ks = sorted(L['index'])
-                arrs[f'pyr{li}_tiles'] = np.asarray([[tx, ty, *L['index'][(tx, ty)]] for tx, ty in ks], np.int64).reshape(-1, 4)
+                arrs[f'pyr{li}_tiles'] = np.asarray(
+                    [[tx, ty, *L['index'][(tx, ty)]] for tx, ty in ks], np.int64
+                ).reshape(-1, 4)
             arrs['slot_of'] = c._slot_of
         for k, v in arrs.items():
             np.save(tmp / f'{k}.npy', np.ascontiguousarray(v), allow_pickle=False)
-        meta = {'format': self._SAVE_FORMAT, 'name': self.name, 'classes': self.classes,
-                'class_index': self._class_index, 'colormap': self.colormap, 'columns': cols,
-                'style': {k: getattr(self, k) for k in ('line_width', 'fill_opacity', 'point_size', 'visible',
-                                                        'detail_min_px', 'z', 'overview', 'pyramid')},
-                'median_size': c.median_size, 'bbox': c.bbox, 'pyr_meta': c.pyr_meta,
-                'pyr_levels': [{'k': L['k'], 'span': L['span'], 'raw': L['raw']} for L in c._pyr] if c.pyr_meta else []}
+        meta = {
+            'format': self._SAVE_FORMAT,
+            'name': self.name,
+            'classes': self.classes,
+            'class_index': self._class_index,
+            'colormap': self.colormap,
+            'columns': cols,
+            'style': {
+                k: getattr(self, k)
+                for k in (
+                    'line_width',
+                    'fill_opacity',
+                    'point_size',
+                    'visible',
+                    'detail_min_px',
+                    'z',
+                    'overview',
+                    'pyramid',
+                )
+            },
+            'median_size': c.median_size,
+            'bbox': c.bbox,
+            'pyr_meta': c.pyr_meta,
+            'pyr_levels': [{'k': L['k'], 'span': L['span'], 'raw': L['raw']} for L in c._pyr] if c.pyr_meta else [],
+        }
         (tmp / 'meta.json').write_text(json.dumps(meta), encoding='utf-8')
         if d.exists():
-            import shutil
-            shutil.rmtree(d, ignore_errors=True)   # Windows: files still memory-mapped elsewhere can't be removed
+            shutil.rmtree(d, ignore_errors=True)  # Windows: files still memory-mapped elsewhere can't be removed
         try:
             os.replace(tmp, d)
             return d
-        except OSError:                           # d still there (mapped, or another worker won the race)
+        except OSError:  # d still there (mapped, or another worker won the race)
             alt = d.with_name(f'{d.name}-{tag}')
             os.replace(tmp, alt)
             return alt
 
     @classmethod
-    def open(cls, path: str | Path, version: int | None = None) -> 'AnnotationLayer':
+    def open(cls, path: str | Path, version: int | None = None) -> AnnotationLayer:
         """Memory-map a layer written by ``save()``."""
         d = Path(path)
         meta = json.loads((d / 'meta.json').read_text(encoding='utf-8'))
         if meta.get('format') != cls._SAVE_FORMAT:
             raise ValueError(f'{d}: unsupported layer format {meta.get("format")}')
-        ld = lambda k: np.load(d / f'{k}.npy', mmap_mode='r', allow_pickle=False)  # noqa: E731
+        ld = lambda k: np.load(d / f'{k}.npy', mmap_mode='r', allow_pickle=False)
         st = meta['style']
         L = cls(name=meta['name'], classes=dict(meta['classes']), **st)
         L._class_index = {k: int(v) for k, v in meta['class_index'].items()}
@@ -704,13 +934,18 @@ class AnnotationLayer:
         if (d / 'values.npy').exists():
             L._values = np.asarray(ld('values'))
         from .objects import _Categorical
+
         cols = {}
         for j, entry in enumerate(meta['columns']):
             k, kind = entry[0], entry[1]
             i = entry[2] if len(entry) > 2 else j
             if kind == 'cat':
                 cat = _Categorical.__new__(_Categorical)
-                cat.codes, cat.categories, cat.dtype = ld(f'colcodes_{i}'), np.load(d / f'colcats_{i}.npy'), np.dtype(object)
+                cat.codes, cat.categories, cat.dtype = (
+                    ld(f'colcodes_{i}'),
+                    np.load(d / f'colcats_{i}.npy'),
+                    np.dtype(object),
+                )
                 cols[k] = cat
             else:
                 cols[k] = ld(f'col_{i}')
@@ -728,9 +963,9 @@ class AnnotationLayer:
         return not LEGACY_OVERLAYS and bool(self.pyramid) and (self.pyramid != 'auto' or n >= PYRAMID_MIN)
 
 
-PYRAMID_MIN = 50_000   # layers at least this large get an object pyramid (smaller ones ship one overview)
-PYR_TILE_BINS = 128    # pyramid tiles are 128 × 128 bins (a 400×250 pane of a 16-grid needs ~100×62)
-PYR_SLOTS = 8          # aggregated dots carry counts for the 8 most common classes (+ 'other' folded into slot 7)
+PYRAMID_MIN = 50_000  # layers at least this large get an object pyramid (smaller ones ship one overview)
+PYR_TILE_BINS = 128  # pyramid tiles are 128 × 128 bins (a 400×250 pane of a 16-grid needs ~100×62)
+PYR_SLOTS = 8  # aggregated dots carry counts for the 8 most common classes (+ 'other' folded into slot 7)
 
 
 class _Compiled:
@@ -742,8 +977,8 @@ class _Compiled:
     median_size: float = 0.0
 
     def __init__(self, layer: AnnotationLayer) -> None:
-        m = len(layer._kinds)                      # classic features (with vertex rings) come first …
-        blk = layer._block                         # … then the columnar parametric block (no rings)
+        m = len(layer._kinds)  # classic features (with vertex rings) come first …
+        blk = layer._block  # … then the columnar parametric block (no rings)
         nb = 0 if blk is None else len(blk['kind'])
         n = m + nb
         self.n = n
@@ -757,12 +992,11 @@ class _Compiled:
         lens = np.fromiter((len(r) for r in layer._rings), np.int64, len(layer._rings))
         self.ring_off = np.zeros(len(lens) + 1, np.int64)
         np.cumsum(lens, out=self.ring_off[1:])
-        self.coords = (np.concatenate(layer._rings).astype(np.float32) if layer._rings
-                       else np.zeros((0, 2), np.float32))
+        self.coords = np.concatenate(layer._rings).astype(np.float32) if layer._rings else np.zeros((0, 2), np.float32)
         nr = np.concatenate([np.asarray(layer._feat_nrings, np.int64), np.zeros(nb, np.int64)])
         self.feat_ring_off = np.zeros(n + 1, np.int64)
         np.cumsum(nr, out=self.feat_ring_off[1:])
-        self._token = object()   # owner key in the process-wide overlay cache (wissi_viz.memory.overlay_cache)
+        self._token = object()  # owner key in the process-wide overlay cache (wissi_viz.memory.overlay_cache)
         self._lock = threading.Lock()
         if n == 0:
             self.bb = np.zeros((0, 4), np.float32)
@@ -774,8 +1008,15 @@ class _Compiled:
         if m:
             vs = self.ring_off[self.feat_ring_off[:m]]
             x, y = self.coords[:, 0], self.coords[:, 1]
-            bb = np.stack([np.minimum.reduceat(x, vs), np.minimum.reduceat(y, vs),
-                           np.maximum.reduceat(x, vs), np.maximum.reduceat(y, vs)], 1).astype(np.float32)
+            bb = np.stack(
+                [
+                    np.minimum.reduceat(x, vs),
+                    np.minimum.reduceat(y, vs),
+                    np.maximum.reduceat(x, vs),
+                    np.maximum.reduceat(y, vs),
+                ],
+                1,
+            ).astype(np.float32)
             r = self.radius[:m]
             bb[:, 0] -= r
             bb[:, 1] -= r
@@ -788,7 +1029,7 @@ class _Compiled:
         self.bb = bb
         self.size = np.maximum(bb[:, 2] - bb[:, 0], bb[:, 3] - bb[:, 1])
         self.cx, self.cy = (bb[:, 0] + bb[:, 2]) / 2, (bb[:, 1] + bb[:, 3]) / 2
-        self.nverts = (self.ring_off[self.feat_ring_off[1:]] - self.ring_off[self.feat_ring_off[:-1]])
+        self.nverts = self.ring_off[self.feat_ring_off[1:]] - self.ring_off[self.feat_ring_off[:-1]]
         self.bbox = [float(bb[:, 0].min()), float(bb[:, 1].min()), float(bb[:, 2].max()), float(bb[:, 3].max())]
         # Separate size tiers first (cells vs. regions vs. huge ROIs) so each bucket's median
         # size is representative and the level-of-detail switch is per tier.
@@ -798,15 +1039,32 @@ class _Compiled:
             idx = np.nonzero((self.size >= lo) & (self.size < hi))[0]
             if len(idx):
                 b = bb[idx]
-                self._split(idx, float(b[:, 0].min()), float(b[:, 1].min()), float(b[:, 2].max()),
-                            float(b[:, 3].max()), depth=0, out=groups)
+                self._split(
+                    idx,
+                    float(b[:, 0].min()),
+                    float(b[:, 1].min()),
+                    float(b[:, 2].max()),
+                    float(b[:, 3].max()),
+                    depth=0,
+                    out=groups,
+                )
         self.order = np.concatenate(groups)
         self.buckets = []
         start = 0
         for g in groups:
             b = bb[g]
-            self.buckets.append((float(b[:, 0].min()), float(b[:, 1].min()), float(b[:, 2].max()), float(b[:, 3].max()),
-                                 start, len(g), float(np.median(self.size[g])), float(self.size[g].max())))
+            self.buckets.append(
+                (
+                    float(b[:, 0].min()),
+                    float(b[:, 1].min()),
+                    float(b[:, 2].max()),
+                    float(b[:, 3].max()),
+                    start,
+                    len(g),
+                    float(np.median(self.size[g])),
+                    float(self.size[g].max()),
+                )
+            )
             start += len(g)
         self.median_size = float(np.median(self.size))
         if layer.use_pyramid(n):
@@ -833,9 +1091,9 @@ class _Compiled:
         other_class = None
         if other:  # rarer classes share the last slot ('other'), drawn in the colour of the most common of them
             mask = np.ones(ncls, bool)
-            mask[top[:PYR_SLOTS - 1]] = False
+            mask[top[: PYR_SLOTS - 1]] = False
             slot_of[mask] = PYR_SLOTS - 1
-            top = top[:PYR_SLOTS - 1]
+            top = top[: PYR_SLOTS - 1]
             other_class = int(np.argmax(np.where(mask, counts, -1)))
         self._slot_of = slot_of
         levels = []
@@ -853,9 +1111,12 @@ class _Compiled:
         else:
             H = None
             slot = slot_of[self.cls.astype(np.int64)].astype(np.int64)
-        tc = np.asarray(top + [other_class if other_class is not None else (top[-1] if top else 0)] * (PYR_SLOTS - len(top)), np.int64)
+        tc = np.asarray(
+            top + [other_class if other_class is not None else (top[-1] if top else 0)] * (PYR_SLOTS - len(top)),
+            np.int64,
+        )
         for k in range(k0 + 1, kmax + 1):
-            s_ = float(2 ** k)
+            s_ = float(2**k)
             bx, by = np.floor(x / s_).astype(np.int64), np.floor(y / s_).astype(np.int64)
             key = by * (int(bx.max()) + 2) + bx
             o = np.argsort(key, kind='stable')
@@ -875,18 +1136,27 @@ class _Compiled:
                 else:
                     H = np.add.reduceat(H[o], starts, axis=0)
                 hmax = H.max(1, keepdims=True)
-                agg['hist'] = np.where(H > 0, np.maximum(1, np.round(255 * H / np.maximum(hmax, 1))), 0).astype(np.uint8)
+                agg['hist'] = np.where(H > 0, np.maximum(1, np.round(255 * H / np.maximum(hmax, 1))), 0).astype(
+                    np.uint8
+                )
                 agg['col'] = tc[H.argmax(1)].astype(np.uint16)
             w = W
             levels.append(self._pyr_tiles(x, y, k, agg, raw=False))
         self._pyr = levels
-        self.pyr_meta = {'k0': k0, 'kmax': kmax, 'levels': len(levels), 'tile_bins': PYR_TILE_BINS,
-                         'mode': 'value' if value_mode else 'class',
-                         'slots': [int(c) for c in top] + ([-1] if other else []), 'other_class': other_class,
-                         'tiles': [len(L['index']) for L in levels], 'points': [int(len(L['x'])) for L in levels]}
+        self.pyr_meta = {
+            'k0': k0,
+            'kmax': kmax,
+            'levels': len(levels),
+            'tile_bins': PYR_TILE_BINS,
+            'mode': 'value' if value_mode else 'class',
+            'slots': [int(c) for c in top] + ([-1] if other else []),
+            'other_class': other_class,
+            'tiles': [len(L['index']) for L in levels],
+            'points': [int(len(L['x'])) for L in levels],
+        }
 
     @classmethod
-    def _from_saved(cls, layer: AnnotationLayer, meta: dict, ld, d: Path) -> '_Compiled':
+    def _from_saved(cls, layer: AnnotationLayer, meta: dict, ld, d: Path) -> _Compiled:
         """Rebuild the compiled form of a saved bulk layer without recomputing buckets or the pyramid."""
         c = cls.__new__(cls)
         b = layer._block
@@ -895,7 +1165,7 @@ class _Compiled:
         c.kinds, c.cls = b['kind'], b['cls']
         c.col = layer._color_index()
         # everything per-feature is memory-mapped or zero-stride: a reopened layer holds almost no anonymous RAM
-        zeros = lambda dt, m: np.broadcast_to(np.zeros(1, dt), (m,))  # noqa: E731  (read-only, 0 bytes per feature)
+        zeros = lambda dt, m: np.broadcast_to(np.zeros(1, dt), (m,))  # read-only, 0 bytes per feature
         c.radius = zeros(np.float32, n)
         c.ring_off = np.zeros(1, np.int64)
         c.coords = np.zeros((0, 2), np.float32)
@@ -929,7 +1199,7 @@ class _Compiled:
 
     def _pyr_tiles(self, x, y, k, data, raw: bool) -> dict:
         """Sort points of one level by tile; index (tx, ty) → (start, count)."""
-        span = float(2 ** k) * PYR_TILE_BINS
+        span = float(2**k) * PYR_TILE_BINS
         tx, ty = np.floor(x / span).astype(np.int64), np.floor(y / span).astype(np.int64)
         key = ty * (int(tx.max()) + 2) + tx
         o = np.argsort(key, kind='stable')
@@ -937,7 +1207,14 @@ class _Compiled:
         starts = np.flatnonzero(np.r_[True, ks[1:] != ks[:-1]]) if len(ks) else np.zeros(0, np.int64)
         ends = np.r_[starts[1:], len(ks)]
         index = {(int(tx[o[a]]), int(ty[o[a]])): (int(a), int(b - a)) for a, b in zip(starts, ends)}
-        L = {'k': k, 'span': span, 'raw': raw, 'x': x[o].astype(np.float32), 'y': y[o].astype(np.float32), 'index': index}
+        L = {
+            'k': k,
+            'span': span,
+            'raw': raw,
+            'x': x[o].astype(np.float32),
+            'y': y[o].astype(np.float32),
+            'index': index,
+        }
         if raw:
             L['feat'] = data[o]
         else:
@@ -949,15 +1226,32 @@ class _Compiled:
         """Client-side overlay mode: every object as centre (f32) + radii (u16, ¼ px) + colour/class/kind, ~17 bytes
         each — the browser builds its own pyramid in a worker and never asks again for this layer."""
         nc = len(layer._class_index)
-        rx = np.clip(np.round((self.bb[:, 2] - self.bb[:, 0]) * 2), 0, 65535).astype('<u2')   # ¼ px units of the radius
+        rx = np.clip(np.round((self.bb[:, 2] - self.bb[:, 0]) * 2), 0, 65535).astype('<u2')  # ¼ px units of the radius
         ry = np.clip(np.round((self.bb[:, 3] - self.bb[:, 1]) * 2), 0, 65535).astype('<u2')
-        meta = {'n': int(self.n), 'nclasses': nc, 'mode': 'value' if (layer.colormap is not None and layer._values is not None) else 'class',
-                'nan': nc + 256, 'median_size': self.median_size, 'bbox': self.bbox, 'tile_bins': PYR_TILE_BINS, 'slots': PYR_SLOTS}
-        return _pack(meta, [self.cx.astype('<f4'), self.cy.astype('<f4'), rx, ry, self.col.astype('<u2'),
-                            self.cls.astype('<u2'), self.kinds.astype('u1')])
+        meta = {
+            'n': int(self.n),
+            'nclasses': nc,
+            'mode': 'value' if (layer.colormap is not None and layer._values is not None) else 'class',
+            'nan': nc + 256,
+            'median_size': self.median_size,
+            'bbox': self.bbox,
+            'tile_bins': PYR_TILE_BINS,
+            'slots': PYR_SLOTS,
+        }
+        return _pack(
+            meta,
+            [
+                self.cx.astype('<f4'),
+                self.cy.astype('<f4'),
+                rx,
+                ry,
+                self.col.astype('<u2'),
+                self.cls.astype('<u2'),
+                self.kinds.astype('u1'),
+            ],
+        )
 
     def pyramid_tile(self, level: int, tx: int, ty: int) -> bytes:
-        from .memory import overlay_cache
         key = (self._token, 'p', level, tx, ty)
         hit = overlay_cache().get(key)
         if hit is not None:
@@ -966,13 +1260,24 @@ class _Compiled:
         a, m = L['index'].get((tx, ty), (0, 0))
         sl = slice(a, a + m)
         x0, y0, span = tx * L['span'], ty * L['span'], L['span']
-        pos = np.stack([np.clip(np.round((L['x'][sl] - x0) / span * 65535), 0, 65535),
-                        np.clip(np.round((L['y'][sl] - y0) / span * 65535), 0, 65535)], 1).astype('<u2')
+        pos = np.stack(
+            [
+                np.clip(np.round((L['x'][sl] - x0) / span * 65535), 0, 65535),
+                np.clip(np.round((L['y'][sl] - y0) / span * 65535), 0, 65535),
+            ],
+            1,
+        ).astype('<u2')
         meta = {'n': int(m), 'level': level, 'x0': x0, 'y0': y0, 'span': span, 'raw': L['raw'], 'k': L['k']}
         if L['raw']:
             f = L['feat'][sl]
-            arrays = [pos, np.minimum(self.size[f], 65535).astype('<u2'), self.col[f].astype('<u2'), self.cls[f].astype('<u2'),
-                      f.astype('<u4'), self.kinds[f].astype('u1')]
+            arrays = [
+                pos,
+                np.minimum(self.size[f], 65535).astype('<u2'),
+                self.col[f].astype('<u2'),
+                self.cls[f].astype('<u2'),
+                f.astype('<u4'),
+                self.kinds[f].astype('u1'),
+            ]
         else:
             arrays = [pos, L['count'][sl].astype('<u2'), L['col'][sl].astype('<u2'), L['orig'][sl].astype('<u4')]
             if 'hist' in L:
@@ -990,8 +1295,12 @@ class _Compiled:
         mx, my = (x0 + x1) / 2, (y0 + y1) / 2
         cx, cy = self.cx[idx], self.cy[idx]
         right, bottom = cx >= mx, cy >= my
-        for sel, rect in (((~right) & (~bottom), (x0, y0, mx, my)), (right & (~bottom), (mx, y0, x1, my)),
-                          ((~right) & bottom, (x0, my, mx, y1)), (right & bottom, (mx, my, x1, y1))):
+        for sel, rect in (
+            ((~right) & (~bottom), (x0, y0, mx, my)),
+            (right & (~bottom), (mx, y0, x1, my)),
+            ((~right) & bottom, (x0, my, mx, y1)),
+            (right & bottom, (mx, my, x1, y1)),
+        ):
             self._split(idx[sel], *rect, depth=depth + 1, out=out)
 
     def overview(self, meta: dict) -> bytes:
@@ -1011,20 +1320,18 @@ class _Compiled:
         return _pack(meta, [cen, size, orig, cls, col, kinds, bt])
 
     def bucket(self, i: int) -> bytes:
-        from .memory import overlay_cache
         key = (self._token, 'b', i)
         hit = overlay_cache().get(key)
         if hit is not None:
             return hit
         b = self.buckets[i]
-        feats = self.order[int(b[4]):int(b[4]) + int(b[5])]
+        feats = self.order[int(b[4]) : int(b[4]) + int(b[5])]
         data = self._encode_detail(feats)
         overlay_cache().put(key, data)
         return data
 
     def release(self) -> None:
         """Drop this layer's entries from the shared overlay cache (the layer was evicted or replaced)."""
-        from .memory import overlay_cache
         overlay_cache().purge(self._token)
 
     def _encode_detail(self, feats: np.ndarray) -> bytes:
@@ -1063,7 +1370,7 @@ class _Compiled:
                     verts = self.coords[v0:v1]
                     if len(verts) < 3:
                         continue
-                    ends = (self.ring_off[r0 + 1:r1 + 1] - v0).astype(np.uint32)
+                    ends = (self.ring_off[r0 + 1 : r1 + 1] - v0).astype(np.uint32)
                     idx = earcut.triangulate_float32(verts, ends)
                     if len(idx):
                         tris.append(verts[idx])
@@ -1073,17 +1380,24 @@ class _Compiled:
         # parametric shapes: centre + radii, drawn analytically (outline + fill) by the GPU — 19 bytes per cell
         sf = feats[(k == ELLIPSE) | (k == RECT)]
         b = self.bb[sf]
-        shp = np.stack([(b[:, 0] + b[:, 2]) / 2, (b[:, 1] + b[:, 3]) / 2, (b[:, 2] - b[:, 0]) / 2, (b[:, 3] - b[:, 1]) / 2], 1).astype('<f4')
-        return _pack({'segments': int(len(seg)), 'tri_verts': int(len(tv)), 'shapes': int(len(sf))},
-                     [seg, tv, seg_cls, tc, shp, self.col[sf].astype('<u2'), self.kinds[sf].astype('u1')])
+        shp = np.stack(
+            [(b[:, 0] + b[:, 2]) / 2, (b[:, 1] + b[:, 3]) / 2, (b[:, 2] - b[:, 0]) / 2, (b[:, 3] - b[:, 1]) / 2], 1
+        ).astype('<f4')
+        return _pack(
+            {'segments': int(len(seg)), 'tri_verts': int(len(tv)), 'shapes': int(len(sf))},
+            [seg, tv, seg_cls, tc, shp, self.col[sf].astype('<u2'), self.kinds[sf].astype('u1')],
+        )
 
     def hit_test(self, x: float, y: float, tol: float, hidden: Iterable[int] = ()) -> int | None:
         """Index of the smallest feature whose bbox contains (x, y) (± tol), or None. Only buckets around the
         point are scanned; features of ``hidden`` class ids are skipped."""
         if not self.n:
             return None
-        parts = [self.order[int(b[4]):int(b[4]) + int(b[5])] for b in self.buckets
-                 if b[0] - tol <= x <= b[2] + tol and b[1] - tol <= y <= b[3] + tol]
+        parts = [
+            self.order[int(b[4]) : int(b[4]) + int(b[5])]
+            for b in self.buckets
+            if b[0] - tol <= x <= b[2] + tol and b[1] - tol <= y <= b[3] + tol
+        ]
         if not parts:
             return None
         idx = np.concatenate(parts)
@@ -1104,21 +1418,24 @@ class CleanText(np.ndarray):
 
 def _columns_of(table: Any) -> dict[str, np.ndarray]:
     mod = type(table).__module__.split('.')[0]
-    if mod == 'polars':                                            # Polars DataFrame / LazyFrame
+    if mod == 'polars':  # Polars DataFrame / LazyFrame
         if hasattr(table, 'collect') and not hasattr(table, 'to_numpy'):
             table = table.collect()
         import polars as pl
+
         out = {}
         for c in table.columns:
             col = table.get_column(c)
-            if col.dtype == pl.String:   # text: distinct values once + codes (no 10^6 Python string conversions)
+            if col.dtype == pl.String:  # text: distinct values once + codes (no 10^6 Python string conversions)
                 filled = col.fill_null('')
                 cats = filled.unique().sort()
-                out[str(c)] = np.asarray(cats.to_list(), dtype=object)[cats.search_sorted(filled).to_numpy()].view(CleanText)
+                out[str(c)] = np.asarray(cats.to_list(), dtype=object)[cats.search_sorted(filled).to_numpy()].view(
+                    CleanText
+                )
             else:
                 out[str(c)] = col.to_numpy()
         return out
-    if mod == 'pyarrow' and hasattr(table, 'column_names'):          # pyarrow Table / RecordBatch
+    if mod == 'pyarrow' and hasattr(table, 'column_names'):  # pyarrow Table / RecordBatch
         return {str(c): table.column(c).to_numpy(zero_copy_only=False) for c in table.column_names}
     if hasattr(table, 'columns') and hasattr(table, 'to_numpy'):  # pandas and pandas-like
         return {str(c): np.asarray(table[c]) for c in table.columns}
@@ -1147,8 +1464,12 @@ def _find_col(cols: dict, cands: Sequence[str]) -> str | None:
 def _looks_tabular(data: Any) -> bool:
     if hasattr(data, 'columns') and hasattr(data, 'to_numpy'):
         return True
-    if isinstance(data, dict) and 'type' not in data and data and all(
-            isinstance(v, (list, tuple, np.ndarray)) for v in data.values()):
+    if (
+        isinstance(data, dict)
+        and 'type' not in data
+        and data
+        and all(isinstance(v, (list, tuple, np.ndarray)) for v in data.values())
+    ):
         return True
     return False
 
@@ -1166,14 +1487,14 @@ def _box_rings(xmin, ymin, xmax, ymax, shape: str = 'ellipse') -> list[np.ndarra
     return list(np.stack([xs, ys], 2).astype(np.float32))
 
 
-def _add_regions(layer: 'AnnotationLayer', regions: list, aname: str, color) -> None:
+def _add_regions(layer: AnnotationLayer, regions: list, aname: str, color) -> None:
     """Add one HALO / Aperio annotation's regions. Negative regions (``NegativeROA``) become holes of the positive
     polygon that contains them (how both tools store holes); a negative region inside nothing stays a feature of
     class '<name> (negative)'."""
     pos = [i for i, r in enumerate(regions) if r[0] == 'polygon' and not r[3]]
     holes: dict[int, list] = {}
     rest = []
-    for i, (kind, v, props, neg) in enumerate(regions):
+    for i, (kind, v, _props, neg) in enumerate(regions):
         if neg and kind == 'polygon':
             host = next((j for j in pos if _point_in_ring(v[0], regions[j][1])), None)
             if host is not None:
@@ -1185,7 +1506,9 @@ def _add_regions(layer: 'AnnotationLayer', regions: list, aname: str, color) -> 
         cname = aname + (' (negative)' if neg else '')
         (x0, y0), (x1, y1) = v.min(0), v.max(0)
         if kind == 'ellipse':
-            layer.add_ellipse((x0 + x1) / 2, (y0 + y1) / 2, (x1 - x0) / 2, (y1 - y0) / 2, cls=cname, color=color, props=props)
+            layer.add_ellipse(
+                (x0 + x1) / 2, (y0 + y1) / 2, (x1 - x0) / 2, (y1 - y0) / 2, cls=cname, color=color, props=props
+            )
         elif kind == 'rect':
             layer.add_rect(x0, y0, x1 - x0, y1 - y0, cls=cname, color=color, props=props)
         elif kind == 'line':
@@ -1249,7 +1572,7 @@ def _colorref(v: str | None) -> str | None:
     except ValueError:
         return _color_hex(v)
     r, g, b = n & 255, (n >> 8) & 255, (n >> 16) & 255
-    return '#%02x%02x%02x' % (r, g, b)
+    return f'#{r:02x}{g:02x}{b:02x}'
 
 
 def _class_from_props(props: dict) -> tuple[str | None, str | None]:
@@ -1301,7 +1624,7 @@ def discover_sidecars(slide_path: Path) -> list[AnnotationLayer]:
             try:
                 out.append(AnnotationLayer.load(p, name=p.name))
             except Exception:
-                pass
+                log.warning('skipping unreadable annotation file %s', p, exc_info=True)
     return out
 
 
@@ -1331,21 +1654,32 @@ def from_czi_metadata(meta: dict, offset=(0, 0)) -> AnnotationLayer | None:
         lname = (L.get('@Name') or L.get('Name') or 'layer') if isinstance(L, dict) else 'layer'
         el = (L or {}).get('Elements') or {}
         for kind, items in el.items():
-            for it in (items if isinstance(items, list) else [items]):
+            for it in items if isinstance(items, list) else [items]:
                 if not isinstance(it, dict):
                     continue
                 g = it.get('Geometry') or {}
-                color = _color_hex(('#' + str((it.get('Attributes') or {}).get('Stroke', ''))[-6:])
-                                   if (it.get('Attributes') or {}).get('Stroke') else None)
+                color = _color_hex(
+                    ('#' + str((it.get('Attributes') or {}).get('Stroke', ''))[-6:])
+                    if (it.get('Attributes') or {}).get('Stroke')
+                    else None
+                )
                 k = kind.lower()
                 if k == 'rectangle':
-                    out.add_rect(f(g, 'Left') + ox, f(g, 'Top') + oy, f(g, 'Width'), f(g, 'Height'), cls=lname, color=color)
+                    out.add_rect(
+                        f(g, 'Left') + ox, f(g, 'Top') + oy, f(g, 'Width'), f(g, 'Height'), cls=lname, color=color
+                    )
                 elif k == 'circle':
                     r = f(g, 'Radius')
                     out.add_ellipse(f(g, 'CenterX') + ox, f(g, 'CenterY') + oy, r, r, cls=lname, color=color)
                 elif k == 'ellipse':
-                    out.add_ellipse(f(g, 'CenterX') + ox, f(g, 'CenterY') + oy, f(g, 'RadiusX'), f(g, 'RadiusY'),
-                                    cls=lname, color=color)
+                    out.add_ellipse(
+                        f(g, 'CenterX') + ox,
+                        f(g, 'CenterY') + oy,
+                        f(g, 'RadiusX'),
+                        f(g, 'RadiusY'),
+                        cls=lname,
+                        color=color,
+                    )
                 elif k in ('polygon', 'closedpolyline', 'closedbezier'):
                     p = pts(g.get('Points', ''))
                     if len(p) > 2:
@@ -1355,8 +1689,11 @@ def from_czi_metadata(meta: dict, offset=(0, 0)) -> AnnotationLayer | None:
                     if len(p) > 1:
                         out.add_polyline(p, cls=lname, color=color)
                 elif k in ('line', 'arrow', 'scalebar'):
-                    out.add_polyline([[f(g, 'X1') + ox, f(g, 'Y1') + oy], [f(g, 'X2') + ox, f(g, 'Y2') + oy]],
-                                     cls=lname, color=color)
+                    out.add_polyline(
+                        [[f(g, 'X1') + ox, f(g, 'Y1') + oy], [f(g, 'X2') + ox, f(g, 'Y2') + oy]], cls=lname, color=color
+                    )
                 elif k in ('marker', 'point', 'events'):
-                    out.add_point(f(g, 'X', f(g, 'CenterX')) + ox, f(g, 'Y', f(g, 'CenterY')) + oy, cls=lname, color=color)
+                    out.add_point(
+                        f(g, 'X', f(g, 'CenterX')) + ox, f(g, 'Y', f(g, 'CenterY')) + oy, cls=lname, color=color
+                    )
     return out if len(out) else None

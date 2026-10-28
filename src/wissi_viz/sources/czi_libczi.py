@@ -3,6 +3,7 @@
 libCZI composes any region at any zoom, using the file's own pyramid subblocks when
 present. We expose a power-of-two pyramid and keep one reader per worker thread.
 """
+
 from __future__ import annotations
 
 import os
@@ -11,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
+from ..annotations import discover_sidecars, from_czi_metadata
 from . import czi_meta
 from .base import Channel, SlideInfo, SlideSource, _fit
 
@@ -18,8 +20,9 @@ from .base import Channel, SlideInfo, SlideSource, _fit
 class LibCziSource(SlideSource):
     extensions = ('.czi',)
 
-    def __init__(self, path: str | os.PathLike, tile_size: int = 512, scene: int | None = None,
-                 z: int = 0, t: int = 0) -> None:
+    def __init__(
+        self, path: str | os.PathLike, tile_size: int = 512, scene: int | None = None, z: int = 0, t: int = 0
+    ) -> None:
         super().__init__()
         from pylibCZIrw import czi as pyczi
 
@@ -53,15 +56,25 @@ class LibCziSource(SlideSource):
             mode = 'channels'
             dtype = 'uint8' if p0 == 'Gray8' else 'uint16'
             channels = [Channel(names[c], colors[c]) for c in range(nC)]
-        self.info = SlideInfo(width=W, height=H, levels=SlideInfo.pyramid(W, H, tile_size), mode=mode,
-                              dtype=dtype, channels=channels, mpp=_mpp(meta), name=self.path.name,
-                              tile_size=tile_size, background='#ffffff' if self._rgb else '#000000')
+        self.info = SlideInfo(
+            width=W,
+            height=H,
+            levels=SlideInfo.pyramid(W, H, tile_size),
+            mode=mode,
+            dtype=dtype,
+            channels=channels,
+            mpp=_mpp(meta),
+            name=self.path.name,
+            tile_size=tile_size,
+            background='#ffffff' if self._rgb else '#000000',
+        )
         self._meta = meta
 
     def _reader(self):
         r = getattr(self._local, 'r', None)
         if r is None:
             from pylibCZIrw import czi as pyczi
+
             r = pyczi.CziReader(str(self.path))
             with self._rlock:
                 self._readers.append(r)
@@ -70,8 +83,12 @@ class LibCziSource(SlideSource):
 
     def read_region(self, level, x, y, w, h, channel=None):
         ds = self.info.levels[level].downsample
-        roi = (self._x0 + int(round(x * ds)), self._y0 + int(round(y * ds)),
-               max(1, int(round(w * ds))), max(1, int(round(h * ds))))
+        roi = (
+            self._x0 + int(round(x * ds)),
+            self._y0 + int(round(y * ds)),
+            max(1, int(round(w * ds))),
+            max(1, int(round(h * ds))),
+        )
         plane = {'C': (channel or 0) + self._c0, 'Z': self.z, 'T': self.t}
         bg = (255, 255, 255) if self._rgb else (0, 0, 0)
         a = self._reader().read(roi=roi, plane=plane, scene=self.scene, zoom=1.0 / ds, background_pixel=bg)
@@ -90,7 +107,6 @@ class LibCziSource(SlideSource):
         return self.read_region(level, x, y, w, h, channel)
 
     def annotation_layers(self):
-        from ..annotations import discover_sidecars, from_czi_metadata
         layers = discover_sidecars(self.path)
         emb = from_czi_metadata(self._meta, offset=(-self._x0, -self._y0))
         if emb is not None:
@@ -102,7 +118,7 @@ class LibCziSource(SlideSource):
             for r in self._readers:
                 try:
                     r.close()
-                except Exception:
+                except Exception:  # noqa: BLE001  (best-effort close)
                     pass
             self._readers.clear()
 

@@ -37,6 +37,7 @@ Pyramid variants are all supported through :class:`RemoteImageInfo` — explicit
 any order with your own level ids, ``downsamples=[1, 4, 16, …]``, or ``deepzoom=True``
 with ``overlap`` — so match whatever the service returns rather than converting.
 """
+
 from __future__ import annotations
 
 from .base import RemoteConnection

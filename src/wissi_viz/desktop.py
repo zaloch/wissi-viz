@@ -13,30 +13,56 @@ pywebview bridge. Without a GUI backend (e.g. Linux with no GTK/Qt bindings) the
 
 The embedded element (``<wissi-viz>`` / NiceGUI) is unchanged; this is just another host for it.
 """
+
 from __future__ import annotations
 
 import argparse
+import ctypes
+import importlib.util
 import json
 import os
+import plistlib
 import secrets
 import shutil
 import socket
 import subprocess
 import sys
+import sysconfig
 import threading
 import time
+import webbrowser
 from pathlib import Path
 
+import anyio
+from fastapi import HTTPException
+from fastapi.responses import HTMLResponse, JSONResponse
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.requests import Request  # module level: FastAPI resolves the string annotations here
 
-from . import __version__
+from . import annio
 from ._compat import user_dir, utf8_stdio
+from ._version import __version__
+from .annotations import AnnotationLayer
+from .objects import cached_object_layer
+from .registry import SLIDE_EXTS, SlideRegistry
+from .server import app_page, create_app
+from .tiles import TileService
 
 ASSETS = Path(__file__).resolve().parent / 'assets'
 APP_NAME = 'wissi-viz'
 BUNDLE_ID = 'org.wissiviz.desktop'
 ANNOTATION_EXTS = ('.geojson', '.json', '.xml', '.annotations', '.geoparquet', '.coco.json')
-TABLE_EXTS = ('.csv', '.tsv', '.txt', '.parquet', '.pq', '.feather', '.arrow', '.ipc', '.h5ad')   # .parquet: GeoParquet if it has geometry
+TABLE_EXTS = (
+    '.csv',
+    '.tsv',
+    '.txt',
+    '.parquet',
+    '.pq',
+    '.feather',
+    '.arrow',
+    '.ipc',
+    '.h5ad',
+)  # .parquet: GeoParquet if it has geometry
 PREFIX = '/wissi-viz'
 
 
@@ -46,7 +72,6 @@ def icon_path(kind: str = 'png') -> Path:
 
 
 def _slide_exts() -> tuple[str, ...]:
-    from .registry import SLIDE_EXTS
     return SLIDE_EXTS
 
 
@@ -60,26 +85,30 @@ def _kind(p: Path) -> str:
         return 'annotations'
     if n.endswith(TABLE_EXTS):
         return 'table'
-    return 'slide'          # let open_slide decide (it raises a clear error for unknown formats)
+    return 'slide'  # let open_slide decide (it raises a clear error for unknown formats)
 
 
 # ------------------------------------------------------------------------------------------------ session
 class Session:
     """The slides and layers open in one app window. Shared by the native bridge and the HTTP fallback."""
 
-    def __init__(self, cache_dir: str | os.PathLike | None = None, memory_mb: int = 512, cache_gb: float = 10,
-                 decoded_cache_mb: int = 512) -> None:
-        from .registry import SlideRegistry
-        from .tiles import TileService
+    def __init__(
+        self,
+        cache_dir: str | os.PathLike | None = None,
+        memory_mb: int = 512,
+        cache_gb: float = 10,
+        decoded_cache_mb: int = 512,
+    ) -> None:
         self.cache_dir = Path(cache_dir) if cache_dir else user_dir('cache')
-        self.tiles = TileService(memory_bytes=memory_mb * 2**20, disk_dir=self.cache_dir / 'tiles',
-                                 disk_bytes=int(cache_gb * 2**30))
+        self.tiles = TileService(
+            memory_bytes=memory_mb * 2**20, disk_dir=self.cache_dir / 'tiles', disk_bytes=int(cache_gb * 2**30)
+        )
         self.registry = SlideRegistry(self.tiles, decoded_cache_mb=decoded_cache_mb)
         self.token = secrets.token_urlsafe(24)
         self._paths: dict[str, Path] = {}
         self._lock = threading.Lock()
         self._recent_file = user_dir('config') / 'recent.json'
-        self.show: list[str] = []          # slide ids to show in panes on load (a session)
+        self.show: list[str] = []  # slide ids to show in panes on load (a session)
 
     # -- opening
     def open(self, paths, slide: str | None = None) -> dict:
@@ -99,14 +128,18 @@ class Session:
                 if k == 'folder' and not ids:
                     raise ValueError(f'no slides in {p}')
                 for sid in ids:
-                    self.registry.info(sid)          # open now: unreadable files fail here, not as a blank pane
+                    self.registry.info(sid)  # open now: unreadable files fail here, not as a blank pane
                     self._paths[sid] = p if k != 'folder' else self.registry._entries[sid].path
                     opened.append(sid)
             except Exception as e:  # noqa: BLE001
                 errors.append(f'{p.name}: {e}')
                 for sid in [s for s in self.registry.ids() if s not in self._paths]:
                     self.registry.remove(sid)
-        target = slide if slide in self._paths else (opened[0] if opened else (list(self._paths)[-1] if self._paths else None))
+        target = (
+            slide
+            if slide in self._paths
+            else (opened[0] if opened else (list(self._paths)[-1] if self._paths else None))
+        )
         for p in extras:
             if target is None:
                 errors.append(f'{p.name}: open a slide first, then add cells / annotations to it')
@@ -122,7 +155,6 @@ class Session:
         """Attach an annotation file (GeoJSON / HALO XML / …) or a cell table (CSV / Parquet / AnnData) to a slide.
         Tables are compiled once into the cache and memory-mapped on later opens."""
         p = Path(path)
-        from . import annio
         try:
             fmt = annio.detect_format(p)
         except ValueError:
@@ -130,11 +162,9 @@ class Session:
         if fmt == 'coco' or (fmt == 'geoparquet' and _is_geoparquet(p)):
             layer = annio.load(p)
         elif _kind(p) == 'table' or (p.suffix.lower() == '.json' and _looks_like_table(p)):
-            from .objects import cached_object_layer
             mpp = (self.registry.info(slide).get('mpp') or [None])[0]
             layer = cached_object_layer(p, self.cache_dir / 'objects', mpp=mpp, name=p.stem)
         else:
-            from .annotations import AnnotationLayer
             layer = AnnotationLayer.load(p)
         name = layer.name or p.stem
         if name in self.registry.layers(slide):
@@ -149,7 +179,6 @@ class Session:
 
     def load_session(self, path: str | os.PathLike, log=print) -> dict:
         """A session file (``wissi-viz --demo`` writes one): slides with their layers, and which to show."""
-        from . import annio
         doc = json.loads(Path(path).read_text(encoding='utf-8'))
         errors, ids = [], {}
         for e in doc.get('slides', []):
@@ -171,8 +200,11 @@ class Session:
         return {'slides': self.slides(), 'errors': errors}
 
     def slides(self) -> list[dict]:
-        return [{'id': s, 'name': self.registry._entries[s].name, 'path': str(p)}
-                for s, p in self._paths.items() if s in self.registry]
+        return [
+            {'id': s, 'name': self.registry._entries[s].name, 'path': str(p)}
+            for s, p in self._paths.items()
+            if s in self.registry
+        ]
 
     # -- recent files
     def recent(self) -> list[str]:
@@ -195,17 +227,13 @@ class Session:
     def shutdown(self) -> None:
         try:
             self.registry.close()
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  (best-effort cleanup at exit)
             pass
 
     # -- HTTP
     def app(self):
         """The viewer server plus the app page (``/app``) and its token-protected endpoints."""
-        from fastapi import HTTPException
-        from fastapi.responses import HTMLResponse, JSONResponse
-        from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-        from .server import app_page, create_app
         app = create_app(self.registry, prefix=PREFIX, cors=None)
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost', 'testserver'])
 
@@ -226,7 +254,6 @@ class Session:
         async def app_open(request: Request):
             check(request)
             body = await request.json()
-            import anyio
             res = await anyio.to_thread.run_sync(lambda: self.open(body.get('paths') or [], body.get('slide')))
             return JSONResponse(res)
 
@@ -242,6 +269,7 @@ def _is_geoparquet(p: Path) -> bool:
     """A .parquet file with GeoParquet metadata (annotations), as opposed to a plain cell table."""
     try:
         import pyarrow.parquet as pq
+
         return b'geo' in (pq.read_schema(p).metadata or {})
     except Exception:  # noqa: BLE001
         return False
@@ -269,10 +297,12 @@ class _Server:
 
     def __init__(self, app, port: int | None = None) -> None:
         import uvicorn
+
         self.port = port or _free_port()
-        self.server = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1', port=self.port, log_level='warning',
-                                                    lifespan='off'))
-        self.server.install_signal_handlers = lambda: None   # not the main thread
+        self.server = uvicorn.Server(
+            uvicorn.Config(app, host='127.0.0.1', port=self.port, log_level='warning', lifespan='off')
+        )
+        self.server.install_signal_handlers = lambda: None  # not the main thread
         self.thread = threading.Thread(target=self.server.run, name='wissi-viz-server', daemon=True)
 
     def start(self, timeout: float = 15) -> str:
@@ -303,10 +333,11 @@ class Bridge:
 
     def __init__(self, session: Session) -> None:
         self._s = session
-        self._window = None          # set by run_native; underscore → not exposed to JavaScript
+        self._window = None  # set by run_native; underscore → not exposed to JavaScript
 
     def _dialog(self, kind: str, multiple: bool = True, types=()):
         import webview
+
         fd = getattr(webview, 'FileDialog', None)
         t = {'open': fd.OPEN if fd else webview.OPEN_DIALOG, 'folder': fd.FOLDER if fd else webview.FOLDER_DIALOG}[kind]
         try:
@@ -315,8 +346,11 @@ class Bridge:
             return list(self._window.create_file_dialog(t, allow_multiple=multiple) or [])
 
     def pick_slides(self):
-        types = (SLIDE_FILTER.format(_patterns(_slide_exts())),
-                 LAYER_FILTER.format(_patterns(ANNOTATION_EXTS + TABLE_EXTS)), 'All files (*.*)')
+        types = (
+            SLIDE_FILTER.format(_patterns(_slide_exts())),
+            LAYER_FILTER.format(_patterns(ANNOTATION_EXTS + TABLE_EXTS)),
+            'All files (*.*)',
+        )
         return self._s.open(self._dialog('open', True, types))
 
     def pick_folder(self):
@@ -346,7 +380,7 @@ def _push(window, result: dict) -> None:
     """Hand a result produced on the Python side (menu, drop) to the page."""
     try:
         window.evaluate_js(f'window.wissiApp && window.wissiApp.onResult({json.dumps(result)})')
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001  (window already closed)
         pass
 
 
@@ -362,13 +396,19 @@ def _menu(bridge: Bridge, window):
 
     def act(fn):
         return lambda: _push(window, fn())
-    return [Menu('File', [
-        MenuAction('Open slides…', act(bridge.pick_slides)),
-        MenuAction('Open folder…', act(bridge.pick_folder)),
-        MenuAction('Add cells / annotations…', act(lambda: bridge.pick_layer(_active_slide(window)))),
-        MenuSeparator(),
-        MenuAction('Install app shortcut', act(bridge.install_shortcut)),
-    ])]
+
+    return [
+        Menu(
+            'File',
+            [
+                MenuAction('Open slides…', act(bridge.pick_slides)),
+                MenuAction('Open folder…', act(bridge.pick_folder)),
+                MenuAction('Add cells / annotations…', act(lambda: bridge.pick_layer(_active_slide(window)))),
+                MenuSeparator(),
+                MenuAction('Install app shortcut', act(bridge.install_shortcut)),
+            ],
+        )
+    ]
 
 
 def _enable_drop(window, session: Session) -> None:
@@ -383,10 +423,11 @@ def _enable_drop(window, session: Session) -> None:
         paths = [f.get('pywebviewFullPath') for f in files if f.get('pywebviewFullPath')]
         if paths:
             _push(window, session.open(paths, slide=_active_slide(window)))
+
     try:
         window.dom.document.events.dragover += DOMEventHandler(lambda e: None, True, True)
         window.dom.document.events.drop += DOMEventHandler(on_drop, True, True)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001  (backend without DOM events: the menu still works)
         pass
 
 
@@ -396,6 +437,7 @@ def _native_icon(window) -> None:
         if sys.platform == 'win32':
             from System import Action  # pythonnet, installed with pywebview on Windows
             from System.Drawing import Icon
+
             form = getattr(window, 'native', None)
             if form is not None:
                 ico = Icon(str(icon_path('ico')))
@@ -403,6 +445,7 @@ def _native_icon(window) -> None:
         elif sys.platform == 'darwin':
             from AppKit import NSApplication, NSImage
             from PyObjCTools import AppHelper
+
             img = NSImage.alloc().initWithContentsOfFile_(str(icon_path('icns')))
             AppHelper.callAfter(lambda: NSApplication.sharedApplication().setApplicationIconImage_(img))
     except Exception:  # noqa: BLE001  (cosmetic)
@@ -413,26 +456,38 @@ def _windows_app_id() -> None:
     """Group the window under its own taskbar button and icon instead of python.exe's."""
     if sys.platform == 'win32':
         try:
-            import ctypes
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(BUNDLE_ID)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  (cosmetic: taskbar grouping only)
             pass
 
 
 def run_native(url: str, session: Session, debug: bool = False, width: int = 1440, height: int = 920) -> None:
     import webview
+
     bridge = Bridge(session)
     _windows_app_id()
-    window = webview.create_window(APP_NAME, f'{url}/app?native=1', js_api=bridge, width=width, height=height,
-                                   min_size=(720, 480), background_color='#0b0d10', text_select=True)
+    window = webview.create_window(
+        APP_NAME,
+        f'{url}/app?native=1',
+        js_api=bridge,
+        width=width,
+        height=height,
+        min_size=(720, 480),
+        background_color='#0b0d10',
+        text_select=True,
+    )
     bridge._window = window
     window.events.shown += lambda: _native_icon(window)
     window.events.loaded += lambda: _enable_drop(window, session)
-    kw = {'debug': debug, 'icon': str(icon_path('png')), 'private_mode': False,
-          'storage_path': str(session.cache_dir / 'webview')}
+    kw = {
+        'debug': debug,
+        'icon': str(icon_path('png')),
+        'private_mode': False,
+        'storage_path': str(session.cache_dir / 'webview'),
+    }
     try:
         webview.start(menu=_menu(bridge, window), **kw)
-    except TypeError:          # pywebview < 5: no app menu / icon arguments
+    except TypeError:  # pywebview < 5: no app menu / icon arguments
         webview.start(debug=debug)
 
 
@@ -446,13 +501,19 @@ def _chromium() -> str | None:
             return p
     cands = []
     if sys.platform == 'win32':
-        for base in filter(None, (os.environ.get('PROGRAMFILES(X86)'), os.environ.get('PROGRAMFILES'),
-                                  os.environ.get('LOCALAPPDATA'))):
-            cands += [Path(base) / 'Microsoft/Edge/Application/msedge.exe', Path(base) / 'Google/Chrome/Application/chrome.exe']
+        for base in filter(
+            None, (os.environ.get('PROGRAMFILES(X86)'), os.environ.get('PROGRAMFILES'), os.environ.get('LOCALAPPDATA'))
+        ):
+            cands += [
+                Path(base) / 'Microsoft/Edge/Application/msedge.exe',
+                Path(base) / 'Google/Chrome/Application/chrome.exe',
+            ]
     elif sys.platform == 'darwin':
-        cands += [Path('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'),
-                  Path('/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge'),
-                  Path('/Applications/Chromium.app/Contents/MacOS/Chromium')]
+        cands += [
+            Path('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'),
+            Path('/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge'),
+            Path('/Applications/Chromium.app/Contents/MacOS/Chromium'),
+        ]
     return next((str(c) for c in cands if c.exists()), None)
 
 
@@ -461,15 +522,22 @@ def run_browser(url: str, server: _Server) -> None:
     exe = _chromium()
     if exe:
         prof = user_dir('cache') / 'app-window'
-        proc = subprocess.Popen([exe, f'--app={page}', f'--user-data-dir={prof}', '--no-first-run',
-                                 '--no-default-browser-check', '--window-size=1440,920'])
+        proc = subprocess.Popen(
+            [
+                exe,
+                f'--app={page}',
+                f'--user-data-dir={prof}',
+                '--no-first-run',
+                '--no-default-browser-check',
+                '--window-size=1440,920',
+            ]
+        )
         print(f'wissi-viz: {page}  (close the window to quit)')
         try:
             proc.wait()
         except KeyboardInterrupt:
             proc.terminate()
         return
-    import webbrowser
     webbrowser.open(page)
     print(f'wissi-viz: {page}  (Ctrl+C to quit)')
     try:
@@ -485,18 +553,18 @@ def _has_native() -> tuple[bool, str]:
     except ImportError:
         return False, 'pywebview is not installed (install "wissi-viz[desktop]")'
     if sys.platform.startswith('linux'):
-        import importlib.util
         if not (importlib.util.find_spec('gi') or importlib.util.find_spec('qtpy')):
-            return False, ('no GUI toolkit for pywebview: install GTK bindings (e.g. apt install python3-gi '
-                           'gir1.2-webkit2-4.1, and create the venv with --system-site-packages) or Qt '
-                           '(uv pip install "pywebview[qt]")')
+            return False, (
+                'no GUI toolkit for pywebview: install GTK bindings (e.g. apt install python3-gi '
+                'gir1.2-webkit2-4.1, and create the venv with --system-site-packages) or Qt '
+                '(uv pip install "pywebview[qt]")'
+            )
     return True, ''
 
 
 # ------------------------------------------------------------------------------------------------ shortcuts
 def _launch_command() -> list[str]:
     """How a shortcut starts the app: the ``wissi-viz-app`` GUI launcher if installed, else ``python -m``."""
-    import sysconfig
     exe = 'wissi-viz-app.exe' if sys.platform == 'win32' else 'wissi-viz-app'
     for d in (Path(sys.executable).parent, Path(sysconfig.get_path('scripts'))):
         if (d / exe).exists():
@@ -506,7 +574,7 @@ def _launch_command() -> list[str]:
         return [found]
     py = Path(sys.executable)
     if sys.platform == 'win32' and (py.parent / 'pythonw.exe').exists():
-        py = py.parent / 'pythonw.exe'                    # no console window
+        py = py.parent / 'pythonw.exe'  # no console window
     return [str(py), '-m', 'wissi_viz.desktop']
 
 
@@ -535,10 +603,15 @@ def shortcut_paths() -> list[Path]:
 
 def _windows_desktop() -> Path:
     try:
-        out = subprocess.run(['powershell', '-NoProfile', '-Command', "[Environment]::GetFolderPath('Desktop')"],
-                             capture_output=True, text=True, timeout=20, check=False)
+        out = subprocess.run(
+            ['powershell', '-NoProfile', '-Command', "[Environment]::GetFolderPath('Desktop')"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
         if out.returncode == 0 and out.stdout.strip():
-            return Path(out.stdout.strip())     # follows OneDrive folder redirection
+            return Path(out.stdout.strip())  # follows OneDrive folder redirection
     except (OSError, subprocess.SubprocessError):
         pass
     return Path.home() / 'Desktop'
@@ -567,15 +640,23 @@ def uninstall_shortcut() -> list[Path]:
 def _install_windows(cmd: list[str]) -> list[Path]:
     ico = _stable_icon('ico')
     out = []
-    script = ('$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:WV_LNK); $s.TargetPath = $env:WV_TARGET; '
-              '$s.Arguments = $env:WV_ARGS; $s.IconLocation = $env:WV_ICON + ",0"; $s.WorkingDirectory = $env:USERPROFILE; '
-              '$s.Description = "wissi-viz whole-slide image viewer"; $s.Save()')
+    script = (
+        '$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:WV_LNK); $s.TargetPath = $env:WV_TARGET; '
+        '$s.Arguments = $env:WV_ARGS; $s.IconLocation = $env:WV_ICON + ",0"; $s.WorkingDirectory = $env:USERPROFILE; '
+        '$s.Description = "wissi-viz whole-slide image viewer"; $s.Save()'
+    )
     args = subprocess.list2cmdline(cmd[1:])
     for lnk in shortcut_paths():
         lnk.parent.mkdir(parents=True, exist_ok=True)
         env = {**os.environ, 'WV_LNK': str(lnk), 'WV_TARGET': cmd[0], 'WV_ARGS': args, 'WV_ICON': str(ico)}
-        r = subprocess.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', script], env=env,
-                           capture_output=True, text=True, timeout=60, check=False)
+        r = subprocess.run(
+            ['powershell', '-NoProfile', '-NonInteractive', '-Command', script],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
         if r.returncode != 0:
             raise RuntimeError(f'could not create {lnk}: {r.stderr.strip()}')
         out.append(lnk)
@@ -583,7 +664,6 @@ def _install_windows(cmd: list[str]) -> list[Path]:
 
 
 def _install_macos(cmd: list[str]) -> list[Path]:
-    import plistlib
     app = shortcut_paths()[0]
     if app.exists():
         shutil.rmtree(app)
@@ -594,13 +674,21 @@ def _install_macos(cmd: list[str]) -> list[Path]:
     quoted = ' '.join("'" + c.replace("'", "'\\''") + "'" for c in cmd)
     exe.write_text(f'#!/bin/sh\nexec {quoted} "$@"\n', encoding='utf-8')
     exe.chmod(0o755)
-    info = {'CFBundleName': APP_NAME, 'CFBundleDisplayName': APP_NAME, 'CFBundleIdentifier': BUNDLE_ID,
-            'CFBundleExecutable': APP_NAME, 'CFBundleIconFile': APP_NAME, 'CFBundlePackageType': 'APPL',
-            'CFBundleShortVersionString': __version__, 'CFBundleVersion': __version__,
-            'NSHighResolutionCapable': True, 'LSMinimumSystemVersion': '11.0'}
+    info = {
+        'CFBundleName': APP_NAME,
+        'CFBundleDisplayName': APP_NAME,
+        'CFBundleIdentifier': BUNDLE_ID,
+        'CFBundleExecutable': APP_NAME,
+        'CFBundleIconFile': APP_NAME,
+        'CFBundlePackageType': 'APPL',
+        'CFBundleShortVersionString': __version__,
+        'CFBundleVersion': __version__,
+        'NSHighResolutionCapable': True,
+        'LSMinimumSystemVersion': '11.0',
+    }
     with open(app / 'Contents/Info.plist', 'wb') as f:
         plistlib.dump(info, f)
-    os.utime(app)                       # nudge Finder / LaunchServices to pick up the icon
+    os.utime(app)  # nudge Finder / LaunchServices to pick up the icon
     return [app]
 
 
@@ -614,13 +702,28 @@ def _install_linux(cmd: list[str]) -> list[Path]:
     shutil.copyfile(icon_path('svg'), scal / f'{APP_NAME}.svg')
 
     def q(c):
-        return '"' + c.replace('\\', '\\\\').replace('"', '\\"').replace('`', '\\`').replace('$', '\\$') + '"' if any(
-            ch in c for ch in ' "\'\\`$') else c
-    entry = '\n'.join([
-        '[Desktop Entry]', 'Type=Application', f'Name={APP_NAME}', 'GenericName=Whole-slide image viewer',
-        'Comment=GPU viewer for SVS / CZI / OME-TIFF histology slides', f'Exec={" ".join(q(c) for c in cmd)} %F',
-        f'Icon={APP_NAME}', 'Terminal=false', 'Categories=Graphics;Science;MedicalSoftware;Viewer;',
-        'MimeType=image/tiff;', f'StartupWMClass={APP_NAME}', ''])
+        return (
+            '"' + c.replace('\\', '\\\\').replace('"', '\\"').replace('`', '\\`').replace('$', '\\$') + '"'
+            if any(ch in c for ch in ' "\'\\`$')
+            else c
+        )
+
+    entry = '\n'.join(
+        [
+            '[Desktop Entry]',
+            'Type=Application',
+            f'Name={APP_NAME}',
+            'GenericName=Whole-slide image viewer',
+            'Comment=GPU viewer for SVS / CZI / OME-TIFF histology slides',
+            f'Exec={" ".join(q(c) for c in cmd)} %F',
+            f'Icon={APP_NAME}',
+            'Terminal=false',
+            'Categories=Graphics;Science;MedicalSoftware;Viewer;',
+            'MimeType=image/tiff;',
+            f'StartupWMClass={APP_NAME}',
+            '',
+        ]
+    )
     p = shortcut_paths()[0]
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(entry, encoding='utf-8')

@@ -3,15 +3,17 @@
 
 from wissi_viz.connectors import RemoteConnection
 
-class MyConnection(RemoteConnection):          # your existing connector class
+
+class MyConnection(RemoteConnection):  # your existing connector class
     max_concurrency = 10
     retries = 3
     timeout = 10.0
 
-from wissi_viz.nicegui import configure      # NiceGUI; or TileService(...) / SlideRegistry(...) in your own app
+
+from wissi_viz.nicegui import configure  # NiceGUI; or TileService(...) / SlideRegistry(...) in your own app
 
 registry = configure(
-    cache_dir='/cache/wissi-viz',                # persistent tile cache (a Docker volume)
+    cache_dir='/cache/wissi-viz',  # persistent tile cache (a Docker volume)
     memory_mb=1024,
     workers=20,
 )

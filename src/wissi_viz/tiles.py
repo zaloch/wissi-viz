@@ -10,6 +10,7 @@ Request path for one tile::
         │
     worker pool: source.fetch_tile → encode → store in both tiers
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -26,6 +27,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .memory import ByteLRU, decoded_cache
 from .sources.base import Level, SlideInfo, SlideSource
 
 
@@ -34,6 +36,7 @@ def encode_rgb(arr: np.ndarray, fmt: str = 'jpeg', quality: int = 85) -> tuple[b
     arr = np.ascontiguousarray(arr[..., :3], dtype=np.uint8)
     try:
         import imagecodecs
+
         if fmt == 'webp':
             return imagecodecs.webp_encode(arr, level=quality), 'image/webp'
         if fmt == 'png':
@@ -41,6 +44,7 @@ def encode_rgb(arr: np.ndarray, fmt: str = 'jpeg', quality: int = 85) -> tuple[b
         return imagecodecs.jpeg8_encode(arr, level=quality, subsampling='420'), 'image/jpeg'
     except (ImportError, AttributeError):
         from PIL import Image
+
         buf = io.BytesIO()
         im = Image.fromarray(arr)
         if fmt == 'webp':
@@ -74,7 +78,9 @@ class PyramidSlide:
 
     MAX_STEP = 4.0
 
-    def __init__(self, source: SlideSource, array_cache_bytes: int | None = None, max_step: float | None = None) -> None:
+    def __init__(
+        self, source: SlideSource, array_cache_bytes: int | None = None, max_step: float | None = None
+    ) -> None:
         if max_step is not None:
             self.MAX_STEP = float(max(2.0, max_step))
         self.source = source
@@ -96,13 +102,13 @@ class PyramidSlide:
                         break
                 elif max(cur.width, cur.height) <= ts:
                     break
-                out.append(Level(max(1, math.ceil(cur.width / 2)), max(1, math.ceil(cur.height / 2)),
-                                 cur.downsample * 2))
+                out.append(
+                    Level(max(1, math.ceil(cur.width / 2)), max(1, math.ceil(cur.height / 2)), cur.downsample * 2)
+                )
                 self.virtual.append(True)
                 self.native_index.append(-1)
         self.info: SlideInfo = replace(info, levels=out)
         # decoded arrays live in the process-wide budget (wissi_viz.memory), keyed by this pyramid
-        from .memory import ByteLRU, decoded_cache
         self._arr = ByteLRU(array_cache_bytes) if array_cache_bytes else decoded_cache()
         self._owner = object()
 
@@ -142,13 +148,13 @@ class PyramidSlide:
                     mosaic = np.zeros((ch, cw) + a.shape[2:], a.dtype)
                 ys, xs = dy * ts, dx * ts
                 hh, ww = min(a.shape[0], ch - ys), min(a.shape[1], cw - xs)
-                mosaic[ys:ys + hh, xs:xs + ww] = a[:hh, :ww]
+                mosaic[ys : ys + hh, xs : xs + ww] = a[:hh, :ww]
         # replicate edges so partial tiles average correctly
         vh, vw = min(ch, child.height - 2 * ty * ts), min(cw, child.width - 2 * tx * ts)
         if vh < ch:
-            mosaic[vh:] = mosaic[vh - 1:vh]
+            mosaic[vh:] = mosaic[vh - 1 : vh]
         if vw < cw:
-            mosaic[:, vw:] = mosaic[:, vw - 1:vw]
+            mosaic[:, vw:] = mosaic[:, vw - 1 : vw]
         return _reduce(mosaic, 2, w, h)
 
     def fetch_tile(self, level: int, tx: int, ty: int, channel: int | None):
@@ -159,7 +165,7 @@ class PyramidSlide:
 
 def _reduce(a: np.ndarray, f: int, w: int, h: int) -> np.ndarray:
     sh = (h, f, w, f) + a.shape[2:]
-    return a[:h * f, :w * f].reshape(sh).mean(axis=(1, 3)).astype(a.dtype)
+    return a[: h * f, : w * f].reshape(sh).mean(axis=(1, 3)).astype(a.dtype)
 
 
 # ---------------------------------------------------------------- caches
@@ -193,15 +199,20 @@ class MemoryCache:
                 self._size -= len(v[0])
 
     def stats(self) -> dict:
-        return {'entries': len(self._d), 'bytes': self._size, 'max_bytes': self.max_bytes,
-                'hits': self.hits, 'misses': self.misses}
+        return {
+            'entries': len(self._d),
+            'bytes': self._size,
+            'max_bytes': self.max_bytes,
+            'hits': self.hits,
+            'misses': self.misses,
+        }
 
 
 _EXT = {'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/png': 'png', 'application/x-wissi-raw': 'raw'}
 _MT = {v: k for k, v in _EXT.items()}
 
 
-LAYER_DIR = '_layers'   # inside a disk cache root: memory-mapped annotation layers (see SlideRegistry)
+LAYER_DIR = '_layers'  # inside a disk cache root: memory-mapped annotation layers (see SlideRegistry)
 
 
 class DiskCache:
@@ -236,7 +247,7 @@ class DiskCache:
         tmp = p.with_suffix(p.suffix + f'.{os.getpid()}.{threading.get_ident()}.tmp')
         try:
             tmp.write_bytes(data)
-            os.replace(tmp, p)      # Windows: fails while another thread reads p — the cache is best-effort
+            os.replace(tmp, p)  # Windows: fails while another thread reads p — the cache is best-effort
         except OSError:
             try:
                 tmp.unlink()
@@ -253,7 +264,7 @@ class DiskCache:
         files = []
         total = 0
         for p in self.root.rglob('*'):
-            if p.is_file() and p.relative_to(self.root).parts[0] != LAYER_DIR:   # compiled layers trim themselves
+            if p.is_file() and p.relative_to(self.root).parts[0] != LAYER_DIR:  # compiled layers trim themselves
                 st = p.stat()
                 files.append((st.st_mtime, st.st_size, p))
                 total += st.st_size
@@ -273,13 +284,20 @@ class DiskCache:
 class TileService:
     """Produces encoded tiles with caching, request coalescing and a bounded worker pool."""
 
-    def __init__(self, memory_bytes: int = 1024 * 2**20, disk_dir: str | os.PathLike | None = None,
-                 disk_bytes: int = 20 * 2**30, workers: int | None = None, jpeg_quality: int = 85,
-                 rgb_format: str = 'jpeg') -> None:
+    def __init__(
+        self,
+        memory_bytes: int = 1024 * 2**20,
+        disk_dir: str | os.PathLike | None = None,
+        disk_bytes: int = 20 * 2**30,
+        workers: int | None = None,
+        jpeg_quality: int = 85,
+        rgb_format: str = 'jpeg',
+    ) -> None:
         self.memory = MemoryCache(memory_bytes)
         self.disk = DiskCache(disk_dir, disk_bytes) if disk_dir else None
-        self.pool = ThreadPoolExecutor(max_workers=workers or min(32, (os.cpu_count() or 4) * 2),
-                                       thread_name_prefix='wissi-viz-tile')
+        self.pool = ThreadPoolExecutor(
+            max_workers=workers or min(32, (os.cpu_count() or 4) * 2), thread_name_prefix='wissi-viz-tile'
+        )
         self.warm_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix='wissi-viz-warm')
         self._inflight: dict[str, Future] = {}
         self._lock = threading.Lock()
@@ -292,8 +310,9 @@ class TileService:
     def key(slide_id: str, version: str, level: int, tx: int, ty: int, channel: int | None) -> str:
         return f'{slide_id}|{version}|{level}|{tx}|{ty}|{-1 if channel is None else channel}'
 
-    def get(self, slide_id: str, slide: PyramidSlide, version: str, level: int, tx: int, ty: int,
-            channel: int | None) -> Future:
+    def get(
+        self, slide_id: str, slide: PyramidSlide, version: str, level: int, tx: int, ty: int, channel: int | None
+    ) -> Future:
         """Return a Future resolving to (bytes, media_type)."""
         k = self.key(slide_id, version, level, tx, ty, channel)
         v = self.memory.get(k)
@@ -359,16 +378,20 @@ class TileService:
                                 time.sleep(0.01)
                             try:
                                 self.get(slide_id, slide, version, lvl, tx, ty, c).result()
-                            except Exception:
+                            except Exception:  # noqa: BLE001  (prefetch is best-effort; the next real request reports errors)
                                 return
+
         self.warm_pool.submit(run)
 
     def stats(self) -> dict:
-        from .memory import decoded_cache
-        return {'memory': self.memory.stats(), 'disk': str(self.disk.root) if self.disk else None,
-                'produced': self.produced,
-                'avg_produce_ms': round(1000 * self.produce_seconds / max(1, self.produced), 2),
-                'inflight': len(self._inflight), 'decoded': decoded_cache().stats()}
+        return {
+            'memory': self.memory.stats(),
+            'disk': str(self.disk.root) if self.disk else None,
+            'produced': self.produced,
+            'avg_produce_ms': round(1000 * self.produce_seconds / max(1, self.produced), 2),
+            'inflight': len(self._inflight),
+            'decoded': decoded_cache().stats(),
+        }
 
     def close(self) -> None:
         """Stop the worker pools and drop the in-memory tile cache (the disk cache is kept)."""

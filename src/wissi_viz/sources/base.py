@@ -7,6 +7,7 @@ A source only has to describe its pyramid (:class:`SlideInfo`) and return pixels
 for a region of one pyramid level. Everything else (tiling, caching, encoding,
 HTTP, GPU rendering) is handled by wissi-viz.
 """
+
 from __future__ import annotations
 
 import math
@@ -28,6 +29,7 @@ DEFAULT_CHANNEL_COLORS = ['#0000ff', '#00ff00', '#ff0000', '#ff00ff', '#00ffff',
 @dataclass
 class Level:
     """One pyramid level. ``downsample`` is relative to level 0."""
+
     width: int
     height: int
     downsample: float
@@ -108,12 +110,12 @@ class SlideSource(ABC):
         * ``mode == 'channels'``: array (h, w) of ``info.dtype`` for ``channel``
         """
 
-    def fetch_tile(self, level: int, tx: int, ty: int, channel: int | None = None) -> 'np.ndarray | tuple[bytes, str]':
+    def fetch_tile(self, level: int, tx: int, ty: int, channel: int | None = None) -> np.ndarray | tuple[bytes, str]:
         """Return a tile as an array, or as already-encoded ``(bytes, media_type)`` that the
         browser can decode directly (pass-through fast path for remote JPEG/WebP tiles)."""
         return self.read_tile(level, tx, ty, channel)
 
-    def annotation_layers(self) -> list['AnnotationLayer']:
+    def annotation_layers(self) -> list[AnnotationLayer]:
         """Annotation layers that ship with the slide (embedded or sidecar files)."""
         return []
 

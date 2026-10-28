@@ -1,4 +1,5 @@
 """Object overlays at scale: the object pyramid, GPU-drawn bbox shapes, the persistent compiled cache, readers."""
+
 from __future__ import annotations
 
 import struct
@@ -13,13 +14,15 @@ from wissi_viz.annotations import ELLIPSE, PYR_SLOTS
 def _unpack(buf):
     jl = struct.unpack_from('<I', buf, 4)[0]
     import json
-    meta = json.loads(buf[8:8 + jl])
+
+    meta = json.loads(buf[8 : 8 + jl])
     off = [8 + jl]
 
     def take(dtype, n):
         a = np.frombuffer(buf, dtype, n, off[0])
         off[0] += -(-(n * np.dtype(dtype).itemsize) // 4) * 4
         return a
+
     return meta, take
 
 
@@ -33,7 +36,7 @@ def _cells(n=120_000, seed=0, W=40_000, H=30_000, ncls=10):
 
 def _tiles(c, level):
     out = []
-    for (tx, ty) in c._pyr[level]['index']:
+    for tx, ty in c._pyr[level]['index']:
         out.append(_unpack(c.pyramid_tile(level, tx, ty)))
     return out
 
@@ -78,7 +81,7 @@ def test_pyramid_levels_account_for_every_feature():
 def test_bbox_shapes_are_sent_as_parameters_not_vertices():
     L, cx, cy, _ = _cells(20_000)
     c = L.compiled()
-    assert L._block is not None and not L._rings          # columnar: no per-cell vertex arrays
+    assert L._block is not None and not L._rings  # columnar: no per-cell vertex arrays
     meta, take = _unpack(c.bucket(0))
     assert meta['segments'] == 0 and meta['tri_verts'] == 0 and meta['shapes'] > 0
     take('<f4', 0), take('<f4', 0), take('<u2', 0), take('<u2', 0)
@@ -86,9 +89,9 @@ def test_bbox_shapes_are_sent_as_parameters_not_vertices():
     take('<u2', meta['shapes'])
     kinds = take('u1', meta['shapes'])
     assert (kinds == ELLIPSE).all()
-    feats = c.order[int(c.buckets[0][4]):int(c.buckets[0][4]) + int(c.buckets[0][5])]
+    feats = c.order[int(c.buckets[0][4]) : int(c.buckets[0][4]) + int(c.buckets[0][5])]
     assert np.allclose(shp[:, 0], cx[feats], atol=1e-2) and np.allclose(shp[:, 1], cy[feats], atol=1e-2)
-    assert len(c.bucket(0)) < 25 * meta['shapes'] + 200    # ~19 bytes per cell
+    assert len(c.bucket(0)) < 25 * meta['shapes'] + 200  # ~19 bytes per cell
 
 
 def test_hit_test_skips_hidden_classes_and_mixed_edits_still_work():
@@ -105,7 +108,7 @@ def test_hit_test_skips_hidden_classes_and_mixed_edits_still_work():
 
 
 def test_save_open_roundtrip_is_byte_identical(tmp_path):
-    L, *_ = _cells(80_000, ncls=12)               # > 8 classes → an 'other' slot
+    L, *_ = _cells(80_000, ncls=12)  # > 8 classes → an 'other' slot
     L._columns = {'area': np.arange(80_000, dtype=np.float32)}
     a = L.compiled()
     L.save(tmp_path / 'lay')
@@ -124,11 +127,20 @@ def test_cached_object_layer_rebuilds_when_the_file_changes(tmp_path):
     import pyarrow.parquet as pq
 
     from wissi_viz import cached_object_layer
+
     rng = np.random.default_rng(1)
     n = 60_000
     x = rng.uniform(0, 20000, n)
-    t = pa.table({'XMin': x - 5, 'XMax': x + 5, 'YMin': x * 0.5 - 5, 'YMax': x * 0.5 + 5,
-                  'Classification': np.asarray(['a', 'b'])[rng.integers(0, 2, n)], 'Area': rng.random(n)})
+    t = pa.table(
+        {
+            'XMin': x - 5,
+            'XMax': x + 5,
+            'YMin': x * 0.5 - 5,
+            'YMax': x * 0.5 + 5,
+            'Classification': np.asarray(['a', 'b'])[rng.integers(0, 2, n)],
+            'Area': rng.random(n),
+        }
+    )
     f = tmp_path / 'cells.parquet'
     pq.write_table(t, f)
     L1 = cached_object_layer(f, tmp_path / 'cache', mpp=0.5, read_kw={'units': 'px'})
@@ -141,7 +153,10 @@ def test_cached_object_layer_rebuilds_when_the_file_changes(tmp_path):
 
 def test_delimited_reader_detects_separator_and_compacts_text(tmp_path):
     from wissi_viz import read_objects
-    rows = ['Centroid X px\tCentroid Y px\tClass\tScore'] + [f'{i}\t{2 * i}\t{"T" if i % 2 else "S"}\t{i / 10}' for i in range(500)]
+
+    rows = ['Centroid X px\tCentroid Y px\tClass\tScore'] + [
+        f'{i}\t{2 * i}\t{"T" if i % 2 else "S"}\t{i / 10}' for i in range(500)
+    ]
     (tmp_path / 'o.txt').write_text('\n'.join(rows), encoding='utf-8')
     o = read_objects(tmp_path / 'o.txt', units='px')
     assert len(o) == 500 and set(o.class_names()) == {'T', 'S'}
@@ -163,9 +178,15 @@ def test_sixteen_panes_with_pyramid_layers_load_draw_and_click(tmp_path):
     from wissi_viz import Level, SlideInfo, SlideRegistry
     from wissi_viz.server import create_app
     from wissi_viz.sources.callback import CallbackSource
+
     W, H = 40_000, 30_000
-    info = SlideInfo(width=W, height=H, levels=[Level(-(-W // 2**k), -(-H // 2**k), float(2**k)) for k in range(8)],
-                     tile_size=512, mpp=(0.5, 0.5))
+    info = SlideInfo(
+        width=W,
+        height=H,
+        levels=[Level(-(-W // 2**k), -(-H // 2**k), float(2**k)) for k in range(8)],
+        tile_size=512,
+        mpp=(0.5, 0.5),
+    )
     blank = np.full((512, 512, 3), 255, np.uint8)
     reg = SlideRegistry(warm=False)
     L, cx, cy, cls = _cells(60_000, W=W, H=H, ncls=3)
@@ -180,37 +201,47 @@ def test_sixteen_panes_with_pyramid_layers_load_draw_and_click(tmp_path):
     while not srv.started:
         time.sleep(0.05)
     from playwright.sync_api import sync_playwright
+
     try:
         with sync_playwright() as pw:
             try:
                 b = pw.chromium.launch(args=['--enable-unsafe-swiftshader'])
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 pytest.skip(f'no Chromium: {e}')
             pg = b.new_page(viewport={'width': 800, 'height': 600})
             errs = []
             pg.on('console', lambda m: errs.append(m.text) if m.type == 'error' or 'GL_INVALID' in m.text else None)
             pg.goto(f'http://127.0.0.1:{port}/demo')
             pg.wait_for_function('() => window.grid')
-            pg.evaluate('() => { grid.setAttribute("controls", "false"); grid.setSlides([...Array(16).keys()].map(i => "s" + i)); }')
-            pg.wait_for_function('''() => grid.panes.length === 16 && grid.panes.every(p => { const L = p.slide && p.slide.layers.get('cells');
-                return L && L.state === 'ready' && L.ptiles.size > 0; })''', timeout=60000)
+            pg.evaluate(
+                '() => { grid.setAttribute("controls", "false"); grid.setSlides([...Array(16).keys()].map(i => "s" + i)); }'
+            )
+            pg.wait_for_function(
+                """() => grid.panes.length === 16 && grid.panes.every(p => { const L = p.slide && p.slide.layers.get('cells');
+                return L && L.state === 'ready' && L.ptiles.size > 0; })""",
+                timeout=60000,
+            )
             snap = """() => { grid._draw(); const gl = grid.gl, w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
                 const px = new Uint8Array(w * h * 4); gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
                 let n = 0; for (let i = 0; i < px.length; i += 4) if (px[i] < 250 || px[i + 1] < 250 || px[i + 2] < 250) n++; return n / (w * h); }"""
             pg.wait_for_timeout(500)
             shown = pg.evaluate(snap)
-            assert shown > 0.05, shown                       # aggregated dots drawn in every pane
-            pg.evaluate('() => grid.panes.forEach(p => { const L = p.slide.layers.get("cells"); L.classes.forEach(c => L.setClassVisible(c.name, false)); })')
-            assert pg.evaluate(snap) < shown * 0.2           # hiding every class hides the aggregated dots
-            pg.evaluate('() => grid.panes.forEach(p => { const L = p.slide.layers.get("cells"); L.classes.forEach(c => L.setClassVisible(c.name, true)); })')
+            assert shown > 0.05, shown  # aggregated dots drawn in every pane
+            pg.evaluate(
+                '() => grid.panes.forEach(p => { const L = p.slide.layers.get("cells"); L.classes.forEach(c => L.setClassVisible(c.name, false)); })'
+            )
+            assert pg.evaluate(snap) < shown * 0.2  # hiding every class hides the aggregated dots
+            pg.evaluate(
+                '() => grid.panes.forEach(p => { const L = p.slide.layers.get("cells"); L.classes.forEach(c => L.setClassVisible(c.name, true)); })'
+            )
             # click on a cell at an aggregated zoom → server hit test → a real object with properties
             i = int(np.argmin((cx - W / 2) ** 2 + (cy - H / 2) ** 2))
-            got = pg.evaluate(f'''() => new Promise((res) => {{
+            got = pg.evaluate(f"""() => new Promise((res) => {{
                 grid.addEventListener('objectclick', (e) => res(e.detail), {{ once: true }});
                 const p = grid.panes[0], r = p.rect, el = grid.$canvas.getBoundingClientRect();
                 const sx = r.x + r.w / 2 + ({cx[i]} - p.view.cx) * p.view.scale, sy = r.y + r.h / 2 + ({cy[i]} - p.view.cy) * p.view.scale;
                 grid._click(p, {{ clientX: el.left + sx, clientY: el.top + sy, button: 0 }});
-                setTimeout(() => res(null), 8000); }})''')
+                setTimeout(() => res(null), 8000); }})""")
             assert got and got['layer'] == 'cells' and got['index'] is not None and 'properties' in got, got
             assert not [e for e in errs if 'GL_INVALID' in e], errs
             b.close()
@@ -231,9 +262,15 @@ def test_client_mode_builds_the_same_pyramid_in_the_browser(tmp_path):
     from wissi_viz import Level, SlideInfo, SlideRegistry
     from wissi_viz.server import create_app
     from wissi_viz.sources.callback import CallbackSource
+
     W, H = 40_000, 30_000
-    info = SlideInfo(width=W, height=H, levels=[Level(-(-W // 2**k), -(-H // 2**k), float(2**k)) for k in range(8)],
-                     tile_size=512, mpp=(0.5, 0.5))
+    info = SlideInfo(
+        width=W,
+        height=H,
+        levels=[Level(-(-W // 2**k), -(-H // 2**k), float(2**k)) for k in range(8)],
+        tile_size=512,
+        mpp=(0.5, 0.5),
+    )
     reg = SlideRegistry(warm=False)
     L, cx, cy, cls = _cells(90_000, W=W, H=H, ncls=11)
     reg.add(CallbackSource(info, read_tile=lambda *a: np.full((512, 512, 3), 255, np.uint8)), slide_id='s0')
@@ -247,38 +284,43 @@ def test_client_mode_builds_the_same_pyramid_in_the_browser(tmp_path):
     while not srv.started:
         time.sleep(0.05)
     from playwright.sync_api import sync_playwright
+
     try:
         with sync_playwright() as pw:
             try:
                 b = pw.chromium.launch(args=['--enable-unsafe-swiftshader'])
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 pytest.skip(f'no Chromium: {e}')
             pg = b.new_page(viewport={'width': 800, 'height': 600})
             seen = []
             pg.on('request', lambda r: seen.append(r.url) if '/annotations' in r.url else None)
             pg.goto(f'http://127.0.0.1:{port}/demo')
             pg.wait_for_function('() => window.grid')
-            pg.evaluate('() => { grid.setAttribute("controls", "false"); grid.setLod({overlays: "client"}); grid.setSlides(["s0"]); }')
-            pg.wait_for_function('() => { const L = grid.panes[0].slide && grid.panes[0].slide.layers.get("cells"); return L && L.client === "ready"; }',
-                                 timeout=60000)
-            st = pg.evaluate('''() => { const L = grid.panes[0].slide.layers.get('cells');
-                return { pyr: L.pyr, sums: L.local.map((m, i) => i === 0 ? null : [...m.values()].reduce((a, t) => a + t.count.reduce((x, y) => x + y, 0), 0)) }; }''')
+            pg.evaluate(
+                '() => { grid.setAttribute("controls", "false"); grid.setLod({overlays: "client"}); grid.setSlides(["s0"]); }'
+            )
+            pg.wait_for_function(
+                '() => { const L = grid.panes[0].slide && grid.panes[0].slide.layers.get("cells"); return L && L.client === "ready"; }',
+                timeout=60000,
+            )
+            st = pg.evaluate("""() => { const L = grid.panes[0].slide.layers.get('cells');
+                return { pyr: L.pyr, sums: L.local.map((m, i) => i === 0 ? null : [...m.values()].reduce((a, t) => a + t.count.reduce((x, y) => x + y, 0), 0)) }; }""")
             assert all(v == len(cx) for v in st['sums'][1:]), st['sums']
             assert st['pyr']['points'][0] == server_points[0] == len(cx)
-            assert -1 in st['pyr']['slots']                       # 11 classes → an 'other' slot, as on the server
+            assert -1 in st['pyr']['slots']  # 11 classes → an 'other' slot, as on the server
             i = int(np.argmin((cx - W / 2) ** 2 + (cy - H / 2) ** 2))
             n0 = len(seen)
             for mag in (2.5, 10, 40):
                 pg.evaluate(f'() => grid.goTo(0, {cx[i]}, {cy[i]}, {{magnification: {mag}, animate: false}})')
                 pg.wait_for_timeout(400)
-            got = pg.evaluate('''() => new Promise((res) => {
+            got = pg.evaluate("""() => new Promise((res) => {
                 grid.addEventListener('objectclick', (e) => res(e.detail), { once: true });
                 const p = grid.panes[0], r = p.rect, el = grid.$canvas.getBoundingClientRect();
                 grid._click(p, { clientX: el.left + r.x + r.w / 2, clientY: el.top + r.y + r.h / 2, button: 0 });
-                setTimeout(() => res(null), 8000); })''')
+                setTimeout(() => res(null), 8000); })""")
             assert got and got['index'] == i, (got, i)
             later = [u for u in seen[n0:] if '/annotations/' in u and '/feature/' not in u]
-            assert not later, later                               # no tiles, buckets or hit tests after the download
+            assert not later, later  # no tiles, buckets or hit tests after the download
             b.close()
     finally:
         srv.should_exit = True
@@ -292,12 +334,22 @@ def test_read_objects_engines_agree(tmp_path, ext):
     pytest.importorskip('pandas')
     from wissi_viz import read_objects
     from wissi_viz.objects import from_table
+
     rng = np.random.default_rng(3)
     n = 5000
-    df = pl.DataFrame({'Object Id': np.arange(n), 'XMin': rng.uniform(0, 1e4, n), 'YMin': rng.uniform(0, 1e4, n),
-                       'Classification': rng.choice(['Tumor', 'Stroma', 'CD8 T cell'], n), 'Area': rng.random(n)})
+    df = pl.DataFrame(
+        {
+            'Object Id': np.arange(n),
+            'XMin': rng.uniform(0, 1e4, n),
+            'YMin': rng.uniform(0, 1e4, n),
+            'Classification': rng.choice(['Tumor', 'Stroma', 'CD8 T cell'], n),
+            'Area': rng.random(n),
+        }
+    )
     df = df.with_columns((pl.col('XMin') + 9).alias('XMax'), (pl.col('YMin') + 9).alias('YMax'))
-    df = df.with_columns(pl.when(pl.col('Object Id') == 7).then(None).otherwise(pl.col('Classification')).alias('Classification'))
+    df = df.with_columns(
+        pl.when(pl.col('Object Id') == 7).then(None).otherwise(pl.col('Classification')).alias('Classification')
+    )
     f = tmp_path / f'o.{ext}'
     if ext == 'parquet':
         df.write_parquet(f)
@@ -308,7 +360,7 @@ def test_read_objects_engines_agree(tmp_path, ext):
     for e, o in tabs.items():
         assert len(o) == n and o.classes[7] == '' and list(o.classes[:50]) == list(ref.classes[:50]), e
         assert np.allclose(o.x, ref.x) and np.allclose(o.column('Area'), ref.column('Area')), e
-    lazy = from_table(df.lazy(), units='px')            # Polars LazyFrame input
+    lazy = from_table(df.lazy(), units='px')  # Polars LazyFrame input
     assert len(lazy) == n and list(lazy.classes[:50]) == list(ref.classes[:50])
 
 
@@ -326,9 +378,15 @@ def test_shape_culling_draws_only_visible_rows_and_identical_pixels(mode):
     from wissi_viz import Level, SlideInfo, SlideRegistry
     from wissi_viz.server import create_app
     from wissi_viz.sources.callback import CallbackSource
-    W, H = 24_000, 18_000          # 0.35 cells / 1000 px² — dense enough for several grid rows per bucket / tile
-    info = SlideInfo(width=W, height=H, levels=[Level(-(-W // 2**k), -(-H // 2**k), float(2**k)) for k in range(7)],
-                     tile_size=512, mpp=(0.5, 0.5))
+
+    W, H = 24_000, 18_000  # 0.35 cells / 1000 px² — dense enough for several grid rows per bucket / tile
+    info = SlideInfo(
+        width=W,
+        height=H,
+        levels=[Level(-(-W // 2**k), -(-H // 2**k), float(2**k)) for k in range(7)],
+        tile_size=512,
+        mpp=(0.5, 0.5),
+    )
     reg = SlideRegistry(warm=False)
     L, cx, cy, cls = _cells(150_000, W=W, H=H, ncls=6)
     reg.add(CallbackSource(info, read_tile=lambda *a: np.full((512, 512, 3), 255, np.uint8)), slide_id='s0')
@@ -341,6 +399,7 @@ def test_shape_culling_draws_only_visible_rows_and_identical_pixels(mode):
     while not srv.started:
         time.sleep(0.05)
     from playwright.sync_api import sync_playwright
+
     snap = """(culled) => { const g = grid, saved = [];
         for (const p of g.panes) for (const L of p.slide.layers.values()) for (const d of [...L.detail.values(), ...L.ptiles.values()])
           if (d.shpGrid && !culled) { saved.push([d, d.shpGrid]); d.shpGrid = null; }
@@ -352,26 +411,39 @@ def test_shape_culling_draws_only_visible_rows_and_identical_pixels(mode):
         with sync_playwright() as pw:
             try:
                 b = pw.chromium.launch(args=['--enable-unsafe-swiftshader'])
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 pytest.skip(f'no Chromium: {e}')
             pg = b.new_page(viewport={'width': 800, 'height': 600})
             pg.goto(f'http://127.0.0.1:{port}/demo')
             pg.wait_for_function('() => window.grid')
-            pg.evaluate(f'() => {{ grid.setAttribute("controls", "false"); grid.setLod({{overlays: "{mode}"}}); grid.setSlides(["s0", "s0"]); }}')
-            ready = ('L.client === "ready"' if mode == 'client' else 'L.state === "ready"')
-            pg.wait_for_function(f'() => grid.panes.every(p => {{ const L = p.slide && p.slide.layers.get("cells"); return L && {ready}; }})', timeout=60000)
-            for x, y, zoom in ((W / 2, H / 2, 1.0), (W * 0.31, H * 0.77, 2.0), (300, 200, 1.0)):   # incl. the slide corner
+            pg.evaluate(
+                f'() => {{ grid.setAttribute("controls", "false"); grid.setLod({{overlays: "{mode}"}}); grid.setSlides(["s0", "s0"]); }}'
+            )
+            ready = 'L.client === "ready"' if mode == 'client' else 'L.state === "ready"'
+            pg.wait_for_function(
+                f'() => grid.panes.every(p => {{ const L = p.slide && p.slide.layers.get("cells"); return L && {ready}; }})',
+                timeout=60000,
+            )
+            for x, y, zoom in (
+                (W / 2, H / 2, 1.0),
+                (W * 0.31, H * 0.77, 2.0),
+                (300, 200, 1.0),
+            ):  # incl. the slide corner
                 pg.evaluate(f'() => grid.goTo("all", {x}, {y}, {{zoom: {zoom}, animate: false}})')
-                pg.wait_for_function('() => grid.stats().inflight === 0 && grid.stats().queuedUploads === 0', timeout=30000)
+                pg.wait_for_function(
+                    '() => grid.stats().inflight === 0 && grid.stats().queuedUploads === 0', timeout=30000
+                )
                 pg.wait_for_timeout(400)
-                pg.wait_for_function('() => grid.stats().inflight === 0 && grid.stats().queuedUploads === 0', timeout=30000)
+                pg.wait_for_function(
+                    '() => grid.stats().inflight === 0 && grid.stats().queuedUploads === 0', timeout=30000
+                )
                 full, cul = pg.evaluate(snap, False), pg.evaluate(snap, True)
                 assert full['grids'] > 0 and full['n'] > 0
                 # far fewer instances submitted (client raw tiles are small already: less to gain) …
                 assert cul['n'] < full['n'] * (0.34 if mode == 'server' else 0.7), (cul['n'], full['n'])
                 a, c = np.array(full['px'], np.uint8), np.array(cul['px'], np.uint8)
-                assert (a < 250).any()                                       # (outlines are on screen)
-                assert np.array_equal(a, c), int((a != c).sum())             # … and exactly the same picture
+                assert (a < 250).any()  # (outlines are on screen)
+                assert np.array_equal(a, c), int((a != c).sum())  # … and exactly the same picture
             b.close()
     finally:
         srv.should_exit = True

@@ -20,20 +20,37 @@ Backends (all permissive):
 Environment: ``WISSI_SAM_BACKEND`` (auto | torch | onnx | classic), ``WISSI_SAM_MODEL`` (tiny | small | base-plus |
 large; default small), ``WISSI_SAM_DEVICE`` (auto | cuda | mps | cpu), ``WISSI_SAM_ONNX_DIR`` (pre-downloaded files).
 """
+
 from __future__ import annotations
 
+import hashlib
+import importlib.util
 import math
 import os
 import threading
 import time
+import urllib.request
 from collections import OrderedDict
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import numpy as np
+from PIL import Image
+from scipy import ndimage as ndi
+from skimage.color import rgb2lab
+from skimage.filters import gaussian
+from skimage.measure import find_contours
+from skimage.segmentation import flood
 
-MODELS = {'tiny': 'facebook/sam2.1-hiera-tiny', 'small': 'facebook/sam2.1-hiera-small',
-          'base-plus': 'facebook/sam2.1-hiera-base-plus', 'large': 'facebook/sam2.1-hiera-large'}
+from ._compat import otsu, user_dir
+
+MODELS = {
+    'tiny': 'facebook/sam2.1-hiera-tiny',
+    'small': 'facebook/sam2.1-hiera-small',
+    'base-plus': 'facebook/sam2.1-hiera-base-plus',
+    'large': 'facebook/sam2.1-hiera-large',
+}
 ONNX_RELEASE = 'https://github.com/zaloch/wissi-viz/releases/download/sam2.1-onnx-v1'
 MEAN = np.array([0.485, 0.456, 0.406], np.float32)
 STD = np.array([0.229, 0.224, 0.225], np.float32)
@@ -43,28 +60,24 @@ STD = np.array([0.229, 0.224, 0.225], np.float32)
 class _Classic:
     """Model-free fallback. Point: flood fill in Lab colour space from the click (tolerance from the local spread);
     box: Otsu on darkness inside the box, the component under the box centre (or the largest)."""
+
     name = 'classic'
     device = 'cpu'
 
     def embed(self, rgb: np.ndarray):
-        from skimage.color import rgb2lab
-        from skimage.filters import gaussian
         lab = rgb2lab(gaussian(rgb, 1.0, channel_axis=-1, preserve_range=True).astype(np.uint8))
         return {'rgb': rgb, 'lab': lab}
 
     def predict(self, emb, points, labels, box):
-        from scipy import ndimage as ndi
-        from skimage.segmentation import flood
         lab, rgb = emb['lab'], emb['rgb']
         h, w = lab.shape[:2]
         mask = np.zeros((h, w), bool)
-        pos = [p for p, l in zip(points, labels) if l == 1]
-        neg = [p for p, l in zip(points, labels) if l == 0]
+        pos = [p for p, lb in zip(points, labels) if lb == 1]
+        neg = [p for p, lb in zip(points, labels) if lb == 0]
         if box is not None:
             x0, y0, x1, y1 = [int(round(v)) for v in box]
             x0, y0, x1, y1 = max(0, x0), max(0, y0), min(w, x1), min(h, y1)
             if x1 - x0 > 2 and y1 - y0 > 2:
-                from ._compat import otsu
                 dark = 255 - rgb[y0:y1, x0:x1].astype(np.float64).mean(-1)
                 t = otsu(dark)
                 fg = dark > t if t is not None else np.ones_like(dark, bool)
@@ -73,22 +86,22 @@ class _Classic:
                     cy, cx = (y1 - y0) // 2, (x1 - x0) // 2
                     k = lab_[cy, cx] or (np.argmax(np.bincount(lab_.ravel())[1:]) + 1)
                     mask[y0:y1, x0:x1] = ndi.binary_fill_holes(lab_ == k)
-        for (x, y) in pos:
+        for x, y in pos:
             xi, yi = int(np.clip(x, 0, w - 1)), int(np.clip(y, 0, h - 1))
             r = 4
-            patch = lab[max(0, yi - r):yi + r + 1, max(0, xi - r):xi + r + 1].reshape(-1, 3)
+            patch = lab[max(0, yi - r) : yi + r + 1, max(0, xi - r) : xi + r + 1].reshape(-1, 3)
             tol = float(np.clip(2.5 * patch.std(0).mean() + 6, 8, 30))
             dist = np.sqrt(((lab - lab[yi, xi]) ** 2).sum(-1))
             m = flood(dist, (yi, xi), tolerance=tol)
             m = ndi.binary_fill_holes(ndi.binary_opening(m, iterations=1))
             lab_, n = ndi.label(m)
-            if n:                                      # only the piece under the click (or the nearest piece)
+            if n:  # only the piece under the click (or the nearest piece)
                 k = lab_[yi, xi]
                 if not k:
                     _, (iy, ix) = ndi.distance_transform_edt(lab_ == 0, return_indices=True)
                     k = lab_[iy[yi, xi], ix[yi, xi]]
                 mask |= lab_ == k
-        for (x, y) in neg:
+        for x, y in neg:
             xi, yi = int(np.clip(x, 0, w - 1)), int(np.clip(y, 0, h - 1))
             lab_, _ = ndi.label(mask)
             if lab_[yi, xi]:
@@ -98,11 +111,13 @@ class _Classic:
 
 class _Torch:
     """transformers Sam2Model. The image is encoded once per region; prompts reuse the embeddings."""
+
     name = 'torch'
 
     def __init__(self, model: str, device: str) -> None:
         import torch
         from transformers import Sam2Model, Sam2Processor
+
         if device == 'auto':
             device = 'cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu')
         self.device = device
@@ -135,7 +150,7 @@ class _Torch:
                 emb['emb'] = out.image_embeddings
             else:
                 out = self.model(**inputs, image_embeddings=emb['emb'], multimask_output=multi)
-        masks = self.processor.post_process_masks(out.pred_masks.cpu(), emb['sizes'])[0]   # (objects, masks, H, W)
+        masks = self.processor.post_process_masks(out.pred_masks.cpu(), emb['sizes'])[0]  # (objects, masks, H, W)
         scores = out.iou_scores.detach().float().cpu().numpy().reshape(-1)
         k = int(np.argmax(scores)) if multi else 0
         return np.asarray(masks[0, k], bool), float(scores[k])
@@ -143,22 +158,25 @@ class _Torch:
 
 class _Onnx:
     """SAM 2.1 exported to ONNX (encoder + prompt decoder), run by ONNX Runtime."""
+
     name = 'onnx'
 
     def __init__(self, model: str, device: str) -> None:
         import onnxruntime as ort
+
         d = _onnx_files(model)
         avail = ort.get_available_providers()
         want = {'cuda': ['CUDAExecutionProvider'], 'dml': ['DmlExecutionProvider'], 'cpu': []}.get(device)
-        if want is None:                               # auto: best available
-            want = [p for p in ('CUDAExecutionProvider', 'DmlExecutionProvider', 'CoreMLExecutionProvider') if p in avail]
+        if want is None:  # auto: best available
+            want = [
+                p for p in ('CUDAExecutionProvider', 'DmlExecutionProvider', 'CoreMLExecutionProvider') if p in avail
+            ]
         providers = [p for p in want if p in avail] + ['CPUExecutionProvider']
         self.enc = ort.InferenceSession(str(d / 'encoder.onnx'), providers=providers)
         self.dec = ort.InferenceSession(str(d / 'decoder.onnx'), providers=providers)
         self.device = self.enc.get_providers()[0].replace('ExecutionProvider', '').lower()
 
     def embed(self, rgb: np.ndarray):
-        from PIL import Image
         h, w = rgb.shape[:2]
         x = np.asarray(Image.fromarray(rgb).resize((1024, 1024), Image.BILINEAR), np.float32) / 255.0
         x = ((x - MEAN) / STD).transpose(2, 0, 1)[None].astype(np.float32)
@@ -174,10 +192,17 @@ class _Onnx:
         pts += [list(p) for p in points]
         lab += [int(v) for v in labels]
         c = np.asarray(pts, np.float32).reshape(1, -1, 2) * np.array([1024 / w, 1024 / h], np.float32)
-        masks, iou = self.dec.run(None, {'image_embed': emb['e'], 'high_res_feats_0': emb['h0'], 'high_res_feats_1': emb['h1'],
-                                         'point_coords': c, 'point_labels': np.asarray(lab, np.float32).reshape(1, -1)})
+        masks, iou = self.dec.run(
+            None,
+            {
+                'image_embed': emb['e'],
+                'high_res_feats_0': emb['h0'],
+                'high_res_feats_1': emb['h1'],
+                'point_coords': c,
+                'point_labels': np.asarray(lab, np.float32).reshape(1, -1),
+            },
+        )
         k = int(np.argmax(iou[0]))
-        from PIL import Image
         low = Image.fromarray(masks[0, k].astype(np.float32))
         up = np.asarray(low.resize((w, h), Image.BILINEAR))
         return up > 0, float(iou[0, k])
@@ -189,12 +214,9 @@ def _onnx_files(model: str) -> Path:
     env = os.environ.get('WISSI_SAM_ONNX_DIR')
     if env:
         return Path(env)
-    from ._compat import user_dir
     d = user_dir('cache') / 'sam' / f'sam2.1-{model}-onnx'
     if (d / 'encoder.onnx').exists() and (d / 'decoder.onnx').exists():
         return d
-    import hashlib
-    import urllib.request
     d.mkdir(parents=True, exist_ok=True)
     sums = urllib.request.urlopen(f'{ONNX_RELEASE}/SHA256SUMS', timeout=60).read().decode()
     want = {ln.split()[1]: ln.split()[0] for ln in sums.splitlines() if ln.strip()}
@@ -217,8 +239,14 @@ def _onnx_files(model: str) -> Path:
 
 # ------------------------------------------------------------------------------------------------ service
 class SamService:
-    def __init__(self, backend: str | None = None, model: str | None = None, device: str | None = None,
-                 size: int = 1024, cache: int = 32) -> None:
+    def __init__(
+        self,
+        backend: str | None = None,
+        model: str | None = None,
+        device: str | None = None,
+        size: int = 1024,
+        cache: int = 32,
+    ) -> None:
         self.want = (backend or os.environ.get('WISSI_SAM_BACKEND') or 'auto').lower()
         self.model_name = (model or os.environ.get('WISSI_SAM_MODEL') or 'small').lower()
         self.device_pref = (device or os.environ.get('WISSI_SAM_DEVICE') or 'auto').lower()
@@ -226,15 +254,19 @@ class SamService:
         self._impl = None
         self._error: str | None = None
         self._lock = threading.Lock()
-        self._cache: OrderedDict = OrderedDict()   # (slide key, level, x, y, w, h) → embedding
-        self._cache_max = cache                    # one per pane of a 32-pane grid
+        self._cache: OrderedDict = OrderedDict()  # (slide key, level, x, y, w, h) → embedding
+        self._cache_max = cache  # one per pane of a 32-pane grid
 
     # -- backend selection (lazy: loading a model takes seconds)
     def _load(self):
         if self._impl is not None:
             return self._impl
-        order = {'auto': ['torch', 'onnx', 'classic'], 'torch': ['torch', 'classic'], 'onnx': ['onnx', 'classic'],
-                 'classic': ['classic']}.get(self.want, ['classic'])
+        order = {
+            'auto': ['torch', 'onnx', 'classic'],
+            'torch': ['torch', 'classic'],
+            'onnx': ['onnx', 'classic'],
+            'classic': ['classic'],
+        }.get(self.want, ['classic'])
         errs = []
         for b in order:
             try:
@@ -252,13 +284,27 @@ class SamService:
 
     def status(self, load: bool = False) -> dict:
         impl = self._load() if load else self._impl
-        return {'backend': impl.name if impl else None, 'requested': self.want, 'model': self.model_name,
-                'device': getattr(impl, 'device', None), 'loaded': impl is not None, 'notes': self._error,
-                'available': _available()}
+        return {
+            'backend': impl.name if impl else None,
+            'requested': self.want,
+            'model': self.model_name,
+            'device': getattr(impl, 'device', None),
+            'loaded': impl is not None,
+            'notes': self._error,
+            'available': _available(),
+        }
 
     # -- segmentation
-    def segment(self, source, rect: Sequence[float], points: Sequence[Sequence[float]] = (), labels: Sequence[int] = (),
-                box: Sequence[float] | None = None, key: str = '', min_area_px: float = 12.0) -> tuple[list, dict]:
+    def segment(
+        self,
+        source,
+        rect: Sequence[float],
+        points: Sequence[Sequence[float]] = (),
+        labels: Sequence[int] = (),
+        box: Sequence[float] | None = None,
+        key: str = '',
+        min_area_px: float = 12.0,
+    ) -> tuple[list, dict]:
         """Prompts in level-0 px. Returns ([polygon (n, 2) level-0 px, …], info)."""
         t0 = time.perf_counter()
         with self._lock:
@@ -270,9 +316,10 @@ class SamService:
             if emb is None:
                 rgb = _rgb(source, lv, x0, y0, w, h)
                 f = max(rgb.shape[:2]) / self.size
-                if f > 1.05:                           # level step coarser than needed: shrink to the model size
-                    from PIL import Image
-                    rgb = np.asarray(Image.fromarray(rgb).resize((max(1, round(w / f)), max(1, round(h / f))), Image.LANCZOS))
+                if f > 1.05:  # level step coarser than needed: shrink to the model size
+                    rgb = np.asarray(
+                        Image.fromarray(rgb).resize((max(1, round(w / f)), max(1, round(h / f))), Image.LANCZOS)
+                    )
                 emb = (impl.embed(rgb), w / rgb.shape[1])
                 self._cache[ck] = emb
                 while len(self._cache) > self._cache_max:
@@ -281,8 +328,8 @@ class SamService:
                 self._cache.move_to_end(ck)
             t1 = time.perf_counter()
             emb, shrink = emb
-            px = ds * shrink                           # level-0 px per image px
-            loc = lambda x, y: ((x - x0 * ds) / px, (y - y0 * ds) / px)  # noqa: E731
+            px = ds * shrink  # level-0 px per image px
+            loc = lambda x, y: ((x - x0 * ds) / px, (y - y0 * ds) / px)
             pts = [loc(*p) for p in points]
             bx = None if box is None else (*loc(box[0], box[1]), *loc(box[2], box[3]))
             mask, score = impl.predict(emb, pts, list(labels), bx)
@@ -290,9 +337,16 @@ class SamService:
         polys = _polygons(mask, min_area_px)
         out = [np.stack([p[:, 0] * px + x0 * ds, p[:, 1] * px + y0 * ds], 1) for p in polys]
         ds = px
-        return out, {'backend': impl.name, 'device': getattr(impl, 'device', None), 'score': score, 'level': lv,
-                     'downsample': ds, 'encode_ms': None if cached else round((t1 - t0) * 1000, 1),
-                     'decode_ms': round((t2 - t1) * 1000, 1), 'cached': cached}
+        return out, {
+            'backend': impl.name,
+            'device': getattr(impl, 'device', None),
+            'score': score,
+            'level': lv,
+            'downsample': ds,
+            'encode_ms': None if cached else round((t1 - t0) * 1000, 1),
+            'decode_ms': round((t2 - t1) * 1000, 1),
+            'cached': cached,
+        }
 
     def _region(self, source, rect):
         """The pyramid level where the rect is ≤ size px on its long side, and the rect in that level's px."""
@@ -332,8 +386,6 @@ def _rgb(source, lv: int, x: int, y: int, w: int, h: int) -> np.ndarray:
 
 def _polygons(mask: np.ndarray, min_area_px: float) -> list[np.ndarray]:
     """Mask → outer contours of its components (holes filled), simplified to ~0.75 px."""
-    from scipy import ndimage as ndi
-    from skimage.measure import find_contours
     lab, n = ndi.label(mask)
     out = []
     for k in range(1, n + 1):
@@ -343,13 +395,14 @@ def _polygons(mask: np.ndarray, min_area_px: float) -> list[np.ndarray]:
         cs = find_contours(np.pad(comp, 1).astype(np.float32), 0.5)
         if not cs:
             continue
-        c = max(cs, key=len)[:, ::-1] - 1                  # (row, col) → (x, y)
+        c = max(cs, key=len)[:, ::-1] - 1  # (row, col) → (x, y)
         try:
             import shapely
+
             g = shapely.Polygon(c).simplify(0.75, preserve_topology=True)
             if g.geom_type == 'Polygon' and not g.is_empty:
                 c = np.asarray(g.exterior.coords)[:-1]
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  (simplification is cosmetic: keep the raw contour)
             pass
         if len(c) >= 3:
             out.append(c)
@@ -358,7 +411,6 @@ def _polygons(mask: np.ndarray, min_area_px: float) -> list[np.ndarray]:
 
 
 def _available() -> list[str]:
-    import importlib.util
     av = ['classic']
     if importlib.util.find_spec('torch') and importlib.util.find_spec('transformers'):
         av.insert(0, 'torch')

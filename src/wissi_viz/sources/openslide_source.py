@@ -1,4 +1,5 @@
 """OpenSlide reader (MRXS, NDPI, VMS, SCN, BIF, …). Optional: ``pip install wissi-viz[openslide]``."""
+
 from __future__ import annotations
 
 import os
@@ -7,6 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
+from ..annotations import discover_sidecars
 from .base import Level, SlideInfo, SlideSource
 
 
@@ -39,13 +41,22 @@ class OpenSlideSource(SlideSource):
             W, H = int(props['openslide.bounds-width']), int(props['openslide.bounds-height'])
         levels = [Level(int(round(W / ds)), int(round(H / ds)), float(ds)) for ds in s.level_downsamples]
         bg = props.get('openslide.background-color')
-        self.info = SlideInfo(width=W, height=H, levels=levels, mode='rgb', mpp=mpp, name=self.path.name,
-                              tile_size=tile_size, background=f'#{bg.lower()}' if bg else '#ffffff')
+        self.info = SlideInfo(
+            width=W,
+            height=H,
+            levels=levels,
+            mode='rgb',
+            mpp=mpp,
+            name=self.path.name,
+            tile_size=tile_size,
+            background=f'#{bg.lower()}' if bg else '#ffffff',
+        )
 
     def _slide(self):
         s = getattr(self._local, 's', None)
         if s is None:
             import openslide
+
             s = openslide.OpenSlide(str(self.path))
             with self._alock:
                 self._all.append(s)
@@ -57,7 +68,7 @@ class OpenSlideSource(SlideSource):
         img = self._slide().read_region((self._ox + int(x * ds), self._oy + int(y * ds)), level, (w, h))
         a = np.asarray(img)
         rgb, alpha = a[..., :3].astype(np.float32), a[..., 3:4].astype(np.float32) / 255.0
-        bg = np.array([int(self.info.background[i:i + 2], 16) for i in (1, 3, 5)], np.float32)
+        bg = np.array([int(self.info.background[i : i + 2], 16) for i in (1, 3, 5)], np.float32)
         return (rgb * alpha + bg * (1 - alpha)).astype(np.uint8) if alpha.min() < 1 else a[..., :3].copy()
 
     def read_tile(self, level, tx, ty, channel=None):
@@ -65,7 +76,6 @@ class OpenSlideSource(SlideSource):
         return self.read_region(level, x, y, w, h, channel)
 
     def annotation_layers(self):
-        from ..annotations import discover_sidecars
         return discover_sidecars(self.path)
 
     def close(self):

@@ -11,12 +11,18 @@ slides age out, and closing a slide releases its entries straight away.
 Object-overlay tiles (pyramid tiles, outline buckets) share a second budget (default 128 MiB) instead of
 per-layer caches capped by entry count — those grew with every slide opened.
 """
+
 from __future__ import annotations
 
+import ctypes
+import os
+import subprocess
 import sys
 import threading
 from collections import OrderedDict
-from typing import Any, Callable
+from collections.abc import Callable
+from ctypes import wintypes
+from typing import Any
 
 import numpy as np
 
@@ -74,8 +80,14 @@ class ByteLRU:
 
     def stats(self) -> dict:
         with self._lock:
-            return {'entries': len(self._d), 'bytes': self._size, 'max_bytes': self.max_bytes,
-                    'hits': self.hits, 'misses': self.misses, 'evictions': self.evictions}
+            return {
+                'entries': len(self._d),
+                'bytes': self._size,
+                'max_bytes': self.max_bytes,
+                'hits': self.hits,
+                'misses': self.misses,
+                'evictions': self.evictions,
+            }
 
 
 _DECODED = ByteLRU(1024 * 2**20)
@@ -107,8 +119,9 @@ def rss_bytes() -> int:
     """Current resident memory of this process, on Linux, macOS and Windows (psutil when installed)."""
     try:
         import psutil
+
         return int(psutil.Process().memory_info().rss)
-    except Exception:  # noqa: BLE001  (not installed)
+    except Exception:  # noqa: BLE001  (not installed, or access denied: fall through)
         pass
     if sys.platform.startswith('linux'):
         try:
@@ -121,18 +134,19 @@ def rss_bytes() -> int:
     elif sys.platform == 'win32':
         try:
             return _win_working_set()
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  (fall through to the next probe)
             pass
     elif sys.platform == 'darwin':
         try:
-            import os
-            import subprocess
-            out = subprocess.run(['ps', '-o', 'rss=', '-p', str(os.getpid())], capture_output=True, text=True, timeout=5)
+            out = subprocess.run(
+                ['ps', '-o', 'rss=', '-p', str(os.getpid())], capture_output=True, text=True, timeout=5
+            )
             return int(out.stdout.strip()) * 1024
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  (fall through to the next probe)
             pass
     try:
-        import resource                  # Unix fallback: the peak, not the current value
+        import resource  # Unix fallback: the peak, not the current value
+
         r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         return int(r if sys.platform == 'darwin' else r * 1024)
     except Exception:  # noqa: BLE001
@@ -140,15 +154,21 @@ def rss_bytes() -> int:
 
 
 def _win_working_set() -> int:
-    import ctypes
-    from ctypes import wintypes
 
     class PMC(ctypes.Structure):
-        _fields_ = [('cb', wintypes.DWORD), ('PageFaultCount', wintypes.DWORD), ('PeakWorkingSetSize', ctypes.c_size_t),
-                    ('WorkingSetSize', ctypes.c_size_t), ('QuotaPeakPagedPoolUsage', ctypes.c_size_t),
-                    ('QuotaPagedPoolUsage', ctypes.c_size_t), ('QuotaPeakNonPagedPoolUsage', ctypes.c_size_t),
-                    ('QuotaNonPagedPoolUsage', ctypes.c_size_t), ('PagefileUsage', ctypes.c_size_t),
-                    ('PeakPagefileUsage', ctypes.c_size_t)]
+        _fields_ = [
+            ('cb', wintypes.DWORD),
+            ('PageFaultCount', wintypes.DWORD),
+            ('PeakWorkingSetSize', ctypes.c_size_t),
+            ('WorkingSetSize', ctypes.c_size_t),
+            ('QuotaPeakPagedPoolUsage', ctypes.c_size_t),
+            ('QuotaPagedPoolUsage', ctypes.c_size_t),
+            ('QuotaPeakNonPagedPoolUsage', ctypes.c_size_t),
+            ('QuotaNonPagedPoolUsage', ctypes.c_size_t),
+            ('PagefileUsage', ctypes.c_size_t),
+            ('PeakPagefileUsage', ctypes.c_size_t),
+        ]
+
     k32 = ctypes.WinDLL('kernel32', use_last_error=True)
     k32.GetCurrentProcess.restype = wintypes.HANDLE
     k32.K32GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(PMC), wintypes.DWORD]
@@ -186,7 +206,6 @@ def trim() -> bool:
         return False
     try:
         if _LIBC is None:
-            import ctypes
             _LIBC = ctypes.CDLL('libc.so.6')
         return bool(_LIBC.malloc_trim(0))
     except Exception:  # noqa: BLE001  (musl / no glibc)
@@ -223,7 +242,7 @@ def anon_nbytes(obj: Any, _seen: set | None = None, _depth: int = 0) -> int:
         return sum(anon_nbytes(v, seen, _depth + 1) for v in obj.values())
     if isinstance(obj, (list, tuple)):
         n = 8 * len(obj)
-        if len(obj) > 2000:                     # e.g. per-feature lists: estimate from a sample
+        if len(obj) > 2000:  # e.g. per-feature lists: estimate from a sample
             k = len(obj) // 200
             return n + int(sum(anon_nbytes(v, seen, _depth + 1) for v in obj[::k]) * k)
         return n + sum(anon_nbytes(v, seen, _depth + 1) for v in obj)

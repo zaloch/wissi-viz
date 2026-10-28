@@ -4,11 +4,12 @@ Point the probe at the SAME connector class your app (wissi) uses for HALO Link 
 authenticated client — then the probe measures exactly what production will do. Copy this file next to your code,
 replace the body, and pass settings with --connector-arg key=value (they arrive as keyword arguments).
 """
-import os
 
 
 def make_connection(**kw):
     # from wissi.integrations.halo import WissiHaloLink, make_client        # ← your app's own modules
     # client = make_client(base_url=kw.get('url') or os.environ['HALO_LINK_URL'], token=os.environ['HALO_LINK_TOKEN'])
     # return WissiHaloLink(client)
-    raise SystemExit('connector_factory_example.make_connection: replace the body with your connector (see the comments)')
+    raise SystemExit(
+        'connector_factory_example.make_connection: replace the body with your connector (see the comments)'
+    )

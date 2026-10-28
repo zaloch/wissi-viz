@@ -24,19 +24,28 @@ Coordinates are level-0 pixels everywhere (y down). GeoParquet stores them in a 
 records the slide's µm/px, the layer's classes and colours and its style in file metadata, so a round trip is
 lossless for geometry, classes and properties.
 """
+
 from __future__ import annotations
 
+import copy
+import csv
+import io
 import json
 import struct
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import tifffile
+from PIL import Image, ImageDraw
 
-from .annotations import ELLIPSE, POINT, POLYGON, POLYLINE, RECT, AnnotationLayer
+from .annotations import ELLIPSE, POINT, POLYGON, POLYLINE, RECT, AnnotationLayer, _auto_color
+from .objects import from_label_mask, read_objects
+from .sources import open_slide
 
-GEO_POINT, GEO_LINE, GEO_POLYGON = 1, 2, 3        # WKB / OGC geometry type codes
+GEO_POINT, GEO_LINE, GEO_POLYGON = 1, 2, 3  # WKB / OGC geometry type codes
 _ELLIPSE_VERTS = 32
 FORMATS = ('geoparquet', 'geojson', 'qupath', 'halo', 'aperio', 'csv', 'coco', 'mask')
 
@@ -47,14 +56,15 @@ class Features:
     """Features as flat arrays: ``kind`` (GEO_POINT / GEO_LINE / GEO_POLYGON) per feature; rings of feature *i* are
     ``feat_ring_off[i]:feat_ring_off[i+1]`` (polygons: shell first, then holes; rings are *not* closed); vertices of
     ring *r* are ``coords[ring_off[r]:ring_off[r+1]]``."""
+
     kind: np.ndarray
     coords: np.ndarray
     ring_off: np.ndarray
     feat_ring_off: np.ndarray
-    cls: np.ndarray                       # int32 index into class_names (-1: none)
+    cls: np.ndarray  # int32 index into class_names (-1: none)
     class_names: list
     class_colors: dict = field(default_factory=dict)
-    props: dict = field(default_factory=dict)   # name → array (len n); object arrays may hold None
+    props: dict = field(default_factory=dict)  # name → array (len n); object arrays may hold None
     name: str = 'annotations'
     style: dict = field(default_factory=dict)
     mpp: float | None = None
@@ -69,8 +79,15 @@ class Features:
             return np.zeros((0, 4))
         starts = self.ring_off[self.feat_ring_off[:-1]]
         x, y = self.coords[:, 0], self.coords[:, 1]
-        return np.stack([np.minimum.reduceat(x, starts), np.minimum.reduceat(y, starts),
-                         np.maximum.reduceat(x, starts), np.maximum.reduceat(y, starts)], 1)
+        return np.stack(
+            [
+                np.minimum.reduceat(x, starts),
+                np.minimum.reduceat(y, starts),
+                np.maximum.reduceat(x, starts),
+                np.maximum.reduceat(y, starts),
+            ],
+            1,
+        )
 
     def shell_area(self) -> np.ndarray:
         """Signed-area-free polygon area (shell minus holes) in px²; 0 for points and lines."""
@@ -86,9 +103,9 @@ class Features:
         ring_area = np.abs(np.add.reduceat(cross, self.ring_off[:-1])) / 2 if len(self.ring_off) > 1 else np.zeros(0)
         ring_area[np.diff(self.ring_off) < 3] = 0
         poly = np.nonzero(self.kind == GEO_POLYGON)[0]
-        for f in poly:                                  # shell − holes (holes are rare; loop only over polygons)
+        for f in poly:  # shell − holes (holes are rare; loop only over polygons)
             r0, r1 = self.feat_ring_off[f], self.feat_ring_off[f + 1]
-            out[f] = ring_area[r0] - ring_area[r0 + 1:r1].sum()
+            out[f] = ring_area[r0] - ring_area[r0 + 1 : r1].sum()
         return out
 
     def centroid(self) -> np.ndarray:
@@ -100,7 +117,10 @@ class Features:
         return names[np.where(self.cls < 0, len(self.class_names), self.cls)]
 
     def rings(self, f: int) -> list:
-        return [self.coords[self.ring_off[r]:self.ring_off[r + 1]] for r in range(self.feat_ring_off[f], self.feat_ring_off[f + 1])]
+        return [
+            self.coords[self.ring_off[r] : self.ring_off[r + 1]]
+            for r in range(self.feat_ring_off[f], self.feat_ring_off[f + 1])
+        ]
 
 
 def from_layer(layer: AnnotationLayer, ellipse_vertices: int = _ELLIPSE_VERTS) -> Features:
@@ -108,14 +128,21 @@ def from_layer(layer: AnnotationLayer, ellipse_vertices: int = _ELLIPSE_VERTS) -
     inv = {v: k for k, v in layer._class_index.items()}
     class_names = [inv.get(i, f'class {i}') for i in range(len(inv))]
     m = len(layer._kinds)
-    parts = []                                  # (kind, coords, ring_off, feat_ring_off, cls)
+    parts = []  # (kind, coords, ring_off, feat_ring_off, cls)
     if m:
         c = layer.compiled()
         lk = np.asarray(layer._kinds, np.uint8)
         kind = np.where(lk == POINT, GEO_POINT, np.where(lk == POLYLINE, GEO_LINE, GEO_POLYGON)).astype(np.uint8)
         nrings = int(c.feat_ring_off[m])
-        parts.append((kind, np.asarray(c.coords[:c.ring_off[nrings]], np.float64), np.asarray(c.ring_off[:nrings + 1], np.int64),
-                      np.asarray(c.feat_ring_off[:m + 1], np.int64), np.asarray(layer._cls, np.int32)))
+        parts.append(
+            (
+                kind,
+                np.asarray(c.coords[: c.ring_off[nrings]], np.float64),
+                np.asarray(c.ring_off[: nrings + 1], np.int64),
+                np.asarray(c.feat_ring_off[: m + 1], np.int64),
+                np.asarray(layer._cls, np.int32),
+            )
+        )
     b = layer._block
     if b is not None and len(b['kind']):
         bk = np.asarray(b['kind'])
@@ -128,7 +155,7 @@ def from_layer(layer: AnnotationLayer, ellipse_vertices: int = _ELLIPSE_VERTS) -
         coords = np.empty((ring_off[-1], 2))
         cx, cy = (bb[:, 0] + bb[:, 2]) / 2, (bb[:, 1] + bb[:, 3]) / 2
         rx, ry = (bb[:, 2] - bb[:, 0]) / 2, (bb[:, 3] - bb[:, 1]) / 2
-        for k, verts in ((POINT, None), (RECT, None), (ELLIPSE, None)):
+        for k in (POINT, RECT, ELLIPSE):
             sel = np.nonzero(bk == k)[0]
             if not len(sel):
                 continue
@@ -136,8 +163,15 @@ def from_layer(layer: AnnotationLayer, ellipse_vertices: int = _ELLIPSE_VERTS) -
             if k == POINT:
                 coords[start] = np.stack([cx[sel], cy[sel]], 1)
             elif k == RECT:
-                q = np.stack([np.stack([bb[sel, 0], bb[sel, 1]], 1), np.stack([bb[sel, 2], bb[sel, 1]], 1),
-                              np.stack([bb[sel, 2], bb[sel, 3]], 1), np.stack([bb[sel, 0], bb[sel, 3]], 1)], 1)
+                q = np.stack(
+                    [
+                        np.stack([bb[sel, 0], bb[sel, 1]], 1),
+                        np.stack([bb[sel, 2], bb[sel, 1]], 1),
+                        np.stack([bb[sel, 2], bb[sel, 3]], 1),
+                        np.stack([bb[sel, 0], bb[sel, 3]], 1),
+                    ],
+                    1,
+                )
                 coords[(start[:, None] + np.arange(4)).ravel()] = q.reshape(-1, 2)
             else:
                 t = np.linspace(0, 2 * np.pi, ellipse_vertices, endpoint=False)
@@ -146,18 +180,31 @@ def from_layer(layer: AnnotationLayer, ellipse_vertices: int = _ELLIPSE_VERTS) -
         kind = np.where(bk == POINT, GEO_POINT, GEO_POLYGON).astype(np.uint8)
         parts.append((kind, coords, ring_off, np.arange(nb + 1, dtype=np.int64), cls))
     if not parts:
-        F = Features(np.zeros(0, np.uint8), np.zeros((0, 2)), np.zeros(1, np.int64), np.zeros(1, np.int64),
-                     np.zeros(0, np.int32), class_names)
+        F = Features(
+            np.zeros(0, np.uint8),
+            np.zeros((0, 2)),
+            np.zeros(1, np.int64),
+            np.zeros(1, np.int64),
+            np.zeros(0, np.int32),
+            class_names,
+        )
     elif len(parts) == 1:
         F = Features(*parts[0], class_names)
-    else:                                       # classic features first, then the block (the layer's own order)
+    else:  # classic features first, then the block (the layer's own order)
         (k1, c1, r1, f1, s1), (k2, c2, r2, f2, s2) = parts
-        F = Features(np.concatenate([k1, k2]), np.concatenate([c1, c2]),
-                     np.concatenate([r1, r2[1:] + r1[-1]]), np.concatenate([f1, f2[1:] + f1[-1]]),
-                     np.concatenate([s1, s2]), class_names)
+        F = Features(
+            np.concatenate([k1, k2]),
+            np.concatenate([c1, c2]),
+            np.concatenate([r1, r2[1:] + r1[-1]]),
+            np.concatenate([f1, f2[1:] + f1[-1]]),
+            np.concatenate([s1, s2]),
+            class_names,
+        )
     F.class_colors = dict(layer.classes)
     F.name = layer.name
-    F.style = {k: getattr(layer, k) for k in ('line_width', 'fill_opacity', 'point_size', 'visible', 'detail_min_px', 'z')}
+    F.style = {
+        k: getattr(layer, k) for k in ('line_width', 'fill_opacity', 'point_size', 'visible', 'detail_min_px', 'z')
+    }
     F.props = _layer_props(layer, len(F))
     return F
 
@@ -167,14 +214,14 @@ def _layer_props(layer: AnnotationLayer, n: int) -> dict:
     cols: dict[str, Any] = {}
     off = layer._col_offset
     for k, v in (layer._columns or {}).items():
-        if hasattr(v, 'codes'):                 # categorical: decode once
+        if hasattr(v, 'codes'):  # categorical: decode once
             v = np.asarray(v.categories, dtype=object)[np.asarray(v.codes)]
         v = np.asarray(v)
         if off == 0 and len(v) == n:
             cols[k] = v
         else:
             full = np.full(n, None, dtype=object) if v.dtype.kind in 'OUS' else np.full(n, np.nan)
-            full[off:off + len(v)] = v
+            full[off : off + len(v)] = v
             cols[k] = full
     dict_props = [p for p in layer._props if p]
     if dict_props:
@@ -203,7 +250,9 @@ def _tighten(arr: np.ndarray) -> np.ndarray:
 
 def to_layer(F: Features, name: str | None = None) -> AnnotationLayer:
     """Features → AnnotationLayer. Point-only sets become a columnar block (fast for millions of cells)."""
-    layer = AnnotationLayer(name=name or F.name, classes={c: F.class_colors.get(c) or _hexcol(i) for i, c in enumerate(F.class_names)})
+    layer = AnnotationLayer(
+        name=name or F.name, classes={c: F.class_colors.get(c) or _hexcol(i) for i, c in enumerate(F.class_names)}
+    )
     for k, v in (F.style or {}).items():
         if hasattr(layer, k) and v is not None:
             setattr(layer, k, v)
@@ -223,7 +272,10 @@ def to_layer(F: Features, name: str | None = None) -> AnnotationLayer:
                 continue
             single = (np.diff(F.feat_ring_off)[sel] == 1).all()
             if single:
-                rings = [F.coords[F.ring_off[F.feat_ring_off[f]]:F.ring_off[F.feat_ring_off[f] + 1]].astype(np.float32) for f in sel]
+                rings = [
+                    F.coords[F.ring_off[F.feat_ring_off[f]] : F.ring_off[F.feat_ring_off[f] + 1]].astype(np.float32)
+                    for f in sel
+                ]
                 layer._bulk(kind_layer, rings, [cls[f] for f in sel], None, None)
             else:
                 for f in sel:
@@ -245,14 +297,12 @@ def to_layer(F: Features, name: str | None = None) -> AnnotationLayer:
 
 
 def _take_props(F: Features, idx: np.ndarray) -> Features:
-    import copy
     G = copy.copy(F)
     G.props = {k: np.asarray(v)[idx] for k, v in F.props.items()}
     return G
 
 
 def _hexcol(i: int) -> str:
-    from .annotations import _auto_color
     return _auto_color(i)
 
 
@@ -260,8 +310,14 @@ def _hexcol(i: int) -> str:
 def _slice(F: Features, f0: int, f1: int) -> Features:
     r0, r1 = F.feat_ring_off[f0], F.feat_ring_off[f1]
     v0, v1 = F.ring_off[r0], F.ring_off[r1]
-    return Features(F.kind[f0:f1], F.coords[v0:v1], F.ring_off[r0:r1 + 1] - v0, F.feat_ring_off[f0:f1 + 1] - r0,
-                    F.cls[f0:f1], F.class_names)
+    return Features(
+        F.kind[f0:f1],
+        F.coords[v0:v1],
+        F.ring_off[r0 : r1 + 1] - v0,
+        F.feat_ring_off[f0 : f1 + 1] - r0,
+        F.cls[f0:f1],
+        F.class_names,
+    )
 
 
 def _chunks(F: Features, max_vertices: int = 1 << 21):
@@ -297,11 +353,11 @@ def _encode_wkb(F: Features) -> tuple[np.ndarray, np.ndarray]:
     if n == 0:
         return np.zeros(1, np.int64), np.zeros(0, np.uint8)
     nrings_f = np.diff(F.feat_ring_off)
-    ring_feat = np.repeat(np.arange(n), nrings_f)                 # feature of each ring
+    ring_feat = np.repeat(np.arange(n), nrings_f)  # feature of each ring
     ring_kind = F.kind[ring_feat]
     nv = np.diff(F.ring_off)
     close = (ring_kind == GEO_POLYGON).astype(np.int64)
-    nout = np.where(ring_kind == GEO_POINT, 1, nv + close)        # vertices written per ring
+    nout = np.where(ring_kind == GEO_POINT, 1, nv + close)  # vertices written per ring
     # coordinate stream in output order (closing vertex = first vertex)
     T = int(nout.sum())
     out_start = np.zeros(len(nout) + 1, np.int64)
@@ -355,84 +411,94 @@ def decode_wkb(blobs) -> Features:
     Multi* geometries are split into one feature each (their index is in ``props['part_of']``)."""
     if isinstance(blobs, tuple):
         offs, data = blobs
-        blobs = [bytes(data[offs[i]:offs[i + 1]]) for i in range(len(offs) - 1)]
+        blobs = [bytes(data[offs[i] : offs[i + 1]]) for i in range(len(offs) - 1)]
     kinds, coords, ring_off, feat_ring_off, part_of = [], [], [0], [0], []
-    for i, b in enumerate(blobs):
-        if b is None:
-            continue
-        mv = memoryview(b)
-        pos = 0
 
-        def geom(pos, owner):
-            bo = '<' if mv[pos] == 1 else '>'
-            (t,) = struct.unpack_from(bo + 'I', mv, pos + 1)
-            t &= 0xFFFF
-            t = t % 1000                         # ISO Z/M codes: 1001, 2001, …  (only 2-D kept)
-            pos += 5
-            if t == GEO_POINT:
-                x, y = struct.unpack_from(bo + 'dd', mv, pos)
-                coords.append(np.array([[x, y]]))
-                ring_off.append(ring_off[-1] + 1)
-                kinds.append(GEO_POINT)
-                feat_ring_off.append(feat_ring_off[-1] + 1)
-                part_of.append(owner)
-                return pos + 16
-            if t == GEO_LINE:
+    def geom(mv, pos, owner):
+        bo = '<' if mv[pos] == 1 else '>'
+        (t,) = struct.unpack_from(bo + 'I', mv, pos + 1)
+        t &= 0xFFFF
+        t = t % 1000  # ISO Z/M codes: 1001, 2001, …  (only 2-D kept)
+        pos += 5
+        if t == GEO_POINT:
+            x, y = struct.unpack_from(bo + 'dd', mv, pos)
+            coords.append(np.array([[x, y]]))
+            ring_off.append(ring_off[-1] + 1)
+            kinds.append(GEO_POINT)
+            feat_ring_off.append(feat_ring_off[-1] + 1)
+            part_of.append(owner)
+            return pos + 16
+        if t == GEO_LINE:
+            (m,) = struct.unpack_from(bo + 'I', mv, pos)
+            a = np.frombuffer(mv, bo + 'f8', 2 * m, pos + 4).reshape(m, 2)
+            coords.append(a)
+            ring_off.append(ring_off[-1] + m)
+            kinds.append(GEO_LINE)
+            feat_ring_off.append(feat_ring_off[-1] + 1)
+            part_of.append(owner)
+            return pos + 4 + 16 * m
+        if t == GEO_POLYGON:
+            (nr,) = struct.unpack_from(bo + 'I', mv, pos)
+            pos += 4
+            for _ in range(nr):
                 (m,) = struct.unpack_from(bo + 'I', mv, pos)
                 a = np.frombuffer(mv, bo + 'f8', 2 * m, pos + 4).reshape(m, 2)
+                if m > 1 and (a[0] == a[-1]).all():
+                    a = a[:-1]
                 coords.append(a)
-                ring_off.append(ring_off[-1] + m)
-                kinds.append(GEO_LINE)
-                feat_ring_off.append(feat_ring_off[-1] + 1)
-                part_of.append(owner)
-                return pos + 4 + 16 * m
-            if t == GEO_POLYGON:
-                (nr,) = struct.unpack_from(bo + 'I', mv, pos)
-                pos += 4
-                for _ in range(nr):
-                    (m,) = struct.unpack_from(bo + 'I', mv, pos)
-                    a = np.frombuffer(mv, bo + 'f8', 2 * m, pos + 4).reshape(m, 2)
-                    if m > 1 and (a[0] == a[-1]).all():
-                        a = a[:-1]
-                    coords.append(a)
-                    ring_off.append(ring_off[-1] + len(a))
-                    pos += 4 + 16 * m
-                kinds.append(GEO_POLYGON)
-                feat_ring_off.append(feat_ring_off[-1] + nr)
-                part_of.append(owner)
-                return pos
-            if t in (4, 5, 6, 7):                 # Multi* / GeometryCollection: one feature per part
-                (np_,) = struct.unpack_from(bo + 'I', mv, pos)
-                pos += 4
-                for _ in range(np_):
-                    pos = geom(pos, owner)
-                return pos
-            raise ValueError(f'unsupported WKB geometry type {t}')
+                ring_off.append(ring_off[-1] + len(a))
+                pos += 4 + 16 * m
+            kinds.append(GEO_POLYGON)
+            feat_ring_off.append(feat_ring_off[-1] + nr)
+            part_of.append(owner)
+            return pos
+        if t in (4, 5, 6, 7):  # Multi* / GeometryCollection: one feature per part
+            (np_,) = struct.unpack_from(bo + 'I', mv, pos)
+            pos += 4
+            for _ in range(np_):
+                pos = geom(mv, pos, owner)
+            return pos
+        raise ValueError(f'unsupported WKB geometry type {t}')
 
-        geom(pos, i)
-    F = Features(np.asarray(kinds, np.uint8), np.concatenate(coords).astype(np.float64) if coords else np.zeros((0, 2)),
-                 np.asarray(ring_off, np.int64), np.asarray(feat_ring_off, np.int64), np.zeros(len(kinds), np.int32), [])
+    for i, b in enumerate(blobs):
+        if b is not None:
+            geom(memoryview(b), 0, i)
+    F = Features(
+        np.asarray(kinds, np.uint8),
+        np.concatenate(coords).astype(np.float64) if coords else np.zeros((0, 2)),
+        np.asarray(ring_off, np.int64),
+        np.asarray(feat_ring_off, np.int64),
+        np.zeros(len(kinds), np.int32),
+        [],
+    )
     F.props['__row__'] = np.asarray(part_of, np.int64)
     return F
 
 
 # ------------------------------------------------------------------------------------------------ GeoParquet
-def write_geoparquet(F: Features, path: str | Path, *, compression: str = 'zstd', row_group_size: int = 65536,
-                     slide: str | None = None) -> Path:
+def write_geoparquet(
+    F: Features, path: str | Path, *, compression: str = 'zstd', row_group_size: int = 65536, slide: str | None = None
+) -> Path:
     """GeoParquet 1.1: WKB ``geometry``, a ``bbox`` covering struct (fast spatial filtering), ``class`` as a
     dictionary column, every property as its own column; wissi-viz metadata (classes, colours, style, mpp)."""
     import pyarrow as pa
     import pyarrow.parquet as pq
+
     offs, data = encode_wkb(F)
     large = len(data) >= 2**31 - 1
     geom = (pa.LargeBinaryArray if large else pa.BinaryArray).from_buffers(
-        pa.large_binary() if large else pa.binary(), len(F),
-        [None, pa.py_buffer(offs.astype(np.int64 if large else np.int32)), pa.py_buffer(data)])
+        pa.large_binary() if large else pa.binary(),
+        len(F),
+        [None, pa.py_buffer(offs.astype(np.int64 if large else np.int32)), pa.py_buffer(data)],
+    )
     bb = F.bbox().astype(np.float32)
     bbox = pa.StructArray.from_arrays([pa.array(bb[:, i]) for i in range(4)], names=['xmin', 'ymin', 'xmax', 'ymax'])
     names = pa.array(list(F.class_names) or [''], pa.string())
-    cls = pa.DictionaryArray.from_arrays(pa.array(np.where(F.cls < 0, 0, F.cls).astype(np.int32)), names,
-                                         mask=pa.array(F.cls < 0) if (F.cls < 0).any() else None)
+    cls = pa.DictionaryArray.from_arrays(
+        pa.array(np.where(F.cls < 0, 0, F.cls).astype(np.int32)),
+        names,
+        mask=pa.array(F.cls < 0) if (F.cls < 0).any() else None,
+    )
     cols = {'class': cls}
     for k, v in F.props.items():
         if k.startswith('__'):
@@ -442,16 +508,42 @@ def write_geoparquet(F: Features, path: str | Path, *, compression: str = 'zstd'
     cols['geometry'] = geom
     table = pa.table(cols)
     types = sorted({['Point', 'LineString', 'Polygon'][k - 1] for k in np.unique(F.kind).tolist()})
-    geo = {'version': '1.1.0', 'primary_column': 'geometry',
-           'columns': {'geometry': {'encoding': 'WKB', 'geometry_types': types, 'crs': None, 'edges': 'planar',
-                                    'bbox': [float(bb[:, 0].min()), float(bb[:, 1].min()), float(bb[:, 2].max()),
-                                             float(bb[:, 3].max())] if len(bb) else [0, 0, 0, 0],
-                                    'covering': {'bbox': {'xmin': ['bbox', 'xmin'], 'ymin': ['bbox', 'ymin'],
-                                                          'xmax': ['bbox', 'xmax'], 'ymax': ['bbox', 'ymax']}}}}}
-    wissi = {'format': 'wissi-viz annotations', 'version': 1, 'units': 'pixel (level 0, y down)', 'mpp': F.mpp,
-             'name': F.name, 'classes': {c: F.class_colors.get(c) for c in F.class_names}, 'style': F.style,
-             'slide': slide}
-    table = table.replace_schema_metadata({b'geo': json.dumps(geo).encode(), b'wissi': json.dumps(wissi, default=str).encode()})
+    geo = {
+        'version': '1.1.0',
+        'primary_column': 'geometry',
+        'columns': {
+            'geometry': {
+                'encoding': 'WKB',
+                'geometry_types': types,
+                'crs': None,
+                'edges': 'planar',
+                'bbox': [float(bb[:, 0].min()), float(bb[:, 1].min()), float(bb[:, 2].max()), float(bb[:, 3].max())]
+                if len(bb)
+                else [0, 0, 0, 0],
+                'covering': {
+                    'bbox': {
+                        'xmin': ['bbox', 'xmin'],
+                        'ymin': ['bbox', 'ymin'],
+                        'xmax': ['bbox', 'xmax'],
+                        'ymax': ['bbox', 'ymax'],
+                    }
+                },
+            }
+        },
+    }
+    wissi = {
+        'format': 'wissi-viz annotations',
+        'version': 1,
+        'units': 'pixel (level 0, y down)',
+        'mpp': F.mpp,
+        'name': F.name,
+        'classes': {c: F.class_colors.get(c) for c in F.class_names},
+        'style': F.style,
+        'slide': slide,
+    }
+    table = table.replace_schema_metadata(
+        {b'geo': json.dumps(geo).encode(), b'wissi': json.dumps(wissi, default=str).encode()}
+    )
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(table, p, compression=compression, row_group_size=row_group_size, write_statistics=True)
@@ -460,6 +552,7 @@ def write_geoparquet(F: Features, path: str | Path, *, compression: str = 'zstd'
 
 def _arrow_col(v):
     import pyarrow as pa
+
     v = np.asarray(v)
     if v.dtype.kind in 'biuf':
         return pa.array(v)
@@ -474,6 +567,7 @@ def read_geoparquet(path: str | Path, bbox: tuple | None = None, columns: list |
     using the bbox covering column and row-group statistics when present."""
     import pyarrow.compute as pc
     import pyarrow.parquet as pq
+
     pf = pq.ParquetFile(path)
     md = pf.schema_arrow.metadata or {}
     geo = json.loads(md.get(b'geo', b'{}') or b'{}')
@@ -483,8 +577,9 @@ def read_geoparquet(path: str | Path, bbox: tuple | None = None, columns: list |
     filt = None
     if bbox is not None and cov:
         import pyarrow.dataset as ds
+
         x0, y0, x1, y1 = bbox
-        f = lambda k: ds.field(*cov[k])  # noqa: E731
+        f = lambda k: ds.field(*cov[k])
         filt = (f('xmax') >= x0) & (f('xmin') <= x1) & (f('ymax') >= y0) & (f('ymin') <= y1)
         table = ds.dataset(path, format='parquet').to_table(filter=filt, columns=columns)
     else:
@@ -497,7 +592,7 @@ def read_geoparquet(path: str | Path, bbox: tuple | None = None, columns: list |
     garr = table.column(gcol).combine_chunks()
     F = _decode_arrow_wkb(garr)
     rows = F.props.pop('__row__')
-    if bbox is not None and not cov:              # no covering column: filter after decoding
+    if bbox is not None and not cov:  # no covering column: filter after decoding
         b = F.bbox()
         x0, y0, x1, y1 = bbox
         keep_rows = np.unique(rows[(b[:, 2] >= x0) & (b[:, 0] <= x1) & (b[:, 3] >= y0) & (b[:, 1] <= y1)])
@@ -540,14 +635,17 @@ def read_geoparquet(path: str | Path, bbox: tuple | None = None, columns: list |
     return F
 
 
-def read_from_table_subset(sub, gcol, wissi) -> Features:     # helper for files without a covering column
-    import io
+def read_from_table_subset(sub, gcol, wissi) -> Features:  # helper for files without a covering column
 
     import pyarrow.parquet as pq
+
     buf = io.BytesIO()
-    meta = {b'geo': json.dumps({'version': '1.1.0', 'primary_column': gcol,
-                                'columns': {gcol: {'encoding': 'WKB', 'geometry_types': []}}}).encode(),
-            b'wissi': json.dumps(wissi).encode()}
+    meta = {
+        b'geo': json.dumps(
+            {'version': '1.1.0', 'primary_column': gcol, 'columns': {gcol: {'encoding': 'WKB', 'geometry_types': []}}}
+        ).encode(),
+        b'wissi': json.dumps(wissi).encode(),
+    }
     pq.write_table(sub.replace_schema_metadata(meta), buf)
     buf.seek(0)
     return read_geoparquet(buf)
@@ -557,6 +655,7 @@ def _decode_arrow_wkb(arr) -> Features:
     """Binary arrow column → Features; vectorised fast path for single-ring polygons / points / lines in
     little-endian (what wissi-viz and most tools write), the generic parser otherwise."""
     import pyarrow as pa
+
     n = len(arr)
     if n == 0:
         F = decode_wkb([])
@@ -576,11 +675,16 @@ def _decode_arrow_wkb(arr) -> Features:
         return decode_wkb((offs, data))
 
     def u32(at):
-        return (data[at].astype(np.int64) | (data[at + 1].astype(np.int64) << 8) | (data[at + 2].astype(np.int64) << 16)
-                | (data[at + 3].astype(np.int64) << 24))
+        return (
+            data[at].astype(np.int64)
+            | (data[at + 1].astype(np.int64) << 8)
+            | (data[at + 2].astype(np.int64) << 16)
+            | (data[at + 3].astype(np.int64) << 24)
+        )
+
     poly = t == GEO_POLYGON
     if poly.any() and (u32(starts[poly] + 5) != 1).any():
-        return decode_wkb((offs, data))           # holes present: generic path
+        return decode_wkb((offs, data))  # holes present: generic path
     nv = np.where(t == GEO_POINT, 1, 0).astype(np.int64)
     cstart = starts + 5
     line = t == GEO_LINE
@@ -588,14 +692,14 @@ def _decode_arrow_wkb(arr) -> Features:
     cstart[line] = starts[line] + 9
     nv[poly] = u32(starts[poly] + 9)
     cstart[poly] = starts[poly] + 13
-    keep = nv - poly.astype(np.int64)             # drop polygon closing vertex
+    keep = nv - poly.astype(np.int64)  # drop polygon closing vertex
     total = int(keep.sum())
     out_off = np.zeros(n + 1, np.int64)
     np.cumsum(keep, out=out_off[1:])
     coords = np.empty((total, 2), np.float64)
     lane = np.arange(16)
     a = 0
-    while a < n:                                  # ≤ ~1M vertices per gather: bounded index memory
+    while a < n:  # ≤ ~1M vertices per gather: bounded index memory
         b = max(a + 1, int(np.searchsorted(out_off, out_off[a] + (1 << 20), 'right')) - 1)
         b = min(b, n)
         k = keep[a:b]
@@ -605,7 +709,7 @@ def _decode_arrow_wkb(arr) -> Features:
             continue
         within = np.arange(tot) - np.repeat(out_off[a:b] - out_off[a], k)
         byte_at = np.repeat(cstart[a:b], k) + within * 16
-        coords[out_off[a]:out_off[b]] = data[byte_at[:, None] + lane].view('<f8').reshape(tot, 2)
+        coords[out_off[a] : out_off[b]] = data[byte_at[:, None] + lane].view('<f8').reshape(tot, 2)
         a = b
     F = Features(t.astype(np.uint8), coords, out_off, np.arange(n + 1, dtype=np.int64), np.zeros(n, np.int32), [])
     F.props['__row__'] = np.arange(n)
@@ -615,7 +719,7 @@ def _decode_arrow_wkb(arr) -> Features:
 # ------------------------------------------------------------------------------------------------ other formats
 def _rgb(hexcol: str | None) -> list[int]:
     h = (hexcol or '#ffcc00').lstrip('#')
-    return [int(h[i:i + 2], 16) for i in (0, 2, 4)]
+    return [int(h[i : i + 2], 16) for i in (0, 2, 4)]
 
 
 def _colorref(hexcol: str | None) -> str:
@@ -651,25 +755,31 @@ def write_geojson(F: Features, path, qupath: bool = False) -> Path:
             props = {kk: _scalar(F.props[kk][i]) for kk in keys}
             cname = names[i]
             if qupath:
-                props = {'objectType': obj_type, **({'classification': {'name': cname, 'color': _rgb(F.class_colors.get(cname))}}
-                                                    if cname else {}), 'measurements': {kk: v for kk, v in props.items()
-                                                                                        if isinstance(v, (int, float))}}
+                props = {
+                    'objectType': obj_type,
+                    **({'classification': {'name': cname, 'color': _rgb(F.class_colors.get(cname))}} if cname else {}),
+                    'measurements': {kk: v for kk, v in props.items() if isinstance(v, (int, float))},
+                }
             elif cname:
                 props['classification'] = {'name': cname, 'color': F.class_colors.get(cname)}
-            fh.write((',' if i else '') + json.dumps({'type': 'Feature', 'geometry': g, 'properties': props}, separators=(',', ':')))
+            fh.write(
+                (',' if i else '')
+                + json.dumps({'type': 'Feature', 'geometry': g, 'properties': props}, separators=(',', ':'))
+            )
         fh.write(']}')
     return p
 
 
 def write_halo_xml(F: Features, path) -> Path:
-    import xml.etree.ElementTree as ET
     root = ET.Element('Annotations')
     names = F.class_of()
     by_class: dict[str, list] = {}
     for i in range(len(F)):
         by_class.setdefault(names[i] or 'Annotation', []).append(i)
     for cname, idx in by_class.items():
-        a = ET.SubElement(root, 'Annotation', Name=cname, Visible='True', LineColor=_colorref(F.class_colors.get(cname)))
+        a = ET.SubElement(
+            root, 'Annotation', Name=cname, Visible='True', LineColor=_colorref(F.class_colors.get(cname))
+        )
         regs = ET.SubElement(a, 'Regions')
         for i in idx:
             rs = F.rings(i)
@@ -686,7 +796,6 @@ def write_halo_xml(F: Features, path) -> Path:
 
 
 def write_aperio_xml(F: Features, path) -> Path:
-    import xml.etree.ElementTree as ET
     root = ET.Element('Annotations', MicronsPerPixel=str(F.mpp or 0))
     names = F.class_of()
     by_class: dict[str, list] = {}
@@ -694,16 +803,32 @@ def write_aperio_xml(F: Features, path) -> Path:
         by_class.setdefault(names[i] or 'Annotation', []).append(i)
     rid = 0
     for aid, (cname, idx) in enumerate(by_class.items(), 1):
-        a = ET.SubElement(root, 'Annotation', Id=str(aid), Name=cname, ReadOnly='0', LineColor=_colorref(F.class_colors.get(cname)),
-                          Visible='1', Selected='0', Type='4')
+        a = ET.SubElement(
+            root,
+            'Annotation',
+            Id=str(aid),
+            Name=cname,
+            ReadOnly='0',
+            LineColor=_colorref(F.class_colors.get(cname)),
+            Visible='1',
+            Selected='0',
+            Type='4',
+        )
         ET.SubElement(a, 'Attributes')
         regs = ET.SubElement(a, 'Regions')
         for i in idx:
             for j, r in enumerate(F.rings(i)):
                 rid += 1
                 k = F.kind[i]
-                reg = ET.SubElement(regs, 'Region', Id=str(rid), Type='0' if k != GEO_LINE else '4',
-                                    NegativeROA='1' if j else '0', Selected='0', Analyze='1')
+                reg = ET.SubElement(
+                    regs,
+                    'Region',
+                    Id=str(rid),
+                    Type='0' if k != GEO_LINE else '4',
+                    NegativeROA='1' if j else '0',
+                    Selected='0',
+                    Analyze='1',
+                )
                 vs = ET.SubElement(reg, 'Vertices')
                 for x, y in r:
                     ET.SubElement(vs, 'Vertex', X=f'{x:.2f}', Y=f'{y:.2f}', Z='0')
@@ -713,7 +838,6 @@ def write_aperio_xml(F: Features, path) -> Path:
 
 
 def write_csv(F: Features, path, wkt: bool = False) -> Path:
-    import csv
     p = Path(path)
     sep = '\t' if p.suffix.lower() in ('.tsv', '.txt') else ','
     b = F.bbox()
@@ -722,12 +846,22 @@ def write_csv(F: Features, path, wkt: bool = False) -> Path:
     keys = [k for k in F.props if not k.startswith('__')]
     with open(p, 'w', newline='', encoding='utf-8') as fh:
         w = csv.writer(fh, delimiter=sep)
-        w.writerow(['id', 'class', 'type', 'centroid_x', 'centroid_y', 'xmin', 'ymin', 'xmax', 'ymax', 'area_px'] + keys
-                   + (['wkt'] if wkt else []))
+        w.writerow(
+            ['id', 'class', 'type', 'centroid_x', 'centroid_y', 'xmin', 'ymin', 'xmax', 'ymax', 'area_px']
+            + keys
+            + (['wkt'] if wkt else [])
+        )
         tname = {GEO_POINT: 'point', GEO_LINE: 'line', GEO_POLYGON: 'polygon'}
         for i in range(len(F)):
-            row = [i, names[i], tname[int(F.kind[i])], f'{(b[i, 0] + b[i, 2]) / 2:.2f}', f'{(b[i, 1] + b[i, 3]) / 2:.2f}',
-                   *(f'{v:.2f}' for v in b[i]), f'{area[i]:.1f}'] + [_scalar(F.props[k][i]) for k in keys]
+            row = [
+                i,
+                names[i],
+                tname[int(F.kind[i])],
+                f'{(b[i, 0] + b[i, 2]) / 2:.2f}',
+                f'{(b[i, 1] + b[i, 3]) / 2:.2f}',
+                *(f'{v:.2f}' for v in b[i]),
+                f'{area[i]:.1f}',
+            ] + [_scalar(F.props[k][i]) for k in keys]
             if wkt:
                 row.append(_wkt(F, i))
             w.writerow(row)
@@ -736,7 +870,7 @@ def write_csv(F: Features, path, wkt: bool = False) -> Path:
 
 def _wkt(F: Features, i: int) -> str:
     rs = F.rings(i)
-    fmt = lambda r: ', '.join(f'{x:.2f} {y:.2f}' for x, y in r)  # noqa: E731
+    fmt = lambda r: ', '.join(f'{x:.2f} {y:.2f}' for x, y in r)
     k = F.kind[i]
     if k == GEO_POINT:
         return f'POINT ({rs[0][0, 0]:.2f} {rs[0][0, 1]:.2f})'
@@ -745,7 +879,9 @@ def _wkt(F: Features, i: int) -> str:
     return 'POLYGON (' + ', '.join(f'({fmt(np.vstack([r, r[:1]]))})' for r in rs) + ')'
 
 
-def write_coco(F: Features, path, width: int | None = None, height: int | None = None, file_name: str | None = None) -> Path:
+def write_coco(
+    F: Features, path, width: int | None = None, height: int | None = None, file_name: str | None = None
+) -> Path:
     b = F.bbox()
     area = F.shell_area()
     names = list(F.class_names) or ['object']
@@ -757,12 +893,24 @@ def write_coco(F: Features, path, width: int | None = None, height: int | None =
         if F.kind[i] != GEO_POLYGON:
             continue
         rs = F.rings(i)
-        anns.append({'id': len(anns) + 1, 'image_id': 1, 'category_id': int(max(F.cls[i], 0)) + 1, 'iscrowd': 0,
-                     'segmentation': [rs[0].round(2).ravel().tolist()], 'area': float(area[i]),
-                     'bbox': [float(b[i, 0]), float(b[i, 1]), float(b[i, 2] - b[i, 0]), float(b[i, 3] - b[i, 1])]})
-    doc = {'info': {'description': f'{F.name} (wissi-viz)', 'version': '1.0'}, 'licenses': [],
-           'images': [{'id': 1, 'file_name': file_name or F.name, 'width': W, 'height': H}],
-           'annotations': anns, 'categories': cats}
+        anns.append(
+            {
+                'id': len(anns) + 1,
+                'image_id': 1,
+                'category_id': int(max(F.cls[i], 0)) + 1,
+                'iscrowd': 0,
+                'segmentation': [rs[0].round(2).ravel().tolist()],
+                'area': float(area[i]),
+                'bbox': [float(b[i, 0]), float(b[i, 1]), float(b[i, 2] - b[i, 0]), float(b[i, 3] - b[i, 1])],
+            }
+        )
+    doc = {
+        'info': {'description': f'{F.name} (wissi-viz)', 'version': '1.0'},
+        'licenses': [],
+        'images': [{'id': 1, 'file_name': file_name or F.name, 'width': W, 'height': H}],
+        'annotations': anns,
+        'categories': cats,
+    }
     p = Path(path)
     p.write_text(json.dumps(doc), encoding='utf-8')
     return p
@@ -776,7 +924,7 @@ def read_coco(path) -> Features:
     for a in doc.get('annotations', []):
         seg = a.get('segmentation')
         if not isinstance(seg, list) or not seg:
-            continue                              # RLE masks: not supported
+            continue  # RLE masks: not supported
         r = np.asarray(seg[0], np.float64).reshape(-1, 2)
         if len(r) >= 2 and (r[0] == r[-1]).all():
             r = r[:-1]
@@ -786,16 +934,20 @@ def read_coco(path) -> Features:
         nm = cats.get(a.get('category_id'))
         cls.append(names.index(nm) if nm in names else -1)
     n = len(kinds)
-    return Features(np.asarray(kinds, np.uint8), np.concatenate(coords) if coords else np.zeros((0, 2)),
-                    np.asarray(ring_off, np.int64), np.arange(n + 1, dtype=np.int64), np.asarray(cls, np.int32), names,
-                    name=Path(path).stem.replace('.coco', ''))
+    return Features(
+        np.asarray(kinds, np.uint8),
+        np.concatenate(coords) if coords else np.zeros((0, 2)),
+        np.asarray(ring_off, np.int64),
+        np.arange(n + 1, dtype=np.int64),
+        np.asarray(cls, np.int32),
+        names,
+        name=Path(path).stem.replace('.coco', ''),
+    )
 
 
 def write_mask(F: Features, path, width: int, height: int, downsample: float = 1.0, by: str = 'feature') -> Path:
     """Label image: ``by='feature'`` → each polygon gets its index + 1 (uint32); ``by='class'`` → class index + 1
     (uint16). Rasterised at ``downsample`` (level-0 px per mask px) into a tiled TIFF."""
-    import tifffile
-    from PIL import Image, ImageDraw
     w, h = int(np.ceil(width / downsample)), int(np.ceil(height / downsample))
     img = Image.new('I', (w, h), 0)
     d = ImageDraw.Draw(img)
@@ -810,14 +962,17 @@ def write_mask(F: Features, path, width: int, height: int, downsample: float = 1
     a = np.asarray(img, np.int32)
     a = a.astype(np.uint32 if by == 'feature' else np.uint16)
     p = Path(path)
-    tifffile.imwrite(p, a, tile=(512, 512) if min(w, h) >= 512 else None, compression='zlib',
-                     metadata={'downsample': downsample, 'classes': list(F.class_names), 'by': by})
+    tifffile.imwrite(
+        p,
+        a,
+        tile=(512, 512) if min(w, h) >= 512 else None,
+        compression='zlib',
+        metadata={'downsample': downsample, 'classes': list(F.class_names), 'by': by},
+    )
     return p
 
 
 def read_mask(path, downsample: float = 1.0) -> Features:
-    from .objects import from_label_mask
-    import tifffile
     return from_layer(from_label_mask(tifffile.imread(path), downsample=downsample).to_layer())
 
 
@@ -855,8 +1010,15 @@ def detect_format(path: str | Path) -> str:
     raise ValueError(f'unknown annotation format: {Path(path).name}')
 
 
-def load(path: str | Path, fmt: str = 'auto', *, bbox: tuple | None = None, name: str | None = None,
-         mpp: float | None = None, downsample: float = 1.0) -> AnnotationLayer:
+def load(
+    path: str | Path,
+    fmt: str = 'auto',
+    *,
+    bbox: tuple | None = None,
+    name: str | None = None,
+    mpp: float | None = None,
+    downsample: float = 1.0,
+) -> AnnotationLayer:
     """Any supported file → AnnotationLayer."""
     fmt = detect_format(path) if fmt == 'auto' else fmt
     if fmt == 'geoparquet':
@@ -866,7 +1028,6 @@ def load(path: str | Path, fmt: str = 'auto', *, bbox: tuple | None = None, name
     if fmt == 'mask':
         return to_layer(read_mask(path, downsample), name=name or Path(path).stem)
     if fmt == 'csv':
-        from .objects import read_objects
         return read_objects(path, mpp=mpp).to_layer(name=name or Path(path).stem)
     layer = AnnotationLayer.load(path)
     if name:
@@ -874,9 +1035,19 @@ def load(path: str | Path, fmt: str = 'auto', *, bbox: tuple | None = None, name
     return layer
 
 
-def export(layer: AnnotationLayer | Features, path: str | Path, fmt: str = 'auto', *, mpp: float | None = None,
-           slide: str | None = None, width: int | None = None, height: int | None = None, downsample: float = 1.0,
-           by: str = 'feature', wkt: bool = False) -> Path:
+def export(
+    layer: AnnotationLayer | Features,
+    path: str | Path,
+    fmt: str = 'auto',
+    *,
+    mpp: float | None = None,
+    slide: str | None = None,
+    width: int | None = None,
+    height: int | None = None,
+    downsample: float = 1.0,
+    by: str = 'feature',
+    wkt: bool = False,
+) -> Path:
     """Write a layer in any supported format (by extension, or ``fmt``)."""
     F = layer if isinstance(layer, Features) else from_layer(layer)
     if mpp:
@@ -902,15 +1073,34 @@ def export(layer: AnnotationLayer | Features, path: str | Path, fmt: str = 'auto
     raise ValueError(f'unknown format {fmt!r} (one of {", ".join(FORMATS)})')
 
 
-def convert(src: str | Path, dst: str | Path, *, src_fmt: str = 'auto', dst_fmt: str = 'auto', slide: str | None = None,
-            downsample: float = 1.0, by: str = 'feature', wkt: bool = False, mpp: float | None = None) -> Path:
+def convert(
+    src: str | Path,
+    dst: str | Path,
+    *,
+    src_fmt: str = 'auto',
+    dst_fmt: str = 'auto',
+    slide: str | None = None,
+    downsample: float = 1.0,
+    by: str = 'feature',
+    wkt: bool = False,
+    mpp: float | None = None,
+) -> Path:
     """File → file. ``slide``: a slide path, for the mask size, µm/px and COCO image name."""
     width = height = None
     if slide:
-        from .sources import open_slide
         s = open_slide(slide)
         width, height = s.info.width, s.info.height
         mpp = mpp or (s.info.mpp or (None,))[0]
     layer = load(src, src_fmt, mpp=mpp)
-    return export(layer, dst, dst_fmt, mpp=mpp, slide=Path(slide).name if slide else None, width=width, height=height,
-                  downsample=downsample, by=by, wkt=wkt)
+    return export(
+        layer,
+        dst,
+        dst_fmt,
+        mpp=mpp,
+        slide=Path(slide).name if slide else None,
+        width=width,
+        height=height,
+        downsample=downsample,
+        by=by,
+        wkt=wkt,
+    )

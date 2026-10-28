@@ -4,6 +4,7 @@ Written from the published CZI file-format spec (ZISRAW segments). Lets the test
 mosaics with overlapping tiles, pyramid levels (stored size < logical size) and RGB,
 without the LGPL libCZI writer.
 """
+
 from __future__ import annotations
 
 import struct
@@ -45,6 +46,7 @@ def write_czi(path, blocks, channel_names=None, mpp=None, compression=None):
         payload = a.tobytes()
         if compression == 'zstd':
             import imagecodecs
+
             payload = imagecodecs.zstd_encode(payload, level=1)
         head = struct.pack('<iiq', 0, 0, len(payload)) + de
         head = head.ljust(max(256, len(head)), b'\0')
@@ -54,12 +56,25 @@ def write_czi(path, blocks, channel_names=None, mpp=None, compression=None):
     body += _seg('ZISRAWDIRECTORY', struct.pack('<i', len(entries)) + b'\0' * 124 + b''.join(entries))
     meta_pos = base + len(body)
     chans = ''.join(f'<Channel Id="Channel:{i}" Name="{n}"/>' for i, n in enumerate(channel_names or []))
-    scal = (f'<Scaling><Items><Distance Id="X"><Value>{mpp * 1e-6}</Value></Distance>'
-            f'<Distance Id="Y"><Value>{mpp * 1e-6}</Value></Distance></Items></Scaling>') if mpp else ''
-    xml = (f'<ImageDocument><Metadata><Information><Image><Dimensions><Channels>{chans}</Channels>'
-           f'</Dimensions></Image></Information>{scal}</Metadata></ImageDocument>').encode()
+    scal = (
+        (
+            f'<Scaling><Items><Distance Id="X"><Value>{mpp * 1e-6}</Value></Distance>'
+            f'<Distance Id="Y"><Value>{mpp * 1e-6}</Value></Distance></Items></Scaling>'
+        )
+        if mpp
+        else ''
+    )
+    xml = (
+        f'<ImageDocument><Metadata><Information><Image><Dimensions><Channels>{chans}</Channels>'
+        f'</Dimensions></Image></Information>{scal}</Metadata></ImageDocument>'
+    ).encode()
     body += _seg('ZISRAWMETADATA', struct.pack('<ii', len(xml), 0) + b'\0' * 248 + xml)
-    hdr = struct.pack('<iiii', 1, 0, 0, 0) + b'\x11' * 16 + b'\x11' * 16 + struct.pack('<iqqiq', 0, dir_pos, meta_pos, 0, 0)
+    hdr = (
+        struct.pack('<iiii', 1, 0, 0, 0)
+        + b'\x11' * 16
+        + b'\x11' * 16
+        + struct.pack('<iqqiq', 0, dir_pos, meta_pos, 0, 0)
+    )
     with open(path, 'wb') as f:
         f.write(_seg('ZISRAWFILE', hdr.ljust(512, b'\0')))
         f.write(body)
@@ -82,11 +97,11 @@ def mosaic_with_pyramid(path, img: np.ndarray, tile=300, overlap=20, levels=(1, 
                     h -= h % s
                     if w <= 0 or h <= 0:
                         continue
-                    region = plane[y:y + h, x:x + w]
+                    region = plane[y : y + h, x : x + w]
                     if s > 1:
                         sh = (h // s, s, w // s, s) + region.shape[2:]
                         region = region.reshape(sh).mean((1, 3)).astype(plane.dtype)
-                    blocks.append(dict(c=c, x=x, y=y, w=w, h=h, data=region, m=m, pyramid=s > 1))
+                    blocks.append({'c': c, 'x': x, 'y': y, 'w': w, 'h': h, 'data': region, 'm': m, 'pyramid': s > 1})
                     m += 1
     write_czi(path, blocks, channel_names, mpp)
     return blocks
@@ -95,6 +110,7 @@ def mosaic_with_pyramid(path, img: np.ndarray, tile=300, overlap=20, levels=(1, 
 def write_czi_stream(path, block_iter, channel_names=None, mpp=None, compression='zstd'):
     """Like write_czi but consumes an iterator of blocks and writes each subblock immediately."""
     import imagecodecs
+
     entries = []
     with open(path, 'wb') as f:
         f.write(b'\0' * (32 + 512))  # header placeholder
@@ -105,7 +121,12 @@ def write_czi_stream(path, block_iter, channel_names=None, mpp=None, compression
                 a = np.ascontiguousarray(a[..., ::-1])
             ptype = PIXEL[(a.dtype, spp)]
             sh, sw = a.shape[:2]
-            dims = [('X', b['x'], b['w'], sw), ('Y', b['y'], b['h'], sh), ('C', b['c'], 1, 1), ('M', b.get('m', 0), 1, 1)]
+            dims = [
+                ('X', b['x'], b['w'], sw),
+                ('Y', b['y'], b['h'], sh),
+                ('C', b['c'], 1, 1),
+                ('M', b.get('m', 0), 1, 1),
+            ]
             pos = f.tell()
             de = _dir_entry(ptype, pos, dims, 2 if b.get('pyramid') else 0, 5 if compression == 'zstd' else 0)
             payload = imagecodecs.zstd_encode(a.tobytes(), level=1) if compression == 'zstd' else a.tobytes()
@@ -116,10 +137,18 @@ def write_czi_stream(path, block_iter, channel_names=None, mpp=None, compression
         f.write(_seg('ZISRAWDIRECTORY', struct.pack('<i', len(entries)) + b'\0' * 124 + b''.join(entries)))
         meta_pos = f.tell()
         chans = ''.join(f'<Channel Id="Channel:{i}" Name="{n}"/>' for i, n in enumerate(channel_names or []))
-        scal = (f'<Scaling><Items><Distance Id="X"><Value>{mpp * 1e-6}</Value></Distance>'
-                f'<Distance Id="Y"><Value>{mpp * 1e-6}</Value></Distance></Items></Scaling>') if mpp else ''
-        xml = (f'<ImageDocument><Metadata><Information><Image><Dimensions><Channels>{chans}</Channels>'
-               f'</Dimensions></Image></Information>{scal}</Metadata></ImageDocument>').encode()
+        scal = (
+            (
+                f'<Scaling><Items><Distance Id="X"><Value>{mpp * 1e-6}</Value></Distance>'
+                f'<Distance Id="Y"><Value>{mpp * 1e-6}</Value></Distance></Items></Scaling>'
+            )
+            if mpp
+            else ''
+        )
+        xml = (
+            f'<ImageDocument><Metadata><Information><Image><Dimensions><Channels>{chans}</Channels>'
+            f'</Dimensions></Image></Information>{scal}</Metadata></ImageDocument>'
+        ).encode()
         f.write(_seg('ZISRAWMETADATA', struct.pack('<ii', len(xml), 0) + b'\0' * 248 + xml))
         hdr = struct.pack('<iiii', 1, 0, 0, 0) + b'\x11' * 32 + struct.pack('<iqqiq', 0, dir_pos, meta_pos, 0, 0)
         f.seek(0)

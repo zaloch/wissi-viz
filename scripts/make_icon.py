@@ -5,6 +5,7 @@
 A magnifier over stained tissue on a tile grid: pink stroma, purple nuclei, the pyramid tiles the viewer streams.
 PNG/ICO/ICNS come from Pillow (supersampled 2×, then downsampled); the SVG is written from the same geometry.
 """
+
 from __future__ import annotations
 
 import random
@@ -13,16 +14,20 @@ from pathlib import Path
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 OUT = Path(__file__).resolve().parents[1] / 'src' / 'wissi_viz' / 'assets'
-N = 1024                           # design canvas
+N = 1024  # design canvas
 BG_TOP, BG_BOT = (24, 42, 70), (9, 15, 27)
-INSET, RADIUS = 56, 210            # rounded-square plate
+INSET, RADIUS = 56, 210  # rounded-square plate
 LENS_C, LENS_R, RING = (452, 452), 300, 46
 HANDLE = ((690, 690), (850, 850), 104)
 CYAN, CYAN_DARK = (94, 208, 255), (40, 140, 205)
-STROMA = [((330, 360, 300, 230), (236, 140, 182)), ((560, 560, 260, 200), (222, 118, 168)),
-          ((380, 610, 190, 150), (244, 170, 200)), ((610, 330, 170, 140), (240, 156, 192))]   # (cx, cy, rx, ry), rgb
+STROMA = [
+    ((330, 360, 300, 230), (236, 140, 182)),
+    ((560, 560, 260, 200), (222, 118, 168)),
+    ((380, 610, 190, 150), (244, 170, 200)),
+    ((610, 330, 170, 140), (240, 156, 192)),
+]  # (cx, cy, rx, ry), rgb
 NUCLEUS = (112, 66, 168)
-GRID = 150                         # tile grid pitch inside the lens
+GRID = 150  # tile grid pitch inside the lens
 
 
 def _nuclei():
@@ -32,7 +37,7 @@ def _nuclei():
         x, y = rng.uniform(170, 740), rng.uniform(170, 740)
         if (x - LENS_C[0]) ** 2 + (y - LENS_C[1]) ** 2 > (LENS_R - 30) ** 2:
             continue
-        if any((x - a) ** 2 + (y - b) ** 2 < 46 ** 2 for a, b, *_ in out):
+        if any((x - a) ** 2 + (y - b) ** 2 < 46**2 for a, b, *_ in out):
             continue
         out.append((x, y, rng.uniform(13, 22), rng.uniform(10, 17), rng.uniform(0, 180)))
     return out
@@ -42,7 +47,7 @@ NUCLEI = _nuclei()
 
 
 def render(size: int = 1024) -> Image.Image:
-    W = 2 * N                                  # draw at 2× then downsample
+    W = 2 * N  # draw at 2× then downsample
 
     def S(v):
         return v * 2
@@ -70,7 +75,9 @@ def render(size: int = 1024) -> Image.Image:
     nuc = Image.new('RGBA', (W, W), (0, 0, 0, 0))
     for x, y, rx, ry, a in NUCLEI:
         e = Image.new('RGBA', (S(int(rx * 2 + 4)), S(int(rx * 2 + 4))), (0, 0, 0, 0))
-        ImageDraw.Draw(e).ellipse([S(2 + rx - rx), S(2 + rx - ry), S(2 + rx + rx), S(2 + rx + ry)], fill=NUCLEUS + (255,))
+        ImageDraw.Draw(e).ellipse(
+            [S(2 + rx - rx), S(2 + rx - ry), S(2 + rx + rx), S(2 + rx + ry)], fill=NUCLEUS + (255,)
+        )
         e = e.rotate(a, resample=Image.BICUBIC)
         nuc.alpha_composite(e, (int(S(x) - e.width / 2), int(S(y) - e.height / 2)))
     tissue.alpha_composite(nuc)
@@ -86,7 +93,7 @@ def render(size: int = 1024) -> Image.Image:
     d = ImageDraw.Draw(img)
     (x0, y0), (x1, y1), w = HANDLE
     d.line([S(x0), S(y0), S(x1), S(y1)], fill=CYAN_DARK, width=S(w))
-    for (x, y) in ((x0, y0), (x1, y1)):
+    for x, y in ((x0, y0), (x1, y1)):
         d.ellipse([S(x - w / 2), S(y - w / 2), S(x + w / 2), S(y + w / 2)], fill=CYAN_DARK)
     r = S(LENS_R + RING / 2)
     d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=CYAN, width=S(RING))
@@ -99,9 +106,14 @@ def svg() -> str:
     (x0, y0), (x1, y1), w = HANDLE
     cx, cy = LENS_C
     blobs = ''.join(f'<ellipse cx="{x}" cy="{y}" rx="{rx}" ry="{ry}" fill="rgb{c}"/>' for (x, y, rx, ry), c in STROMA)
-    nuclei = ''.join(f'<ellipse cx="{x:.0f}" cy="{y:.0f}" rx="{rx:.0f}" ry="{ry:.0f}" transform="rotate({-a:.0f} {x:.0f} {y:.0f})"/>'
-                     for x, y, rx, ry, a in NUCLEI)
-    lines = ''.join(f'<path d="M{cx + k * GRID - GRID / 2:.0f} 0V1024M0 {cy + k * GRID - GRID / 2:.0f}H1024"/>' for k in range(-3, 4))
+    nuclei = ''.join(
+        f'<ellipse cx="{x:.0f}" cy="{y:.0f}" rx="{rx:.0f}" ry="{ry:.0f}" transform="rotate({-a:.0f} {x:.0f} {y:.0f})"/>'
+        for x, y, rx, ry, a in NUCLEI
+    )
+    lines = ''.join(
+        f'<path d="M{cx + k * GRID - GRID / 2:.0f} 0V1024M0 {cy + k * GRID - GRID / 2:.0f}H1024"/>'
+        for k in range(-3, 4)
+    )
     return f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
 <defs>
 <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="rgb{BG_TOP}"/><stop offset="1" stop-color="rgb{BG_BOT}"/></linearGradient>

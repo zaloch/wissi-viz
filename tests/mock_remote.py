@@ -8,6 +8,7 @@ They deliberately reproduce the awkward parts of real tile APIs:
 * MockPathCore: *async* client, levels listed coarsest-first with string ids, fixed
   256×256 PNG tiles padded past the image edge, GeoJSON annotations in microns.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -35,7 +36,10 @@ class _Backing:
 
     def region(self, ds: float, x: int, y: int, w: int, h: int) -> np.ndarray:
         """(x, y, w, h) in the coordinates of a level with downsample ``ds``; zeros past the image."""
-        nat = max((i for i, lv in enumerate(self.info.levels) if lv.downsample <= ds + 1e-6), key=lambda i: self.info.levels[i].downsample)
+        nat = max(
+            (i for i, lv in enumerate(self.info.levels) if lv.downsample <= ds + 1e-6),
+            key=lambda i: self.info.levels[i].downsample,
+        )
         nl = self.info.levels[nat]
         f = int(round(ds / nl.downsample))
         X, Y, W, H = x * f, y * f, w * f, h * f
@@ -44,7 +48,7 @@ class _Backing:
         if x1 > X and y1 > Y:
             with self.lock:
                 a = self.src.read_region(nat, X, Y, x1 - X, y1 - Y)
-            out[:y1 - Y, :x1 - X] = a
+            out[: y1 - Y, : x1 - X] = a
         if f > 1:
             out = out.reshape(h, f, w, f, 3).mean((1, 3)).astype(np.uint8)
         return out
@@ -73,8 +77,16 @@ class MockHaloLink(HaloLinkConnection):
         self.max_level = math.ceil(math.log2(max(self.W, self.H)))
 
     def image_info(self, image_id):
-        return RemoteImageInfo(width=self.W, height=self.H, tile_size=254, overlap=1, deepzoom=True,
-                               mpp=self.b.info.mpp, name=f'HALO {image_id}', version='halo-v1')
+        return RemoteImageInfo(
+            width=self.W,
+            height=self.H,
+            tile_size=254,
+            overlap=1,
+            deepzoom=True,
+            mpp=self.b.info.mpp,
+            name=f'HALO {image_id}',
+            version='halo-v1',
+        )
 
     def tile(self, image_id, level, col, row, channel=None):
         with self._l:
@@ -100,9 +112,11 @@ class MockHaloLink(HaloLinkConnection):
     def annotations(self, image_id):
         # ROI as HALO XML (level-0 px)
         w, h = self.W, self.H
-        xml = (f'<Annotations><Annotation Name="Tumor ROI" LineColor="65280"><Regions><Region Type="Polygon">'
-               f'<Vertices><V X="{w*.1}" Y="{h*.1}"/><V X="{w*.45}" Y="{h*.12}"/><V X="{w*.5}" Y="{h*.5}"/>'
-               f'<V X="{w*.2}" Y="{h*.45}"/></Vertices></Region></Regions></Annotation></Annotations>')
+        xml = (
+            f'<Annotations><Annotation Name="Tumor ROI" LineColor="65280"><Regions><Region Type="Polygon">'
+            f'<Vertices><V X="{w * 0.1}" Y="{h * 0.1}"/><V X="{w * 0.45}" Y="{h * 0.12}"/><V X="{w * 0.5}" Y="{h * 0.5}"/>'
+            f'<V X="{w * 0.2}" Y="{h * 0.45}"/></Vertices></Region></Regions></Annotation></Annotations>'
+        )
         return [AnnotationPayload('HALO annotations', xml, format='halo_xml', style={'line_width': 3})]
 
     def objects(self, image_id):
@@ -114,8 +128,10 @@ class MockHaloLink(HaloLinkConnection):
             if f['geometry']['type'] != 'Polygon' or f['properties']['classification']['name'] == 'ROI':
                 continue
             c = np.asarray(f['geometry']['coordinates'][0])
-            rows['XMin'].append(c[:, 0].min()); rows['XMax'].append(c[:, 0].max())
-            rows['YMin'].append(c[:, 1].min()); rows['YMax'].append(c[:, 1].max())
+            rows['XMin'].append(c[:, 0].min())
+            rows['XMax'].append(c[:, 0].max())
+            rows['YMin'].append(c[:, 1].min())
+            rows['YMax'].append(c[:, 1].max())
             rows['Classification'].append(f['properties']['classification']['name'])
             rows['Area'].append(f['properties'].get('area', 0))
         return [AnnotationPayload('HALO objects', rows, format='table', style={'fill_opacity': 0.0})]
@@ -133,9 +149,16 @@ class MockPathCore(PathCoreConnection):
         await asyncio.sleep(0.01)
         i = self.b.info
         # coarsest-first ordering with opaque string ids, as some APIs return them
-        return RemoteImageInfo(width=i.width, height=i.height, tile_size=256,
-                               levels=[lv[:2] for lv in reversed(self.levels)], level_ids=list(reversed(self.ids)),
-                               mpp=i.mpp[0], name=f'PathCore {slide_id}', version='pc-etag-1')
+        return RemoteImageInfo(
+            width=i.width,
+            height=i.height,
+            tile_size=256,
+            levels=[lv[:2] for lv in reversed(self.levels)],
+            level_ids=list(reversed(self.ids)),
+            mpp=i.mpp[0],
+            name=f'PathCore {slide_id}',
+            version='pc-etag-1',
+        )
 
     async def tile(self, slide_id, level, col, row, channel=None):
         await asyncio.sleep(0.005)  # network latency
@@ -148,7 +171,22 @@ class MockPathCore(PathCoreConnection):
         i = self.b.info
         mx = i.mpp[0]
         w, h = i.width * mx, i.height * mx  # µm
-        gj = {'type': 'FeatureCollection', 'features': [{
-            'type': 'Feature', 'properties': {'classification': {'name': 'Margin', 'color': [255, 0, 255]}},
-            'geometry': {'type': 'LineString', 'coordinates': [[w * .55, h * .2], [w * .7, h * .35], [w * .8, h * .3], [w * .9, h * .6]]}}]}
+        gj = {
+            'type': 'FeatureCollection',
+            'features': [
+                {
+                    'type': 'Feature',
+                    'properties': {'classification': {'name': 'Margin', 'color': [255, 0, 255]}},
+                    'geometry': {
+                        'type': 'LineString',
+                        'coordinates': [
+                            [w * 0.55, h * 0.2],
+                            [w * 0.7, h * 0.35],
+                            [w * 0.8, h * 0.3],
+                            [w * 0.9, h * 0.6],
+                        ],
+                    },
+                }
+            ],
+        }
         return [AnnotationPayload('PathCore annotations', gj, units='um', style={'line_width': 3})]

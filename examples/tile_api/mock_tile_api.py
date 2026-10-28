@@ -24,6 +24,7 @@ Endpoints
     GET /api/images/{id}/objects                      {"columns": {...}} cell table, µm
     GET /api/_stats                                   request counters (no auth; for the demo)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -43,7 +44,7 @@ from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'src'))
-from wissi_viz.sources import open_slide  # noqa: E402  (the *vendor* reads its own files however it likes)
+from wissi_viz.sources import open_slide  # the *vendor* reads its own files however it likes
 
 STYLES = ('dzi', 'tiles', 'channels', 'render')
 
@@ -58,8 +59,10 @@ class Backing:
         self.lock = threading.Lock()
 
     def region(self, ds: float, x: int, y: int, w: int, h: int, channel=None) -> np.ndarray:
-        lv_i = max((i for i, lv in enumerate(self.info.levels) if lv.downsample <= ds + 1e-6),
-                   key=lambda i: self.info.levels[i].downsample)
+        lv_i = max(
+            (i for i, lv in enumerate(self.info.levels) if lv.downsample <= ds + 1e-6),
+            key=lambda i: self.info.levels[i].downsample,
+        )
         nl = self.info.levels[lv_i]
         f = max(1, int(round(ds / nl.downsample)))
         X, Y, W, H = x * f, y * f, w * f, h * f
@@ -68,10 +71,10 @@ class Backing:
         x1, y1 = min(X + W, nl.width), min(Y + H, nl.height)
         if x1 > X and y1 > Y:
             a = self.src.read_region(lv_i, X, Y, x1 - X, y1 - Y, channel)
-            out[:y1 - Y, :x1 - X] = a
+            out[: y1 - Y, : x1 - X] = a
         if f > 1:
             sh = (h, f, w, f) + out.shape[2:]
-            out = out[:h * f, :w * f].reshape(sh).mean((1, 3)).astype(out.dtype)
+            out = out[: h * f, : w * f].reshape(sh).mean((1, 3)).astype(out.dtype)
         return out
 
 
@@ -99,14 +102,25 @@ class Image:
                 k += 1
 
     def meta(self) -> dict:
-        d = {'id': self.id, 'name': self.name, 'width': self.W, 'height': self.H, 'mpp': self.mpp,
-             'modified': self.version, 'has_annotations': 'annotations' in self.extras,
-             'has_objects': 'objects' in self.extras}
+        d = {
+            'id': self.id,
+            'name': self.name,
+            'width': self.W,
+            'height': self.H,
+            'mpp': self.mpp,
+            'modified': self.version,
+            'has_annotations': 'annotations' in self.extras,
+            'has_objects': 'objects' in self.extras,
+        }
         if self.style == 'dzi':
             d.update(format='dzi', tile_size=self.ts, overlap=self.ov, tile_format='jpeg')
         else:
-            d.update(format='tiles', tile_size=self.ts, tile_format='png16' if self.style == 'channels' else 'jpeg',
-                     levels=[{'id': lid, 'width': w, 'height': h} for lid, w, h, _ in reversed(self.levels)])
+            d.update(
+                format='tiles',
+                tile_size=self.ts,
+                tile_format='png16' if self.style == 'channels' else 'jpeg',
+                levels=[{'id': lid, 'width': w, 'height': h} for lid, w, h, _ in reversed(self.levels)],
+            )
         if self.style == 'channels':
             d['channels'] = [{'name': c.name, 'color': c.color} for c in self.b.info.channels]
             d['dtype'] = 'uint16'
@@ -114,6 +128,7 @@ class Image:
 
     def tile(self, level: str, col: int, row: int, channel: int | None) -> tuple[bytes, str] | None:
         from PIL import Image as PImage
+
         if self.style == 'dzi':
             L = int(level)
             if not 0 <= L <= self.max_level:
@@ -148,7 +163,7 @@ class Image:
                 v = self.b.region(ds, col * self.ts, row * self.ts, self.ts, self.ts, c).astype(np.float32)
                 lo, hi = self.extras['windows'][c]
                 t = np.clip((v - lo) / max(hi - lo, 1), 0, 1)
-                col_rgb = np.array([int(ch.color[i:i + 2], 16) for i in (1, 3, 5)], np.float32)
+                col_rgb = np.array([int(ch.color[i : i + 2], 16) for i in (1, 3, 5)], np.float32)
                 comp += t[..., None] * col_rgb
             a = np.clip(comp, 0, 255).astype(np.uint8)
         else:
@@ -178,8 +193,14 @@ def build_catalog(files: list[str], n: int = 16, annotations: dict | None = None
     return cat
 
 
-def create_api(catalog: dict[str, Image], token: str, latency=(0.04, 0.12), limit: int = 12,
-               error_rate: float = 0.01, seed: int = 0) -> FastAPI:
+def create_api(
+    catalog: dict[str, Image],
+    token: str,
+    latency=(0.04, 0.12),
+    limit: int = 12,
+    error_rate: float = 0.01,
+    seed: int = 0,
+) -> FastAPI:
     api = FastAPI(title='Mock tile API')
     rng = random.Random(seed)
     state = {'inflight': 0, 'requests': 0, 'tiles': 0, 'r429': 0, 'r503': 0, 'r404': 0, 'bytes': 0, 'meta': 0}
@@ -228,8 +249,9 @@ def create_api(catalog: dict[str, Image], token: str, latency=(0.04, 0.12), limi
         return image(iid).meta()
 
     @api.get('/api/images/{iid}/tiles/{level}/{col}/{row}')
-    async def tile(iid: str, level: str, col: int, row: int, channel: int | None = None,
-                   authorization: str | None = Header(None)):
+    async def tile(
+        iid: str, level: str, col: int, row: int, channel: int | None = None, authorization: str | None = Header(None)
+    ):
         auth(authorization)
         img = image(iid)
         try:
@@ -275,6 +297,7 @@ def demo_annotations(slide: str, cells_tsv: str | None, rois_geojson: str | None
         out['annotations'] = gj
     if cells_tsv and Path(cells_tsv).exists():
         import pandas as pd
+
         df = pd.read_csv(cells_tsv, sep='\t')
         keep = ['Class', 'Centroid X µm', 'Centroid Y µm', 'Cell: CD3 mean', 'Cell: CD8 mean', 'Nucleus: Ki67 mean']
         out['objects'] = {k: df[k].tolist() for k in keep if k in df}
@@ -294,9 +317,12 @@ if __name__ == '__main__':
     ap.add_argument('--rois', default=None, help='ROI GeoJSON (px) for the first slide (exposed as /annotations)')
     a = ap.parse_args()
     import uvicorn
+
     first = a.files[0]
     mpp = (open_slide(first).info.mpp or (0.5,))[0]
     cat = build_catalog(a.files, a.n, demo_annotations(first, a.cells, a.rois, mpp))
     lo, hi = (float(v) / 1000 for v in a.latency.split(','))
     print(f'mock tile API: {len(cat)} images on http://127.0.0.1:{a.port}/api/images (token {a.token!r})')
-    uvicorn.run(create_api(cat, a.token, (lo, hi), a.limit, a.errors), host='127.0.0.1', port=a.port, log_level='warning')
+    uvicorn.run(
+        create_api(cat, a.token, (lo, hi), a.limit, a.errors), host='127.0.0.1', port=a.port, log_level='warning'
+    )

@@ -17,6 +17,7 @@ handles them so the rest of wissi-viz never has to know a slide is remote:
   retries with back-off on transient errors, a timeout, and "no tile here"
   (``None`` / :class:`TileNotFound`) rendered as background instead of an error.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -25,8 +26,9 @@ import math
 import threading
 import time
 import xml.etree.ElementTree as ET
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Callable, Sequence
+from typing import Any
 
 import numpy as np
 
@@ -59,6 +61,7 @@ class RemotePyramid:
 
     ``level_ids[i]`` is what gets passed back to *your* fetch function for wissi-viz level ``i``.
     """
+
     width: int
     height: int
     tile_size: int
@@ -67,34 +70,55 @@ class RemotePyramid:
     overlap: int = 0
 
     @classmethod
-    def explicit(cls, width: int, height: int, tile_size: int, levels: Sequence[Sequence[float]],
-                 level_ids: Sequence[Any] | None = None, overlap: int = 0) -> 'RemotePyramid':
+    def explicit(
+        cls,
+        width: int,
+        height: int,
+        tile_size: int,
+        levels: Sequence[Sequence[float]],
+        level_ids: Sequence[Any] | None = None,
+        overlap: int = 0,
+    ) -> RemotePyramid:
         """``levels``: ``(w, h)`` or ``(w, h, downsample)`` per level, in any order.
         ``level_ids`` (same order as ``levels``) default to each level's index in the order given."""
         ids = list(level_ids) if level_ids is not None else list(range(len(levels)))
         if len(ids) != len(levels):
             raise ValueError('level_ids and levels differ in length')
         pairs = sorted(zip(levels, ids), key=lambda t: -int(t[0][0]))
-        return cls(int(width), int(height), int(tile_size), [(int(lv[0]), int(lv[1])) for lv, _ in pairs],
-                   [i for _, i in pairs], int(overlap))
+        return cls(
+            int(width),
+            int(height),
+            int(tile_size),
+            [(int(lv[0]), int(lv[1])) for lv, _ in pairs],
+            [i for _, i in pairs],
+            int(overlap),
+        )
 
     @classmethod
-    def from_downsamples(cls, width: int, height: int, tile_size: int, downsamples: Sequence[float],
-                         level_ids: Sequence[Any] | None = None, overlap: int = 0,
-                         rounding: str = 'ceil') -> 'RemotePyramid':
+    def from_downsamples(
+        cls,
+        width: int,
+        height: int,
+        tile_size: int,
+        downsamples: Sequence[float],
+        level_ids: Sequence[Any] | None = None,
+        overlap: int = 0,
+        rounding: str = 'ceil',
+    ) -> RemotePyramid:
         r = math.ceil if rounding == 'ceil' else (math.floor if rounding == 'floor' else round)
         lv = [(max(1, int(r(width / d))), max(1, int(r(height / d)))) for d in downsamples]
         return cls.explicit(width, height, tile_size, lv, level_ids, overlap)
 
     @classmethod
-    def deepzoom(cls, width: int, height: int, tile_size: int = 254, overlap: int = 1,
-                 min_level_tiles: int = 1) -> 'RemotePyramid':
+    def deepzoom(
+        cls, width: int, height: int, tile_size: int = 254, overlap: int = 1, min_level_tiles: int = 1
+    ) -> RemotePyramid:
         """Microsoft DeepZoom (DZI): level ``maxLevel = ceil(log2(max(w, h)))`` is full resolution,
         each lower level halves (rounding up). Levels coarser than one tile are skipped."""
         max_level = math.ceil(math.log2(max(width, height))) if max(width, height) > 1 else 0
         levels, ids = [], []
         for i in range(max_level + 1):
-            w, h = math.ceil(width / 2 ** i), math.ceil(height / 2 ** i)
+            w, h = math.ceil(width / 2**i), math.ceil(height / 2**i)
             levels.append((w, h))
             ids.append(max_level - i)
             if math.ceil(w / tile_size) * math.ceil(h / tile_size) <= min_level_tiles:
@@ -102,12 +126,13 @@ class RemotePyramid:
         return cls(int(width), int(height), int(tile_size), levels, ids, int(overlap))
 
     @classmethod
-    def from_dzi(cls, xml_text: str | bytes) -> 'RemotePyramid':
+    def from_dzi(cls, xml_text: str | bytes) -> RemotePyramid:
         """Parse a ``.dzi`` descriptor (``<Image TileSize Overlap Format><Size Width Height/></Image>``)."""
         root = ET.fromstring(xml_text)
         size = next(e for e in root.iter() if e.tag.split('}')[-1] == 'Size')
-        return cls.deepzoom(int(size.get('Width')), int(size.get('Height')), int(root.get('TileSize', 254)),
-                            int(root.get('Overlap', 0)))
+        return cls.deepzoom(
+            int(size.get('Width')), int(size.get('Height')), int(root.get('TileSize', 254)), int(root.get('Overlap', 0))
+        )
 
     def to_levels(self) -> list[Level]:
         return [Level(w, h, self.width / w) for (w, h) in self.levels]
@@ -116,7 +141,8 @@ class RemotePyramid:
 # ----------------------------------------------------------------------------- async bridge
 class _LoopThread:
     """A private asyncio loop in a daemon thread, for async clients without a loop of their own."""
-    _inst: '_LoopThread | None' = None
+
+    _inst: _LoopThread | None = None
     _lock = threading.Lock()
 
     def __init__(self) -> None:
@@ -145,6 +171,7 @@ def resolve(value: Any, loop: asyncio.AbstractEventLoop | None, timeout: float |
 
     async def _run():
         return await asyncio.wait_for(value, timeout) if timeout else await value
+
     return asyncio.run_coroutine_threadsafe(_run(), target).result()
 
 
@@ -162,16 +189,29 @@ class RemoteSlideSource(SlideSource):
     ``(level_id, x, y, w, h, channel)`` in that level's pixel coordinates.
     """
 
-    def __init__(self, pyramid: RemotePyramid, fetch_tile: FetchTile | None = None, *,
-                 fetch_region: FetchRegion | None = None, mpp: tuple[float, float] | float | None = None,
-                 name: str = '', mode: str = 'rgb', channels: Sequence[Channel | str] | None = None,
-                 dtype: str = 'uint8', background: str | None = None,
-                 annotations: Callable[[], list] | list | None = None, version: str = '0',
-                 max_concurrency: int = 8, semaphore: threading.Semaphore | None = None,
-                 retries: int = 2, timeout: float | None = 30.0, loop: asyncio.AbstractEventLoop | None = None,
-                 retry_on: tuple[type[BaseException], ...] = (Exception,),
-                 not_found: tuple[type[BaseException], ...] = (TileNotFound, FileNotFoundError, KeyError),
-                 browser_tile_url: str | None = None) -> None:
+    def __init__(
+        self,
+        pyramid: RemotePyramid,
+        fetch_tile: FetchTile | None = None,
+        *,
+        fetch_region: FetchRegion | None = None,
+        mpp: tuple[float, float] | float | None = None,
+        name: str = '',
+        mode: str = 'rgb',
+        channels: Sequence[Channel | str] | None = None,
+        dtype: str = 'uint8',
+        background: str | None = None,
+        annotations: Callable[[], list] | list | None = None,
+        version: str = '0',
+        max_concurrency: int = 8,
+        semaphore: threading.Semaphore | None = None,
+        retries: int = 2,
+        timeout: float | None = 30.0,
+        loop: asyncio.AbstractEventLoop | None = None,
+        retry_on: tuple[type[BaseException], ...] = (Exception,),
+        not_found: tuple[type[BaseException], ...] = (TileNotFound, FileNotFoundError, KeyError),
+        browser_tile_url: str | None = None,
+    ) -> None:
         super().__init__()
         if fetch_tile is None and fetch_region is None:
             raise ValueError('provide fetch_tile and/or fetch_region')
@@ -187,12 +227,21 @@ class RemoteSlideSource(SlideSource):
         chans = [c if isinstance(c, Channel) else Channel(str(c)) for c in (channels or [])]
         if mode == 'channels' and not chans:
             chans = [Channel('Channel 1')]
-        self.info = SlideInfo(width=pyramid.width, height=pyramid.height, levels=pyramid.to_levels(),
-                              mode=mode, dtype=dtype, channels=chans, mpp=mpp, name=name,
-                              tile_size=pyramid.tile_size,
-                              background=background or ('#ffffff' if mode == 'rgb' else '#000000'),
-                              tile_url=browser_tile_url, overlap=pyramid.overlap,
-                              level_ids=[str(i) for i in pyramid.level_ids])
+        self.info = SlideInfo(
+            width=pyramid.width,
+            height=pyramid.height,
+            levels=pyramid.to_levels(),
+            mode=mode,
+            dtype=dtype,
+            channels=chans,
+            mpp=mpp,
+            name=name,
+            tile_size=pyramid.tile_size,
+            background=background or ('#ffffff' if mode == 'rgb' else '#000000'),
+            tile_url=browser_tile_url,
+            overlap=pyramid.overlap,
+            level_ids=[str(i) for i in pyramid.level_ids],
+        )
         self.stats = {'calls': 0, 'retries': 0, 'not_found': 0, 'errors': 0, 'seconds': 0.0}
 
     # -------------------------------------------------------------- calling the client
@@ -221,7 +270,7 @@ class RemoteSlideSource(SlideSource):
                         self.stats['errors'] += 1
                         raise RemoteError(f'{args}: still rate limited after {waited:.1f} s') from e
                 continue
-            except self.retry_on as e:  # noqa: PERF203
+            except self.retry_on as e:
                 attempt += 1
                 if attempt > self.retries:
                     self.stats['errors'] += 1
@@ -242,13 +291,13 @@ class RemoteSlideSource(SlideSource):
         ov = self.pyramid.overlap
         ox = ov if (tx > 0 and a.shape[1] > w) else 0
         oy = ov if (ty > 0 and a.shape[0] > h) else 0
-        return _fit(a[oy:oy + h, ox:ox + w], w, h)
+        return _fit(a[oy : oy + h, ox : ox + w], w, h)
 
     def _blank(self, level: int, tx: int, ty: int) -> np.ndarray:
         w, h = self._expected(level, tx, ty)
         if self.info.mode == 'rgb':
             bg = self.info.background.lstrip('#')
-            rgb = [int(bg[i:i + 2], 16) for i in (0, 2, 4)]
+            rgb = [int(bg[i : i + 2], 16) for i in (0, 2, 4)]
             return np.broadcast_to(np.array(rgb, np.uint8), (h, w, 3)).copy()
         return np.zeros((h, w), np.uint16 if self.info.dtype == 'uint16' else np.uint8)
 
@@ -319,7 +368,7 @@ class RemoteSlideSource(SlideSource):
                 sx0, sy0, dx0, dy0 = max(0, -ox), max(0, -oy), max(0, ox), max(0, oy)
                 ww, hh = min(t.shape[1] - sx0, w - dx0), min(t.shape[0] - sy0, h - dy0)
                 if ww > 0 and hh > 0:
-                    out[dy0:dy0 + hh, dx0:dx0 + ww] = t[sy0:sy0 + hh, sx0:sx0 + ww]
+                    out[dy0 : dy0 + hh, dx0 : dx0 + ww] = t[sy0 : sy0 + hh, sx0 : sx0 + ww]
         return out if out is not None else self._blank(level, 0, 0)[:h, :w]
 
     def annotation_layers(self):
@@ -331,6 +380,7 @@ class RemoteSlideSource(SlideSource):
 @dataclass
 class RemoteImageInfo:
     """What a connection's ``image_info()`` returns. Give either ``pyramid`` or enough to build one."""
+
     width: int
     height: int
     pyramid: RemotePyramid | None = None
@@ -359,10 +409,13 @@ class RemoteImageInfo:
         if self.deepzoom:
             return RemotePyramid.deepzoom(self.width, self.height, self.tile_size, self.overlap)
         if self.levels:
-            return RemotePyramid.explicit(self.width, self.height, self.tile_size, self.levels, self.level_ids,
-                                          self.overlap)
+            return RemotePyramid.explicit(
+                self.width, self.height, self.tile_size, self.levels, self.level_ids, self.overlap
+            )
         if self.downsamples:
-            return RemotePyramid.from_downsamples(self.width, self.height, self.tile_size, self.downsamples,
-                                                  self.level_ids, self.overlap)
-        return RemotePyramid.explicit(self.width, self.height, self.tile_size, [(self.width, self.height)],
-                                      self.level_ids, self.overlap)
+            return RemotePyramid.from_downsamples(
+                self.width, self.height, self.tile_size, self.downsamples, self.level_ids, self.overlap
+            )
+        return RemotePyramid.explicit(
+            self.width, self.height, self.tile_size, [(self.width, self.height)], self.level_ids, self.overlap
+        )

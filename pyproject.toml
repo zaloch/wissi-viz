@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "wissi-viz"
-version = "0.8.0"
+dynamic = ["version"]
 description = "GPU-accelerated (WebGL2) whole-slide image viewer and spatial-analysis toolkit for brightfield and fluorescence histology (SVS/CZI/OME-TIFF/PathCore/HALO Link), for the browser and NiceGUI"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -77,6 +77,9 @@ required-environments = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/wissi_viz"]
 
+[tool.hatch.version]
+path = "src/wissi_viz/_version.py"
+
 [tool.hatch.build.targets.sdist]
 exclude = ["docs/*.png", "docs/*.gif", ".github", "benchmarks/probe_reports"]
 
@@ -85,3 +88,27 @@ exclude = ["docs/*.png", "docs/*.gif", ".github", "benchmarks/probe_reports"]
 
 [tool.ruff]
 line-length = 120
+target-version = "py310"
+extend-exclude = ["benchmarks/probe_reports"]  # generated settings snippets
+
+[tool.ruff.lint]
+# pycodestyle, pyflakes, import order, bugbear, pyupgrade, comprehensions, blind / silent excepts, stale noqa.
+# Imports inside functions are checked by tests/test_style.py: only optional extras may be imported lazily.
+select = ["E", "F", "W", "I", "B", "UP", "C4", "BLE", "RUF100"]
+ignore = [
+  "B008",   # FastAPI Query(...) defaults
+  "B905",   # zip() without strict= (3.10+ only)
+  "E731",   # small lambdas assigned to names
+  "E501",   # long lines: the formatter wraps code; long strings and URLs stay whole
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["BLE001", "B018"]
+"benchmarks/*" = ["BLE001", "B023"]  # browser drivers define helpers per page and call them in the same iteration
+"examples/*" = ["BLE001"]
+
+[tool.ruff.format]
+quote-style = "single"
+
+[tool.ruff.lint.isort]
+known-first-party = ["wissi_viz"]

@@ -15,6 +15,7 @@ For each format it measures:
 
     python benchmarks/object_formats.py /tmp/objbench --rows 1000000 [--postgres]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -29,13 +30,18 @@ import numpy as np
 
 W, H = 100_000, 80_000
 CLASSES = ['Tumor', 'Stroma', 'CD8 T cell', 'CD4 T cell', 'Macrophage', 'B cell', 'Other']
-MEAS = [f'{m} {c} {s}' for m in ('DAPI', 'CD3', 'CD8', 'PanCK', 'CD68') for c in ('Nucleus', 'Cytoplasm', 'Cell')
-        for s in ('Intensity', 'Positive %')]
+MEAS = [
+    f'{m} {c} {s}'
+    for m in ('DAPI', 'CD3', 'CD8', 'PanCK', 'CD68')
+    for c in ('Nucleus', 'Cytoplasm', 'Cell')
+    for s in ('Intensity', 'Positive %')
+]
 GEO = ['XMin', 'XMax', 'YMin', 'YMax', 'Classification']
 
 
 def make(n: int, seed: int = 0):
     import pyarrow as pa
+
     rng = np.random.default_rng(seed)
     # clustered tissue: cells around 40 blobs, realistic spatial non-uniformity
     centres = rng.uniform([0, 0], [W, H], (40, 2))
@@ -43,11 +49,15 @@ def make(n: int, seed: int = 0):
     xy = centres[k] + rng.normal(0, 6000, (n, 2))
     xy = np.clip(xy, 0, [W - 30, H - 30])
     r = rng.uniform(4, 12, n)
-    t = {'Object Id': np.arange(n, dtype=np.int64),
-         'XMin': (xy[:, 0] - r).astype(np.int32), 'XMax': (xy[:, 0] + r).astype(np.int32),
-         'YMin': (xy[:, 1] - r).astype(np.int32), 'YMax': (xy[:, 1] + r).astype(np.int32),
-         'Classification': np.asarray(CLASSES)[rng.integers(0, len(CLASSES), n)],
-         'Analysis Region': np.asarray(['Layer 1', 'Layer 2', 'Margin'])[rng.integers(0, 3, n)]}
+    t = {
+        'Object Id': np.arange(n, dtype=np.int64),
+        'XMin': (xy[:, 0] - r).astype(np.int32),
+        'XMax': (xy[:, 0] + r).astype(np.int32),
+        'YMin': (xy[:, 1] - r).astype(np.int32),
+        'YMax': (xy[:, 1] + r).astype(np.int32),
+        'Classification': np.asarray(CLASSES)[rng.integers(0, len(CLASSES), n)],
+        'Analysis Region': np.asarray(['Layer 1', 'Layer 2', 'Margin'])[rng.integers(0, 3, n)],
+    }
     for c in MEAS:
         t[c] = rng.gamma(2.0, 50.0, n).round(4)
     return pa.table(t)
@@ -77,6 +87,7 @@ def write_all(d: Path, n: int, postgres: bool) -> dict:
     import pyarrow.csv as pacsv
     import pyarrow.feather as pf
     import pyarrow.parquet as pq
+
     d.mkdir(parents=True, exist_ok=True)
     tbl = make(n)
     out = {}
@@ -85,31 +96,43 @@ def write_all(d: Path, n: int, postgres: bool) -> dict:
         t = time.perf_counter()
         fn()
         out[name] = round(time.perf_counter() - t, 2)
+
     timed('csv', lambda: pacsv.write_csv(tbl, d / 'cells.csv'))
     timed('tsv', lambda: pacsv.write_csv(tbl, d / 'cells.tsv', pacsv.WriteOptions(delimiter='\t')))
     timed('parquet', lambda: pq.write_table(tbl, d / 'cells.parquet', compression='zstd', row_group_size=65536))
     cx = (tbl['XMin'].to_numpy() + tbl['XMax'].to_numpy()) // 2
     cy = (tbl['YMin'].to_numpy() + tbl['YMax'].to_numpy()) // 2
     o = np.argsort(hilbert_order(cx, cy), kind='stable')
-    timed('parquet_hilbert', lambda: pq.write_table(tbl.take(o), d / 'cells_hilbert.parquet', compression='zstd',
-                                                    row_group_size=16384, write_statistics=True))
+    timed(
+        'parquet_hilbert',
+        lambda: pq.write_table(
+            tbl.take(o), d / 'cells_hilbert.parquet', compression='zstd', row_group_size=16384, write_statistics=True
+        ),
+    )
     timed('feather', lambda: pf.write_feather(tbl, d / 'cells.arrow', compression='uncompressed'))
     timed('feather_lz4', lambda: pf.write_feather(tbl, d / 'cells_lz4.arrow', compression='lz4'))
 
     def sqlite():
         import sqlite3
+
         p = d / 'cells.sqlite'
         p.unlink(missing_ok=True)
         con = sqlite3.connect(p)
         cols = tbl.column_names
-        q = ', '.join(f'"{c}" {"TEXT" if c in ("Classification", "Analysis Region") else ("INTEGER" if c in ("Object Id", "XMin", "XMax", "YMin", "YMax") else "REAL")}' for c in cols)
-        con.execute(f'CREATE TABLE cells ({q.replace(chr(34) + "Object Id" + chr(34) + " INTEGER", chr(34) + "Object Id" + chr(34) + " INTEGER PRIMARY KEY")})')
+        q = ', '.join(
+            f'"{c}" {"TEXT" if c in ("Classification", "Analysis Region") else ("INTEGER" if c in ("Object Id", "XMin", "XMax", "YMin", "YMax") else "REAL")}'
+            for c in cols
+        )
+        con.execute(
+            f'CREATE TABLE cells ({q.replace(chr(34) + "Object Id" + chr(34) + " INTEGER", chr(34) + "Object Id" + chr(34) + " INTEGER PRIMARY KEY")})'
+        )
         rows = zip(*[tbl[c].to_pylist() for c in cols])
         con.executemany(f'INSERT INTO cells VALUES ({",".join("?" * len(cols))})', rows)
         con.execute('CREATE VIRTUAL TABLE cells_rtree USING rtree(id, x0, x1, y0, y1)')
         con.execute('INSERT INTO cells_rtree SELECT "Object Id", XMin, XMax, YMin, YMax FROM cells')
         con.commit()
         con.close()
+
     timed('sqlite', sqlite)
 
     def duck():
@@ -119,12 +142,21 @@ def write_all(d: Path, n: int, postgres: bool) -> dict:
         con.register('t', tbl)
         con.execute('CREATE TABLE cells AS SELECT * FROM t')
         con.close()
+
     timed('duckdb', duck)
     if postgres:
         timed('postgres', lambda: pg_load(d, tbl))
     sizes = {}
-    for k, f in [('csv', 'cells.csv'), ('tsv', 'cells.tsv'), ('parquet', 'cells.parquet'), ('parquet_hilbert', 'cells_hilbert.parquet'),
-                 ('feather', 'cells.arrow'), ('feather_lz4', 'cells_lz4.arrow'), ('sqlite', 'cells.sqlite'), ('duckdb', 'cells.duckdb')]:
+    for k, f in [
+        ('csv', 'cells.csv'),
+        ('tsv', 'cells.tsv'),
+        ('parquet', 'cells.parquet'),
+        ('parquet_hilbert', 'cells_hilbert.parquet'),
+        ('feather', 'cells.arrow'),
+        ('feather_lz4', 'cells_lz4.arrow'),
+        ('sqlite', 'cells.sqlite'),
+        ('duckdb', 'cells.duckdb'),
+    ]:
         sizes[k] = round((d / f).stat().st_size / 2**20, 1)
     if postgres:
         sizes['postgres'] = pg_size()
@@ -144,20 +176,34 @@ def pg_start(root: Path):
     os.system(f'chown postgres {sock} {root}')
     if not data.exists():
         subprocess.run(['su', 'postgres', '-c', f'{bin_}/initdb -D {data} -A trust -U postgres >/dev/null'], check=True)
-    subprocess.run(['su', 'postgres', '-c', f'{bin_}/pg_ctl -D {data} -o "-p {PG["port"]} -k {sock} -c shared_buffers=512MB '
-                    f'-c max_wal_size=4GB -c fsync=off -c synchronous_commit=off" -l {root}/pg.log -w start >/dev/null'], check=True)
+    subprocess.run(
+        [
+            'su',
+            'postgres',
+            '-c',
+            f'{bin_}/pg_ctl -D {data} -o "-p {PG["port"]} -k {sock} -c shared_buffers=512MB '
+            f'-c max_wal_size=4GB -c fsync=off -c synchronous_commit=off" -l {root}/pg.log -w start >/dev/null',
+        ],
+        check=True,
+    )
 
 
 def pg_stop(root: Path):
-    subprocess.run(['su', 'postgres', '-c', f'/usr/lib/postgresql/16/bin/pg_ctl -D {root / "pgdata"} -m fast stop >/dev/null'])
+    subprocess.run(
+        ['su', 'postgres', '-c', f'/usr/lib/postgresql/16/bin/pg_ctl -D {root / "pgdata"} -m fast stop >/dev/null']
+    )
 
 
 def pg_load(d: Path, tbl):
     import psycopg
+
     os.system(f'chmod a+r {d / "cells.csv"}; chmod a+x {d}')
     with psycopg.connect(**PG, autocommit=True) as con:
         con.execute('DROP TABLE IF EXISTS cells')
-        cols = ', '.join(f'"{c}" {"text" if c in ("Classification", "Analysis Region") else ("integer" if c in ("XMin", "XMax", "YMin", "YMax") else ("bigint primary key" if c == "Object Id" else "double precision"))}' for c in tbl.column_names)
+        cols = ', '.join(
+            f'"{c}" {"text" if c in ("Classification", "Analysis Region") else ("integer" if c in ("XMin", "XMax", "YMin", "YMax") else ("bigint primary key" if c == "Object Id" else "double precision"))}'
+            for c in tbl.column_names
+        )
         con.execute(f'CREATE TABLE cells ({cols})')
         with con.cursor().copy('COPY cells FROM STDIN (FORMAT csv, HEADER true)') as cp:
             with open(d / 'cells.csv', 'rb') as f:
@@ -169,6 +215,7 @@ def pg_load(d: Path, tbl):
 
 def pg_size():
     import psycopg
+
     with psycopg.connect(**PG) as con:
         return round(con.execute("select pg_total_relation_size('cells')").fetchone()[0] / 2**20, 1)
 
@@ -176,12 +223,16 @@ def pg_size():
 # ------------------------------------------------------------------------------------------------ operations
 def _windows(n=20, seed=1):
     rng = np.random.default_rng(seed)
-    return [(float(x), float(y), float(x) + 8000, float(y) + 5000) for x, y in rng.uniform([0, 0], [W - 8000, H - 5000], (n, 2))]
+    return [
+        (float(x), float(y), float(x) + 8000, float(y) + 5000)
+        for x, y in rng.uniform([0, 0], [W - 8000, H - 5000], (n, 2))
+    ]
 
 
 def op(fmt: str, what: str, d: str) -> dict:
     """Runs in a fresh process: returns seconds and rows."""
     import pyarrow as pa
+
     d = Path(d)
     t0 = time.perf_counter()
     rows = 0
@@ -189,37 +240,50 @@ def op(fmt: str, what: str, d: str) -> dict:
     if what in ('full', 'viewer'):
         if fmt in ('csv', 'tsv'):
             import pyarrow.csv as pacsv
+
             ro = pacsv.ConvertOptions(include_columns=cols) if cols else None
             po = pacsv.ParseOptions(delimiter='\t' if fmt == 'tsv' else ',')
             t = pacsv.read_csv(d / f'cells.{fmt}', parse_options=po, convert_options=ro)
         elif fmt in ('csv_pandas', 'tsv_pandas'):
             import pandas as pd
+
             f = 'tsv' if fmt.startswith('tsv') else 'csv'
-            t = pa.Table.from_pandas(pd.read_csv(d / f'cells.{f}', sep='\t' if f == 'tsv' else ',', usecols=cols, low_memory=False))
+            t = pa.Table.from_pandas(
+                pd.read_csv(d / f'cells.{f}', sep='\t' if f == 'tsv' else ',', usecols=cols, low_memory=False)
+            )
         elif fmt.startswith('parquet'):
             import pyarrow.parquet as pq
-            t = pq.read_table(d / ('cells_hilbert.parquet' if fmt == 'parquet_hilbert' else 'cells.parquet'), columns=cols)
+
+            t = pq.read_table(
+                d / ('cells_hilbert.parquet' if fmt == 'parquet_hilbert' else 'cells.parquet'), columns=cols
+            )
         elif fmt.startswith('feather'):
             import pyarrow.feather as pf
+
             f = d / ('cells_lz4.arrow' if fmt == 'feather_lz4' else 'cells.arrow')
             t = pf.read_table(f, columns=cols, memory_map=fmt == 'feather')
         elif fmt == 'sqlite':
             import sqlite3
+
             con = sqlite3.connect(d / 'cells.sqlite')
             q = 'SELECT ' + (', '.join(f'"{c}"' for c in cols) if cols else '*') + ' FROM cells'
             cur = con.execute(q)
             names = [x[0] for x in cur.description]
             data = list(zip(*cur.fetchall()))
-            t = pa.table({k: v for k, v in zip(names, data)})
+            t = pa.table(dict(zip(names, data)))
         elif fmt == 'duckdb':
             import duckdb
+
             con = duckdb.connect(str(d / 'cells.duckdb'), read_only=True)
-            t = con.execute('SELECT ' + (', '.join(f'"{c}"' for c in cols) if cols else '*') + ' FROM cells').to_arrow_table()
+            t = con.execute(
+                'SELECT ' + (', '.join(f'"{c}"' for c in cols) if cols else '*') + ' FROM cells'
+            ).to_arrow_table()
         elif fmt == 'postgres':
             import io
 
             import psycopg
             import pyarrow.csv as pacsv
+
             buf = io.BytesIO()
             with psycopg.connect(**PG) as con:
                 q = 'SELECT ' + (', '.join(f'"{c}"' for c in cols) if cols else '*') + ' FROM cells'
@@ -236,43 +300,70 @@ def op(fmt: str, what: str, d: str) -> dict:
         ws = _windows()
         if fmt.startswith('parquet'):
             import pyarrow.dataset as ds
+
             dset = ds.dataset(d / ('cells_hilbert.parquet' if fmt == 'parquet_hilbert' else 'cells.parquet'))
             t1 = time.perf_counter()
             for x0, y0, x1, y1 in ws:
-                f = (ds.field('XMax') >= x0) & (ds.field('XMin') <= x1) & (ds.field('YMax') >= y0) & (ds.field('YMin') <= y1)
+                f = (
+                    (ds.field('XMax') >= x0)
+                    & (ds.field('XMin') <= x1)
+                    & (ds.field('YMax') >= y0)
+                    & (ds.field('YMin') <= y1)
+                )
                 rows += dset.to_table(columns=GEO, filter=f).num_rows
         elif fmt == 'feather':
             import pyarrow.compute as pc
             import pyarrow.feather as pf
+
             t = pf.read_table(d / 'cells.arrow', columns=GEO, memory_map=True)
             t1 = time.perf_counter()
             for x0, y0, x1, y1 in ws:
-                m = pc.and_(pc.and_(pc.greater_equal(t['XMax'], x0), pc.less_equal(t['XMin'], x1)),
-                            pc.and_(pc.greater_equal(t['YMax'], y0), pc.less_equal(t['YMin'], y1)))
+                m = pc.and_(
+                    pc.and_(pc.greater_equal(t['XMax'], x0), pc.less_equal(t['XMin'], x1)),
+                    pc.and_(pc.greater_equal(t['YMax'], y0), pc.less_equal(t['YMin'], y1)),
+                )
                 rows += t.filter(m).num_rows
         elif fmt == 'sqlite':
             import sqlite3
+
             con = sqlite3.connect(d / 'cells.sqlite')
             t1 = time.perf_counter()
             for x0, y0, x1, y1 in ws:
-                rows += len(con.execute('SELECT c.XMin, c.XMax, c.YMin, c.YMax, c.Classification FROM cells_rtree r JOIN cells c '
-                                        'ON c."Object Id" = r.id WHERE r.x1 >= ? AND r.x0 <= ? AND r.y1 >= ? AND r.y0 <= ?',
-                                        (x0, x1, y0, y1)).fetchall())
+                rows += len(
+                    con.execute(
+                        'SELECT c.XMin, c.XMax, c.YMin, c.YMax, c.Classification FROM cells_rtree r JOIN cells c '
+                        'ON c."Object Id" = r.id WHERE r.x1 >= ? AND r.x0 <= ? AND r.y1 >= ? AND r.y0 <= ?',
+                        (x0, x1, y0, y1),
+                    ).fetchall()
+                )
         elif fmt == 'duckdb':
             import duckdb
+
             con = duckdb.connect(str(d / 'cells.duckdb'), read_only=True)
             t1 = time.perf_counter()
             for x0, y0, x1, y1 in ws:
-                rows += con.execute('SELECT XMin, XMax, YMin, YMax, Classification FROM cells WHERE XMax >= ? AND XMin <= ? '
-                                    'AND YMax >= ? AND YMin <= ?', [x0, x1, y0, y1]).to_arrow_table().num_rows
+                rows += (
+                    con.execute(
+                        'SELECT XMin, XMax, YMin, YMax, Classification FROM cells WHERE XMax >= ? AND XMin <= ? '
+                        'AND YMax >= ? AND YMin <= ?',
+                        [x0, x1, y0, y1],
+                    )
+                    .to_arrow_table()
+                    .num_rows
+                )
         elif fmt == 'postgres':
             import psycopg
+
             con = psycopg.connect(**PG)
             t1 = time.perf_counter()
             for x0, y0, x1, y1 in ws:
-                rows += len(con.execute('SELECT "XMin", "XMax", "YMin", "YMax", "Classification" FROM cells WHERE '
-                                        'box(point("XMin", "YMin"), point("XMax", "YMax")) && box(point(%s, %s), point(%s, %s))',
-                                        (x0, y0, x1, y1)).fetchall())
+                rows += len(
+                    con.execute(
+                        'SELECT "XMin", "XMax", "YMin", "YMax", "Classification" FROM cells WHERE '
+                        'box(point("XMin", "YMin"), point("XMax", "YMax")) && box(point(%s, %s), point(%s, %s))',
+                        (x0, y0, x1, y1),
+                    ).fetchall()
+                )
         else:
             return {'skip': True}
         return {'seconds': (time.perf_counter() - t1) / len(ws), 'open_s': t1 - t0, 'rows': rows / len(ws)}
@@ -280,30 +371,35 @@ def op(fmt: str, what: str, d: str) -> dict:
         ids = np.random.default_rng(2).integers(0, 10**6, 50).tolist()
         if fmt == 'sqlite':
             import sqlite3
+
             con = sqlite3.connect(d / 'cells.sqlite')
             t1 = time.perf_counter()
             for i in ids:
                 rows += len(con.execute('SELECT * FROM cells WHERE "Object Id" = ?', (i,)).fetchall())
         elif fmt == 'duckdb':
             import duckdb
+
             con = duckdb.connect(str(d / 'cells.duckdb'), read_only=True)
             t1 = time.perf_counter()
             for i in ids:
                 rows += len(con.execute('SELECT * FROM cells WHERE "Object Id" = ?', [i]).fetchall())
         elif fmt == 'postgres':
             import psycopg
+
             con = psycopg.connect(**PG)
             t1 = time.perf_counter()
             for i in ids:
                 rows += len(con.execute('SELECT * FROM cells WHERE "Object Id" = %s', (i,)).fetchall())
         elif fmt == 'feather':
             import pyarrow.feather as pf
-            t = pf.read_table(d / 'cells.arrow', memory_map=True)   # row i == id i (export order)
+
+            t = pf.read_table(d / 'cells.arrow', memory_map=True)  # row i == id i (export order)
             t1 = time.perf_counter()
             for i in ids:
                 rows += len(t.slice(i, 1).to_pylist())
         elif fmt.startswith('parquet'):
             import pyarrow.parquet as pq
+
             f = pq.ParquetFile(d / 'cells.parquet')
             t1 = time.perf_counter()
             for i in ids:
@@ -316,9 +412,11 @@ def op(fmt: str, what: str, d: str) -> dict:
 
 
 def run_op(fmt, what, d):
-    code = (f'import json, resource, sys; sys.path.insert(0, {str(Path(__file__).parent)!r}); import object_formats as m; '
-            f'r = m.op({fmt!r}, {what!r}, {str(d)!r}); '
-            f'r["peak_rss_MB"] = round([int(l.split()[1]) for l in open("/proc/self/status") if l.startswith("VmHWM")][0] / 1024, 1); print(json.dumps(r))')
+    code = (
+        f'import json, resource, sys; sys.path.insert(0, {str(Path(__file__).parent)!r}); import object_formats as m; '
+        f'r = m.op({fmt!r}, {what!r}, {str(d)!r}); '
+        f'r["peak_rss_MB"] = round([int(l.split()[1]) for l in open("/proc/self/status") if l.startswith("VmHWM")][0] / 1024, 1); print(json.dumps(r))'
+    )
     p = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, timeout=1800)
     if p.returncode:
         return {'error': p.stderr.strip().splitlines()[-1] if p.stderr else 'failed'}
@@ -341,7 +439,18 @@ def main():
         if not a.skip_write:
             res.update(write_all(d, a.rows, a.postgres))
             print(json.dumps(res), flush=True)
-        fmts = ['csv_pandas', 'tsv_pandas', 'csv', 'tsv', 'parquet', 'parquet_hilbert', 'feather', 'feather_lz4', 'sqlite', 'duckdb']
+        fmts = [
+            'csv_pandas',
+            'tsv_pandas',
+            'csv',
+            'tsv',
+            'parquet',
+            'parquet_hilbert',
+            'feather',
+            'feather_lz4',
+            'sqlite',
+            'duckdb',
+        ]
         if a.postgres:
             fmts.append('postgres')
         res['ops'] = {}

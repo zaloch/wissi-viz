@@ -27,13 +27,22 @@ Contents
   tissue_mask            tissue detection from a slide (brightfield or fluorescence)
   estimate_stain_vectors Macenko stain vectors for GPU colour deconvolution
 """
+
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 import numpy as np
+import shapely
+from scipy import sparse
+from scipy.cluster.vq import kmeans2
+from scipy.spatial import Delaunay, cKDTree
+from shapely.geometry import Polygon
+from skimage import filters, measure, morphology
 
+from . import plots
 from .annotations import POLYGON, AnnotationLayer
 from .objects import ObjectTable
 
@@ -41,13 +50,13 @@ from .objects import ObjectTable
 def _df(d):
     try:
         import pandas as pd
+
         return pd.DataFrame(d)
     except ImportError:
         return d
 
 
 def _tree(xy):
-    from scipy.spatial import cKDTree
     return cKDTree(xy)
 
 
@@ -59,8 +68,6 @@ def roi_geometries(rois: Any, group: bool = False) -> list[tuple[str, Any]]:
     geometry, ``{name: coords|geometry}``, or ``[(name, coords|geometry)]``. Coordinates: level-0 px.
     ``group=True`` unions features with the same name/class.
     """
-    import shapely
-    from shapely.geometry import Polygon
     out: list[tuple[str, Any]] = []
     if isinstance(rois, AnnotationLayer):
         c = rois.compiled()
@@ -69,7 +76,7 @@ def roi_geometries(rois: Any, group: bool = False) -> list[tuple[str, Any]]:
             if c.kinds[f] != POLYGON:
                 continue
             r0, r1 = c.feat_ring_off[f], c.feat_ring_off[f + 1]
-            rings = [c.coords[c.ring_off[r]:c.ring_off[r + 1]].astype(np.float64) for r in range(r0, r1)]
+            rings = [c.coords[c.ring_off[r] : c.ring_off[r + 1]].astype(np.float64) for r in range(r0, r1)]
             if len(rings[0]) < 3:
                 continue
             g = shapely.make_valid(Polygon(rings[0], [h for h in rings[1:] if len(h) >= 3]))
@@ -90,29 +97,37 @@ def roi_geometries(rois: Any, group: bool = False) -> list[tuple[str, Any]]:
 
 
 def _union(rois: Any):
-    import shapely
     gs = [g for _, g in roi_geometries(rois)]
     return shapely.union_all(gs) if gs else None
 
 
 def _inside(geom, x: np.ndarray, y: np.ndarray) -> np.ndarray:
-    import shapely
     shapely.prepare(geom)
     return shapely.contains_xy(geom, x, y)
 
 
-def _geom_layer(items: Sequence[tuple[str, Any]], name: str, values: Sequence[float] | None = None,
-                cmap: str = 'viridis', label: str | None = None, **style) -> AnnotationLayer:
+def _geom_layer(
+    items: Sequence[tuple[str, Any]],
+    name: str,
+    values: Sequence[float] | None = None,
+    cmap: str = 'viridis',
+    label: str | None = None,
+    **style,
+) -> AnnotationLayer:
     L = AnnotationLayer(name=name, **style)
     for k, g in items:
         for poly in getattr(g, 'geoms', [g]):
             if poly.geom_type != 'Polygon' or poly.is_empty:
                 continue
-            L.add_polygon(np.asarray(poly.exterior.coords)[:-1], holes=[np.asarray(h.coords)[:-1] for h in poly.interiors],
-                          cls=k, props={'name': k})
+            L.add_polygon(
+                np.asarray(poly.exterior.coords)[:-1],
+                holes=[np.asarray(h.coords)[:-1] for h in poly.interiors],
+                cls=k,
+                props={'name': k},
+            )
     if values is not None:
         vals = []
-        for (k, g), v in zip(items, values):
+        for (_, g), v in zip(items, values):
             vals += [v] * sum(1 for p in getattr(g, 'geoms', [g]) if p.geom_type == 'Polygon' and not p.is_empty)
         L.color_by(np.asarray(vals, float), cmap=cmap, label=label)
     return L
@@ -134,16 +149,27 @@ class NNResult:
 
     def summary(self, within_um: Sequence[float] = (10, 20, 50, 100)) -> dict:
         d = self.dist_um[np.isfinite(self.dist_um)]
-        out = {'source': self.source, 'target': self.target, 'n_source': int(len(self.dist_um)),
-               'median_um': float(np.median(d)) if d.size else np.nan, 'mean_um': float(d.mean()) if d.size else np.nan,
-               'q25_um': float(np.percentile(d, 25)) if d.size else np.nan,
-               'q75_um': float(np.percentile(d, 75)) if d.size else np.nan}
+        out = {
+            'source': self.source,
+            'target': self.target,
+            'n_source': int(len(self.dist_um)),
+            'median_um': float(np.median(d)) if d.size else np.nan,
+            'mean_um': float(d.mean()) if d.size else np.nan,
+            'q25_um': float(np.percentile(d, 25)) if d.size else np.nan,
+            'q75_um': float(np.percentile(d, 75)) if d.size else np.nan,
+        }
         for w in within_um:
             out[f'frac_within_{w}um'] = float((d <= w).mean()) if d.size else np.nan
         return out
 
-    def layer(self, name: str | None = None, cmap: str = 'viridis_r', max_lines: int = 300_000,
-              max_um: float | None = None, line_width: float = 1.5) -> AnnotationLayer:
+    def layer(
+        self,
+        name: str | None = None,
+        cmap: str = 'viridis_r',
+        max_lines: int = 300_000,
+        max_um: float | None = None,
+        line_width: float = 1.5,
+    ) -> AnnotationLayer:
         """A line from every source object to its nearest target, coloured by distance."""
         o = self.objs
         sel = np.isfinite(self.dist_um)
@@ -152,8 +178,13 @@ class NNResult:
         idx = np.nonzero(sel)[0]
         if len(idx) > max_lines:
             idx = np.random.default_rng(0).choice(idx, max_lines, replace=False)
-        L = AnnotationLayer(name=name or f'NN {self.source} → {self.target}', line_width=line_width, fill_opacity=0,
-                            detail_min_px=4, overview='none')
+        L = AnnotationLayer(
+            name=name or f'NN {self.source} → {self.target}',
+            line_width=line_width,
+            fill_opacity=0,
+            detail_min_px=4,
+            overview='none',
+        )
         s, t = self.src_idx[idx], self.tgt_idx[idx]
         for a, b in zip(s, t):
             L.add_polyline([[o.x[a], o.y[a]], [o.x[b], o.y[b]]])
@@ -161,10 +192,13 @@ class NNResult:
         return L
 
     def plot(self, bins: int = 40, max_um: float | None = None):
-        from . import plots
         d = self.dist_um[np.isfinite(self.dist_um)]
-        return plots.histogram(d if max_um is None else d[d <= max_um], bins=bins,
-                               title=f'Nearest {self.target} to each {self.source}', xlabel='distance (µm)')
+        return plots.histogram(
+            d if max_um is None else d[d <= max_um],
+            bins=bins,
+            title=f'Nearest {self.target} to each {self.source}',
+            xlabel='distance (µm)',
+        )
 
 
 def nearest_neighbors(objs: ObjectTable, source: Any, target: Any, max_um: float | None = None) -> NNResult:
@@ -204,22 +238,32 @@ class ProximityResult:
     def summary(self) -> dict:
         c = self.counts
         area_mm2 = np.pi * (self.radius_um / 1000) ** 2
-        return {'source': self.source, 'target': self.target, 'radius_um': self.radius_um, 'n_source': int(len(c)),
-                'frac_with_any': float((c > 0).mean()) if len(c) else np.nan,
-                'mean_count': float(c.mean()) if len(c) else np.nan,
-                'mean_density_per_mm2': float(c.mean() / area_mm2) if len(c) else np.nan}
+        return {
+            'source': self.source,
+            'target': self.target,
+            'radius_um': self.radius_um,
+            'n_source': int(len(c)),
+            'frac_with_any': float((c > 0).mean()) if len(c) else np.nan,
+            'mean_count': float(c.mean()) if len(c) else np.nan,
+            'mean_density_per_mm2': float(c.mean() / area_mm2) if len(c) else np.nan,
+        }
 
     def layer(self, name: str | None = None, cmap: str = 'magma', point_size: float = 6) -> AnnotationLayer:
         o = self.objs
-        L = AnnotationLayer.from_points(o.xy[self.src_idx], name=name or f'{self.target} within {self.radius_um:g} µm of {self.source}',
-                                        point_size=point_size)
+        L = AnnotationLayer.from_points(
+            o.xy[self.src_idx],
+            name=name or f'{self.target} within {self.radius_um:g} µm of {self.source}',
+            point_size=point_size,
+        )
         L.color_by(self.counts.astype(float), cmap=cmap, label=f'# {self.target} within {self.radius_um:g} µm')
         return L
 
     def plot(self):
-        from . import plots
-        return plots.bar_counts(self.counts, title=f'{self.target} within {self.radius_um:g} µm of each {self.source}',
-                                xlabel=f'# {self.target}')
+        return plots.bar_counts(
+            self.counts,
+            title=f'{self.target} within {self.radius_um:g} µm of each {self.source}',
+            xlabel=f'# {self.target}',
+        )
 
 
 def proximity(objs: ObjectTable, source: Any, target: Any, radius_um: float) -> ProximityResult:
@@ -238,7 +282,6 @@ def proximity(objs: ObjectTable, source: Any, target: Any, radius_um: float) -> 
 # ============================================================================= ROI distance / margins
 def distance_to_roi(objs: ObjectTable, roi: Any) -> np.ndarray:
     """Signed distance (µm) from every object to the ROI boundary: negative inside, positive outside."""
-    import shapely
     g = _union(roi) if not hasattr(roi, 'geom_type') else roi
     pts = shapely.points(objs.x, objs.y)
     d = shapely.distance(g.boundary, pts) * objs._mpp()
@@ -254,17 +297,31 @@ class BandsResult:
 
     def layer(self, name: str = 'Margin bands', cmap: str = 'coolwarm', fill_opacity: float = 0.25) -> AnnotationLayer:
         centers = [(a + b) / 2 for a, b in zip(self.edges_um[:-1], self.edges_um[1:])]
-        return _geom_layer(self.bands, name, values=centers, cmap=cmap, label='distance to boundary (µm)',
-                           fill_opacity=fill_opacity, line_width=1, detail_min_px=0)
+        return _geom_layer(
+            self.bands,
+            name,
+            values=centers,
+            cmap=cmap,
+            label='distance to boundary (µm)',
+            fill_opacity=fill_opacity,
+            line_width=1,
+            detail_min_px=0,
+        )
 
     def plot(self):
-        from . import plots
-        return plots.grouped_bars(self.plot_data['bands'], self.plot_data['series'], title='Density per margin band',
-                                  ylabel='cells / mm²')
+        return plots.grouped_bars(
+            self.plot_data['bands'], self.plot_data['series'], title='Density per margin band', ylabel='cells / mm²'
+        )
 
 
-def margin_bands(roi: Any, edges_um: Sequence[float] = (-200, -100, 0, 100, 200), mpp: float | None = None,
-                 objs: ObjectTable | None = None, within: Any = None, classes: Sequence[str] | None = None) -> BandsResult:
+def margin_bands(
+    roi: Any,
+    edges_um: Sequence[float] = (-200, -100, 0, 100, 200),
+    mpp: float | None = None,
+    objs: ObjectTable | None = None,
+    within: Any = None,
+    classes: Sequence[str] | None = None,
+) -> BandsResult:
     """Bands at signed distances from an ROI boundary (e.g. invasive margin −200…+200 µm).
 
     With ``objs``: per-band counts and densities (cells/mm²) per class. ``within`` clips the bands
@@ -311,19 +368,33 @@ class ProfileResult:
     table: Any
 
     def plot(self):
-        from . import plots
-        return plots.lines(self.centers_um, self.density, title='Density vs distance to boundary',
-                           xlabel='signed distance (µm, inside < 0)', ylabel='cells / mm²', vline=0)
+        return plots.lines(
+            self.centers_um,
+            self.density,
+            title='Density vs distance to boundary',
+            xlabel='signed distance (µm, inside < 0)',
+            ylabel='cells / mm²',
+            vline=0,
+        )
 
 
-def infiltration_profile(objs: ObjectTable, roi: Any, classes: Sequence[str] | None = None,
-                         range_um: tuple[float, float] = (-500, 500), bin_um: float = 25, within: Any = None) -> ProfileResult:
+def infiltration_profile(
+    objs: ObjectTable,
+    roi: Any,
+    classes: Sequence[str] | None = None,
+    range_um: tuple[float, float] = (-500, 500),
+    bin_um: float = 25,
+    within: Any = None,
+) -> ProfileResult:
     """Cell density (/mm²) in thin bands as a function of signed distance to the ROI boundary."""
     edges = np.arange(range_um[0], range_um[1] + bin_um, bin_um)
     br = margin_bands(roi, edges, objs=objs, within=within, classes=classes)
     t = br.table
-    get = (lambda c: np.asarray(t[f'density {c} /mm2'])) if hasattr(t, 'columns') else (
-        lambda c: np.asarray([r[f'density {c} /mm2'] for r in t]))
+    get = (
+        (lambda c: np.asarray(t[f'density {c} /mm2']))
+        if hasattr(t, 'columns')
+        else (lambda c: np.asarray([r[f'density {c} /mm2'] for r in t]))
+    )
     cls = classes or objs.class_names()
     dens = {c: get(c) for c in cls}
     centers = (edges[:-1] + edges[1:]) / 2
@@ -344,23 +415,36 @@ class CompositionResult:
             return _geom_layer(self.rois, name, fill_opacity=0.08, line_width=2.5, detail_min_px=0, legend=True)
         t = self.table
         vals = [float(t.loc[t['roi'] == k, value].iloc[0]) if hasattr(t, 'loc') else np.nan for k, _ in self.rois]
-        return _geom_layer(self.rois, name, values=vals, cmap=cmap, label=value, fill_opacity=0.35, line_width=2,
-                           detail_min_px=0)
+        return _geom_layer(
+            self.rois, name, values=vals, cmap=cmap, label=value, fill_opacity=0.35, line_width=2, detail_min_px=0
+        )
 
     def plot(self, kind: str = 'percent'):
-        from . import plots
         t = self.table
-        rows = [r for r in (t.to_dict('records') if hasattr(t, 'to_dict') else t)]
+        rows = list(t.to_dict('records') if hasattr(t, 'to_dict') else t)
         if kind == 'sunburst':
             return plots.sunburst(rows, self.classes, self.whole_name)
         key = {'percent': '% {c}', 'density': 'density {c} /mm2', 'count': 'n {c}'}[kind]
-        return plots.stacked_bars([r['roi'] for r in rows], {c: [r.get(key.format(c=c), 0) for r in rows] for c in self.classes},
-                                  title={'percent': 'Composition per ROI (%)', 'density': 'Density per ROI (cells/mm²)',
-                                         'count': 'Cells per ROI'}[kind], percent=(kind == 'percent'))
+        return plots.stacked_bars(
+            [r['roi'] for r in rows],
+            {c: [r.get(key.format(c=c), 0) for r in rows] for c in self.classes},
+            title={
+                'percent': 'Composition per ROI (%)',
+                'density': 'Density per ROI (cells/mm²)',
+                'count': 'Cells per ROI',
+            }[kind],
+            percent=(kind == 'percent'),
+        )
 
 
-def roi_composition(objs: ObjectTable, rois: Any, classes: Sequence[str] | None = None, whole: Any = None,
-                    whole_name: str = 'Whole', group: bool = False) -> CompositionResult:
+def roi_composition(
+    objs: ObjectTable,
+    rois: Any,
+    classes: Sequence[str] | None = None,
+    whole: Any = None,
+    whole_name: str = 'Whole',
+    group: bool = False,
+) -> CompositionResult:
     """Counts, % of ROI, density (/mm²) and **% of whole** per class for each ROI.
 
     ``whole``: the reference region (e.g. the tissue mask); default = all objects / union of ROIs.
@@ -382,8 +466,13 @@ def roi_composition(objs: ObjectTable, rois: Any, classes: Sequence[str] | None 
         inside = in_whole if g is None else (_inside(g, objs.x, objs.y) & in_whole)
         area = whole_area if g is None else g.area * (mpp / 1000) ** 2
         n = int(inside.sum())
-        row = {'roi': name, 'area_mm2': area, 'area % of whole': 100 * area / whole_area if whole_area else np.nan,
-               'n_objects': n, 'density /mm2': n / area if area else np.nan}
+        row = {
+            'roi': name,
+            'area_mm2': area,
+            'area % of whole': 100 * area / whole_area if whole_area else np.nan,
+            'n_objects': n,
+            'density /mm2': n / area if area else np.nan,
+        }
         for c in cls:
             k = int((masks[c] & inside).sum())
             row[f'n {c}'] = k
@@ -412,11 +501,22 @@ class GridResult:
             d['gi_z'] = self.gi_z
         return _df(d)
 
-    def layer(self, name: str | None = None, cmap: str = 'inferno', fill_opacity: float = 0.55, log: bool = False,
-              min_value: float | None = None) -> AnnotationLayer:
+    def layer(
+        self,
+        name: str | None = None,
+        cmap: str = 'inferno',
+        fill_opacity: float = 0.55,
+        log: bool = False,
+        min_value: float | None = None,
+    ) -> AnnotationLayer:
         keep = np.isfinite(self.values) & (self.values > (min_value if min_value is not None else -np.inf))
-        L = AnnotationLayer.from_polygons([c for c, k in zip(self.cells, keep) if k], name=name or self.label,
-                                          fill_opacity=fill_opacity, line_width=0, detail_min_px=0)
+        L = AnnotationLayer.from_polygons(
+            [c for c, k in zip(self.cells, keep) if k],
+            name=name or self.label,
+            fill_opacity=fill_opacity,
+            line_width=0,
+            detail_min_px=0,
+        )
         L.color_by(self.values[keep], cmap=cmap, label=self.label, log=log)
         return L
 
@@ -425,15 +525,19 @@ class GridResult:
         if self.gi_z is None:
             raise ValueError('run density_grid(..., hotspots=True)')
         hot, cold = self.gi_z > z, self.gi_z < -z
-        L = AnnotationLayer(name=name or f'Hotspots ({self.label})', classes={'Hotspot': '#ff1744', 'Coldspot': '#2979ff'},
-                            fill_opacity=fill_opacity, line_width=0, detail_min_px=0)
+        L = AnnotationLayer(
+            name=name or f'Hotspots ({self.label})',
+            classes={'Hotspot': '#ff1744', 'Coldspot': '#2979ff'},
+            fill_opacity=fill_opacity,
+            line_width=0,
+            detail_min_px=0,
+        )
         for c, h, k in zip(self.cells, hot, cold):
             if h or k:
                 L.add_polygon(c, cls='Hotspot' if h else 'Coldspot')
         return L
 
     def plot(self):
-        from . import plots
         v = self.values[np.isfinite(self.values)]
         return plots.histogram(v, bins=40, title=self.label, xlabel=self.label)
 
@@ -459,8 +563,17 @@ def _grid(x0, y0, x1, y1, s, shape):
     return cs, [sq + c for c in cs]
 
 
-def density_grid(objs: ObjectTable, cls: Any = None, cell_um: float = 50, shape: str = 'hex', denominator: Any = None,
-                 within: Any = None, min_objects: int = 1, hotspots: bool = False, hotspot_radius_cells: float = 1.5) -> GridResult:
+def density_grid(
+    objs: ObjectTable,
+    cls: Any = None,
+    cell_um: float = 50,
+    shape: str = 'hex',
+    denominator: Any = None,
+    within: Any = None,
+    min_objects: int = 1,
+    hotspots: bool = False,
+    hotspot_radius_cells: float = 1.5,
+) -> GridResult:
     """Density (cells/mm²) of ``cls`` on a hex (or square) grid; with ``denominator`` the ratio
     ``#cls / #denominator`` (e.g. CD8 / all cells, Ki67+ / Tumor). Optional Getis-Ord Gi* hotspots."""
     mpp = objs._mpp()
@@ -472,7 +585,7 @@ def density_grid(objs: ObjectTable, cls: Any = None, cell_um: float = 50, shape:
     num_m = objs.mask(cls)
     all_counts = np.bincount(nearest, minlength=len(centers))
     num = np.bincount(nearest[num_m], minlength=len(centers)).astype(float)
-    cell_px2 = 1.5 * np.sqrt(3) * R ** 2 if shape == 'hex' else R ** 2
+    cell_px2 = 1.5 * np.sqrt(3) * R**2 if shape == 'hex' else R**2
     area_mm2 = cell_px2 * (mpp / 1000) ** 2
     s = R
     if denominator is not None:
@@ -536,27 +649,46 @@ class RipleyResult:
         return _df(d)
 
     def plot(self, what: str = 'H'):
-        from . import plots
         if what == 'g':
-            return plots.lines(self.r_um, {'g(r)': self.g}, title=f'Pair correlation {self.label}', xlabel='r (µm)',
-                               ylabel='g(r)', hline=1)
+            return plots.lines(
+                self.r_um,
+                {'g(r)': self.g},
+                title=f'Pair correlation {self.label}',
+                xlabel='r (µm)',
+                ylabel='g(r)',
+                hline=1,
+            )
         y = self.H if what == 'H' else self.L
         band = None
         if self.L_lo is not None:
             band = (self.L_lo - (self.r_um if what == 'H' else 0), self.L_hi - (self.r_um if what == 'H' else 0))
-        return plots.lines(self.r_um, {f'{what}(r)': y}, band=band, band_label='CSR 95% envelope',
-                           title=f"Ripley's {what} {self.label}", xlabel='r (µm)',
-                           ylabel='L(r) − r (µm)' if what == 'H' else 'L(r) (µm)', hline=0 if what == 'H' else None)
+        return plots.lines(
+            self.r_um,
+            {f'{what}(r)': y},
+            band=band,
+            band_label='CSR 95% envelope',
+            title=f"Ripley's {what} {self.label}",
+            xlabel='r (µm)',
+            ylabel='L(r) − r (µm)' if what == 'H' else 'L(r) (µm)',
+            hline=0 if what == 'H' else None,
+        )
 
 
-def ripley(objs: ObjectTable, a: Any, b: Any = None, radii_um: Sequence[float] | None = None, area: Any = None,
-           n_sim: int = 39, max_points: int = 20000, seed: int = 0) -> RipleyResult:
+def ripley(
+    objs: ObjectTable,
+    a: Any,
+    b: Any = None,
+    radii_um: Sequence[float] | None = None,
+    area: Any = None,
+    n_sim: int = 39,
+    max_points: int = 20000,
+    seed: int = 0,
+) -> RipleyResult:
     """Ripley's K/L (univariate, or bivariate a→b) with border edge-correction and a CSR envelope.
 
     ``area``: study region (ROI / tissue); default = convex hull of the points. Envelope: ``n_sim``
     simulations of complete spatial randomness of the same intensity in ``area`` (39 → ~95% pointwise).
     """
-    import shapely
     mpp = objs._mpp()
     rng = np.random.default_rng(seed)
     ma = objs.mask(a)
@@ -608,6 +740,7 @@ def ripley(objs: ObjectTable, a: Any, b: Any = None, radii_um: Sequence[float] |
                 p = rng.uniform([minx, miny], [maxx, maxy], (int(n * 1.5) + 16, 2))
                 out = np.vstack([out, p[_inside(g, p[:, 0], p[:, 1])]])
             return out[:n]
+
         sims = []
         n_a = min(len(A_xy), max_points // 2)
         for _ in range(n_sim):
@@ -623,8 +756,15 @@ def ripley(objs: ObjectTable, a: Any, b: Any = None, radii_um: Sequence[float] |
     rm = (rr[1:] + rr[:-1]) / 2
     gpc = dK / (2 * np.pi * rm)
     label = f'{a}' if univariate else f'{a} → {b}'
-    return RipleyResult(np.asarray(radii_um, float), K * mpp ** 2, L * mpp, gpc,
-                        None if lo is None else lo * mpp, None if hi is None else hi * mpp, label)
+    return RipleyResult(
+        np.asarray(radii_um, float),
+        K * mpp**2,
+        L * mpp,
+        gpc,
+        None if lo is None else lo * mpp,
+        None if hi is None else hi * mpp,
+        label,
+    )
 
 
 # ============================================================================= co-location / neighbourhoods
@@ -640,13 +780,14 @@ class EnrichmentResult:
         return _df({'class': self.classes, **{c: self.z[:, j] for j, c in enumerate(self.classes)}})
 
     def plot(self):
-        from . import plots
-        return plots.heatmap(self.z, self.classes, self.classes, title='Neighbourhood enrichment (z-score)',
-                             diverging=True)
+        return plots.heatmap(
+            self.z, self.classes, self.classes, title='Neighbourhood enrichment (z-score)', diverging=True
+        )
 
 
-def neighborhood_enrichment(objs: ObjectTable, radius_um: float = 20, classes: Sequence[str] | None = None,
-                            n_perm: int = 199, seed: int = 0) -> EnrichmentResult:
+def neighborhood_enrichment(
+    objs: ObjectTable, radius_um: float = 20, classes: Sequence[str] | None = None, n_perm: int = 199, seed: int = 0
+) -> EnrichmentResult:
     """Are classes A and B neighbours (within ``radius_um``) more/less often than by chance?
     z-scores against random relabelling (positive = co-located / attraction, negative = avoidance)."""
     cls = list(classes or objs.class_names())
@@ -662,6 +803,7 @@ def neighborhood_enrichment(objs: ObjectTable, radius_um: float = 20, classes: S
         a, b = c[pairs[:, 0]], c[pairs[:, 1]]
         m = np.bincount(a * K + b, minlength=K * K).reshape(K, K)
         return m + m.T - np.diag(np.diag(m))
+
     obs = count(code)
     rng = np.random.default_rng(seed)
     perm = np.stack([count(rng.permutation(code)) for _ in range(n_perm)])
@@ -681,23 +823,28 @@ class NeighborhoodResult:
 
     @property
     def table(self):
-        return _df({'neighborhood': self.names, **{c: self.composition[:, j] for j, c in enumerate(self.classes)},
-                    'n_cells': np.bincount(self.labels, minlength=len(self.names))})
+        return _df(
+            {
+                'neighborhood': self.names,
+                **{c: self.composition[:, j] for j, c in enumerate(self.classes)},
+                'n_cells': np.bincount(self.labels, minlength=len(self.names)),
+            }
+        )
 
     def layer(self, name: str = 'Cellular neighborhoods', point_size: float = 5, **style) -> AnnotationLayer:
-        return AnnotationLayer.from_points(self.objs.xy, classes=[self.names[i] for i in self.labels], name=name,
-                                           point_size=point_size, **style)
+        return AnnotationLayer.from_points(
+            self.objs.xy, classes=[self.names[i] for i in self.labels], name=name, point_size=point_size, **style
+        )
 
     def plot(self):
-        from . import plots
         return plots.heatmap(self.composition, self.names, self.classes, title='Neighborhood composition (fraction)')
 
 
-def cellular_neighborhoods(objs: ObjectTable, k: int = 10, n_neighborhoods: int = 6, classes: Sequence[str] | None = None,
-                           seed: int = 0) -> NeighborhoodResult:
+def cellular_neighborhoods(
+    objs: ObjectTable, k: int = 10, n_neighborhoods: int = 6, classes: Sequence[str] | None = None, seed: int = 0
+) -> NeighborhoodResult:
     """Cellular neighbourhoods (Schürch et al. 2020): class composition of each cell's k nearest
     neighbours (incl. itself), clustered with k-means into ``n_neighborhoods`` recurring niches."""
-    from scipy.cluster.vq import kmeans2
     cls = list(classes or objs.class_names())
     code = np.full(len(objs), len(cls))
     for i, c in enumerate(cls):
@@ -705,9 +852,11 @@ def cellular_neighborhoods(objs: ObjectTable, k: int = 10, n_neighborhoods: int 
     _, nn = _tree(objs.xy).query(objs.xy, k=min(k, len(objs)))
     comp = np.zeros((len(objs), len(cls) + 1))
     np.add.at(comp, (np.repeat(np.arange(len(objs)), nn.shape[1]), code[nn].ravel()), 1)
-    comp = comp[:, :len(cls)] / nn.shape[1]
+    comp = comp[:, : len(cls)] / nn.shape[1]
     _, lab = kmeans2(comp, n_neighborhoods, minit='++', seed=seed)
-    cent = np.stack([comp[lab == i].mean(0) if (lab == i).any() else np.zeros(len(cls)) for i in range(n_neighborhoods)])
+    cent = np.stack(
+        [comp[lab == i].mean(0) if (lab == i).any() else np.zeros(len(cls)) for i in range(n_neighborhoods)]
+    )
     order = np.lexsort((-cent.max(1), cent.argmax(1)))  # group by dominant class
     remap = np.empty(n_neighborhoods, int)
     remap[order] = np.arange(n_neighborhoods)
@@ -755,7 +904,9 @@ class GraphResult:
     def degree(self) -> np.ndarray:
         return np.bincount(self.edges.ravel(), minlength=len(self.objs))
 
-    def layer(self, name: str = 'Contact graph', by: str = 'pair', max_edges: int = 400_000, **style) -> AnnotationLayer:
+    def layer(
+        self, name: str = 'Contact graph', by: str = 'pair', max_edges: int = 400_000, **style
+    ) -> AnnotationLayer:
         """Edges as lines, coloured by class pair (``by='pair'``) or by length (``by='length'``)."""
         o = self.objs
         e = self.edges
@@ -777,14 +928,12 @@ class GraphResult:
         return L
 
     def plot(self):
-        from . import plots
         m, cls = self.interactions()
         return plots.heatmap(m, cls, cls, title='Cell–cell contacts (Delaunay edges)')
 
 
 def delaunay_graph(objs: ObjectTable, max_edge_um: float = 30, classes: Sequence[str] | None = None) -> GraphResult:
     """Delaunay triangulation of cell centroids, pruned to edges ≤ ``max_edge_um`` (≈ touching cells)."""
-    from scipy.spatial import Delaunay
     tri = Delaunay(objs.xy)
     s = tri.simplices
     e = np.vstack([s[:, [0, 1]], s[:, [1, 2]], s[:, [0, 2]]])
@@ -799,7 +948,6 @@ def delaunay_graph(objs: ObjectTable, max_edge_um: float = 30, classes: Sequence
 def morans_i(objs: ObjectTable, column: str | np.ndarray, k: int = 8, permutations: int = 0, seed: int = 0) -> dict:
     """Global Moran's I of a measurement with row-standardised k-nearest-neighbour weights.
     Returns I, E[I], z under the normality assumption, and optionally a permutation p-value."""
-    from scipy import sparse
     v = np.asarray(objs.column(column) if isinstance(column, str) else column, np.float64)
     ok = np.isfinite(v)
     xy, v = objs.xy[ok], v[ok]
@@ -812,24 +960,31 @@ def morans_i(objs: ObjectTable, column: str | np.ndarray, k: int = 8, permutatio
     S1 = 0.5 * float(Ws.multiply(Ws).sum())
     S2 = float(((np.asarray(W.sum(1)).ravel() + np.asarray(W.sum(0)).ravel()) ** 2).sum())
     z = v - v.mean()
-    denom = float((z ** 2).sum())
+    denom = float((z**2).sum())
 
-    def I(zz):
+    def moran(zz):
         return (n / S0) * float(zz @ (W @ zz)) / denom
-    i_obs = I(z)
+
+    i_obs = moran(z)
     e_i = -1.0 / (n - 1)
-    var = (n * n * S1 - n * S2 + 3 * S0 * S0) / ((n * n - 1) * S0 * S0) - e_i ** 2
+    var = (n * n * S1 - n * S2 + 3 * S0 * S0) / ((n * n - 1) * S0 * S0) - e_i**2
     out = {'I': i_obs, 'expected': e_i, 'z': (i_obs - e_i) / np.sqrt(max(var, 1e-15)), 'n': n, 'k': k}
     if permutations:
         rng = np.random.default_rng(seed)
-        sims = np.array([I(rng.permutation(z)) for _ in range(permutations)])
+        sims = np.array([moran(rng.permutation(z)) for _ in range(permutations)])
         out['p_perm'] = float((np.sum(np.abs(sims - e_i) >= abs(i_obs - e_i)) + 1) / (permutations + 1))
     return out
 
 
 # ============================================================================= IHC / positivity
-def h_score(objs: ObjectTable, column: str, thresholds: Sequence[float] = (0.2, 0.4, 0.6), rois: Any = None,
-            within: Any = None, cls: Any = None) -> Any:
+def h_score(
+    objs: ObjectTable,
+    column: str,
+    thresholds: Sequence[float] = (0.2, 0.4, 0.6),
+    rois: Any = None,
+    within: Any = None,
+    cls: Any = None,
+) -> Any:
     """IHC H-score (0–300) per ROI from a DAB intensity column (e.g. 'DAB: Nucleus: Mean' OD).
     ``cls`` restricts to e.g. tumour cells. Returns a table with % 0/1+/2+/3+ and H-score."""
     bins = np.digitize(np.asarray(objs.column(column), np.float64), thresholds)
@@ -845,8 +1000,18 @@ def h_score(objs: ObjectTable, column: str, thresholds: Sequence[float] = (0.2, 
         m = base & (_inside(g, objs.x, objs.y) if g is not None else True)
         n = int(m.sum())
         pct = [100 * float(((bins == k) & m).sum()) / n if n else 0.0 for k in range(4)]
-        rows.append({'roi': name, 'n': n, '% 0': pct[0], '% 1+': pct[1], '% 2+': pct[2], '% 3+': pct[3],
-                     '% positive': pct[1] + pct[2] + pct[3], 'H-score': pct[1] + 2 * pct[2] + 3 * pct[3]})
+        rows.append(
+            {
+                'roi': name,
+                'n': n,
+                '% 0': pct[0],
+                '% 1+': pct[1],
+                '% 2+': pct[2],
+                '% 3+': pct[3],
+                '% positive': pct[1] + pct[2] + pct[3],
+                'H-score': pct[1] + 2 * pct[2] + 3 * pct[3],
+            }
+        )
     return _df(rows)
 
 
@@ -866,13 +1031,17 @@ def positivity(objs: ObjectTable, markers: dict[str, tuple[str, float]], rois: A
 
 
 # ============================================================================= slide-level image analysis
-def tissue_mask(source: Any, max_size: int = 2048, min_area_um2: float = 20000, smooth_um: float = 20,
-                mode: str = 'auto', threshold: float | None = None, name: str = 'Tissue'):
+def tissue_mask(
+    source: Any,
+    max_size: int = 2048,
+    min_area_um2: float = 20000,
+    smooth_um: float = 20,
+    mode: str = 'auto',
+    threshold: float | None = None,
+    name: str = 'Tissue',
+):
     """Detect tissue on a low-resolution level. Brightfield: optical density (Otsu); fluorescence:
     log of the channel maximum (Otsu). Returns ``(shapely geometry in level-0 px, AnnotationLayer)``."""
-    import shapely
-    from shapely.geometry import Polygon
-    from skimage import filters, measure, morphology
     info = source.info
     lvl = len(info.levels) - 1
     for i, lv in enumerate(info.levels):
@@ -889,7 +1058,9 @@ def tissue_mask(source: Any, max_size: int = 2048, min_area_um2: float = 20000, 
         od = -np.log10(np.clip(a / 255.0, 1 / 255, 1)).sum(2)
         img = od
     else:
-        chans = [source.read_region(lvl, 0, 0, lv.width, lv.height, c).astype(np.float32) for c in range(len(info.channels))]
+        chans = [
+            source.read_region(lvl, 0, 0, lv.width, lv.height, c).astype(np.float32) for c in range(len(info.channels))
+        ]
         img = np.log1p(np.max(np.stack(chans), 0))
     img = filters.gaussian(img, sigma=max(0.5, smooth_um / (mpp * ds) / 2))
     t = threshold if threshold is not None else filters.threshold_otsu(img)
@@ -919,7 +1090,9 @@ def tissue_mask(source: Any, max_size: int = 2048, min_area_um2: float = 20000, 
 
 
 RUIFROK = {  # optical-density stain vectors (Ruifrok & Johnston 2001)
-    'hematoxylin': [0.650, 0.704, 0.286], 'eosin': [0.072, 0.990, 0.105], 'dab': [0.268, 0.570, 0.776],
+    'hematoxylin': [0.650, 0.704, 0.286],
+    'eosin': [0.072, 0.990, 0.105],
+    'dab': [0.268, 0.570, 0.776],
 }
 
 

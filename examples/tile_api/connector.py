@@ -7,6 +7,7 @@ overlap/padding, rendering and annotations.
     conn = DemoApiConnection('http://127.0.0.1:9000', token='secret')
     sids = [conn.register(registry, i['id'], name=i['name']) for i in conn.list_images()]
 """
+
 from __future__ import annotations
 
 import io
@@ -19,17 +20,21 @@ from wissi_viz.connectors import AnnotationPayload, RemoteConnection, RemoteImag
 
 class DemoApiConnection(RemoteConnection):
     id_prefix = 'api'
-    max_concurrency = 10      # stay just under the service's limit (it answers 429 above 12)
+    max_concurrency = 10  # stay just under the service's limit (it answers 429 above 12)
     retries = 4
     timeout = 30.0
 
     def __init__(self, base_url: str, token: str, client: httpx.Client | None = None):
         super().__init__()
         # one pooled client for all slides of this connection (keep-alive, HTTP/1.1)
-        self.http = client or httpx.Client(base_url=base_url.rstrip('/'), timeout=self.timeout,
-                                           headers={'Authorization': f'Bearer {token}'},
-                                           limits=httpx.Limits(max_connections=self.max_concurrency + 2,
-                                                               max_keepalive_connections=self.max_concurrency))
+        self.http = client or httpx.Client(
+            base_url=base_url.rstrip('/'),
+            timeout=self.timeout,
+            headers={'Authorization': f'Bearer {token}'},
+            limits=httpx.Limits(
+                max_connections=self.max_concurrency + 2, max_keepalive_connections=self.max_concurrency
+            ),
+        )
 
     # ------------------------------------------------------------------ plumbing
     def _get(self, path: str, **params) -> httpx.Response:
@@ -47,12 +52,21 @@ class DemoApiConnection(RemoteConnection):
     # ------------------------------------------------------------------ the contract
     def image_info(self, image_id: str) -> RemoteImageInfo:
         m = self._get(f'/api/images/{image_id}').json()
-        common = dict(width=m['width'], height=m['height'], mpp=m['mpp'], name=m['name'], version=m['modified'])
+        common = {
+            'width': m['width'],
+            'height': m['height'],
+            'mpp': m['mpp'],
+            'name': m['name'],
+            'version': m['modified'],
+        }
         if m['format'] == 'dzi':
             return RemoteImageInfo(**common, deepzoom=True, tile_size=m['tile_size'], overlap=m['overlap'])
-        info = RemoteImageInfo(**common, tile_size=m['tile_size'],
-                               levels=[(lv['width'], lv['height']) for lv in m['levels']],   # any order
-                               level_ids=[lv['id'] for lv in m['levels']])                   # passed back to tile()
+        info = RemoteImageInfo(
+            **common,
+            tile_size=m['tile_size'],
+            levels=[(lv['width'], lv['height']) for lv in m['levels']],  # any order
+            level_ids=[lv['id'] for lv in m['levels']],
+        )  # passed back to tile()
         if m.get('channels'):
             info.mode, info.dtype = 'channels', m.get('dtype', 'uint16')
             info.channels = [c['name'] for c in m['channels']]
@@ -63,19 +77,30 @@ class DemoApiConnection(RemoteConnection):
         r = self._get(f'/api/images/{image_id}/tiles/{level}/{col}/{row}', **params)
         if r.headers.get('content-type', '').startswith('image/png') and channel is not None:
             from PIL import Image
+
             return np.asarray(Image.open(io.BytesIO(r.content)))  # 16-bit channel tile → array
-        return r.content                                            # JPEG → passed to the browser untouched
+        return r.content  # JPEG → passed to the browser untouched
 
     def annotations(self, image_id: str):
         gj = self._get(f'/api/images/{image_id}/annotations').json()
         if not gj.get('features'):
             return []
-        return [AnnotationPayload('ROIs (API)', gj, units='um', style={'line_width': 2.5, 'fill_opacity': 0.0, 'z': 10})]
+        return [
+            AnnotationPayload('ROIs (API)', gj, units='um', style={'line_width': 2.5, 'fill_opacity': 0.0, 'z': 10})
+        ]
 
     def objects(self, image_id: str):
         try:
             d = self._get(f'/api/images/{image_id}/objects').json()
         except TileNotFound:
             return []
-        return [AnnotationPayload('Cells (API)', d['columns'], format='table', units=d.get('units', 'px'),
-                                  style={'point_size': 4}, visible=False)]  # large: off until the user turns it on
+        return [
+            AnnotationPayload(
+                'Cells (API)',
+                d['columns'],
+                format='table',
+                units=d.get('units', 'px'),
+                style={'point_size': 4},
+                visible=False,
+            )
+        ]  # large: off until the user turns it on

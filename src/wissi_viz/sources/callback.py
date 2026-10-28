@@ -17,11 +17,15 @@ Matching ``tile_size``/``levels`` to the remote pyramid means every viewer tile
 maps to exactly one remote tile, and already-encoded bytes are passed straight
 through (no decode, no re-encode) and cached in memory and on disk.
 """
+
 from __future__ import annotations
 
-from typing import Callable
+import io
+from collections.abc import Callable
 
+import imagecodecs
 import numpy as np
+from PIL import Image
 
 from .base import SlideInfo, SlideSource, _fit
 
@@ -42,9 +46,16 @@ def sniff_media_type(b: bytes) -> str | None:
 
 
 class CallbackSource(SlideSource):
-    def __init__(self, info: SlideInfo, *, read_tile: TileFn | None = None, read_region: RegionFn | None = None,
-                 annotations: Callable[[], list] | list | None = None, version: str = '0',
-                 thread_safe: bool = True) -> None:
+    def __init__(
+        self,
+        info: SlideInfo,
+        *,
+        read_tile: TileFn | None = None,
+        read_region: RegionFn | None = None,
+        annotations: Callable[[], list] | list | None = None,
+        version: str = '0',
+        thread_safe: bool = True,
+    ) -> None:
         super().__init__()
         if read_tile is None and read_region is None:
             raise ValueError('provide read_tile and/or read_region')
@@ -110,7 +121,7 @@ class CallbackSource(SlideSource):
                 ww = min(t.shape[1] - sx0, w - dx0)
                 hh = min(t.shape[0] - sy0, h - dy0)
                 if ww > 0 and hh > 0:
-                    out[dy0:dy0 + hh, dx0:dx0 + ww] = t[sy0:sy0 + hh, sx0:sx0 + ww]
+                    out[dy0 : dy0 + hh, dx0 : dx0 + ww] = t[sy0 : sy0 + hh, sx0 : sx0 + ww]
         return out if sample is not None else np.zeros((h, w, 3), np.uint8)
 
     def annotation_layers(self):
@@ -120,10 +131,6 @@ class CallbackSource(SlideSource):
 
 def _decode(b: bytes) -> np.ndarray:
     try:
-        import imagecodecs
         return imagecodecs.imread(b)
-    except Exception:
-        import io
-
-        from PIL import Image
+    except Exception:  # noqa: BLE001  (codec not supported: fall back to Pillow)
         return np.asarray(Image.open(io.BytesIO(b)).convert('RGB'))

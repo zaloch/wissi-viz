@@ -1,4 +1,5 @@
 """Run: pytest -q tests  (creates small synthetic slides in a temp dir)."""
+
 from __future__ import annotations
 
 import gzip
@@ -22,18 +23,32 @@ def data(tmp_path_factory):
     img[:, :, 0] = np.linspace(0, 255, 4000, dtype=np.uint8)[None, :]
     desc = 'Aperio Image Library v12 \r\n4000x3000 [0,0 4000x3000] (256x256) JPEG/RGB Q=90|AppMag = 20|MPP = 0.5'
     with tifffile.TiffWriter(d / 'a.svs', bigtiff=True) as tw:
-        o = dict(tile=(256, 256), compression='jpeg', photometric='rgb', metadata=None)
+        o = {'tile': (256, 256), 'compression': 'jpeg', 'photometric': 'rgb', 'metadata': None}
         tw.write(img, description=desc, **o)
         tw.write(img[::16, ::16].copy(), description='Aperio thumb', photometric='rgb', metadata=None)
         tw.write(img[::4, ::4].copy(), description='Aperio Image Library level', **o)
     # single-level plain tiled TIFF (no pyramid at all) → virtual levels
     tifffile.imwrite(d / 'flat.tif', img[:, :, 1].copy(), tile=(256, 256))
-    gj = {'type': 'FeatureCollection', 'features': [
-        {'type': 'Feature', 'geometry': {'type': 'Polygon', 'coordinates': [[[10, 10], [100, 10], [100, 80], [10, 80], [10, 10]]]},
-         'properties': {'classification': {'name': 'Tumor', 'color': [255, 0, 0]}, 'score': 0.9}},
-        {'type': 'Feature', 'geometry': {'type': 'Point', 'coordinates': [500, 600]}, 'properties': {'class': 'Lymph'}},
-        {'type': 'Feature', 'geometry': {'type': 'LineString', 'coordinates': [[0, 0], [300, 300], [600, 0]]}, 'properties': {}},
-    ]}
+    gj = {
+        'type': 'FeatureCollection',
+        'features': [
+            {
+                'type': 'Feature',
+                'geometry': {'type': 'Polygon', 'coordinates': [[[10, 10], [100, 10], [100, 80], [10, 80], [10, 10]]]},
+                'properties': {'classification': {'name': 'Tumor', 'color': [255, 0, 0]}, 'score': 0.9},
+            },
+            {
+                'type': 'Feature',
+                'geometry': {'type': 'Point', 'coordinates': [500, 600]},
+                'properties': {'class': 'Lymph'},
+            },
+            {
+                'type': 'Feature',
+                'geometry': {'type': 'LineString', 'coordinates': [[0, 0], [300, 300], [600, 0]]},
+                'properties': {},
+            },
+        ],
+    }
     (d / 'a.geojson').write_text(json.dumps(gj), encoding='utf-8')
     return d
 
@@ -56,8 +71,8 @@ def test_virtual_levels_single_level_tiff(data):
     assert top.shape == (p.info.levels[-1].height, p.info.levels[-1].width)
     full = tifffile.imread(data / 'flat.tif').astype(np.float64)
     f = 2 ** (len(p.info.levels) - 1)
-    ref = full[:f * (3000 // f), :f * (4000 // f)].reshape(3000 // f, f, 4000 // f, f).mean((1, 3))
-    assert np.abs(top[:ref.shape[0], :ref.shape[1]] - ref).mean() < 1.5
+    ref = full[: f * (3000 // f), : f * (4000 // f)].reshape(3000 // f, f, 4000 // f, f).mean((1, 3))
+    assert np.abs(top[: ref.shape[0], : ref.shape[1]] - ref).mean() < 1.5
 
 
 def test_annotations_bucketing_and_encoding():
@@ -75,11 +90,11 @@ def test_annotations_bucketing_and_encoding():
     ov = L.overview_bytes()
     assert ov[:4] == b'WSA1'
     jl = struct.unpack('<I', ov[4:8])[0]
-    meta = json.loads(ov[8:8 + jl])
+    meta = json.loads(ov[8 : 8 + jl])
     assert meta['count'] == 20001 and meta['buckets'] == len(c.buckets)
     det = L.bucket_bytes(0)
     jl = struct.unpack('<I', det[4:8])[0]
-    m = json.loads(det[8:8 + jl])
+    m = json.loads(det[8 : 8 + jl])
     nfeat = int(c.buckets[0][5])
     assert m['segments'] == nfeat * 9  # closed 9-gons
     assert m['tri_verts'] == nfeat * 7 * 3
@@ -96,17 +111,23 @@ def test_geojson_and_sidecar(data):
 
 def test_aperio_and_halo_xml(tmp_path):
     ap = tmp_path / 's.xml'
-    ap.write_text('<Annotations><Annotation Id="1" Name="Tumor" LineColor="255"><Regions>'
-                  '<Region Id="1" Type="0"><Vertices><Vertex X="1" Y="1"/><Vertex X="50" Y="1"/><Vertex X="50" Y="40"/></Vertices></Region>'
-                  '<Region Id="2" Type="2"><Vertices><Vertex X="100" Y="100"/><Vertex X="140" Y="120"/></Vertices></Region>'
-                  '</Regions></Annotation></Annotations>', encoding='utf-8')
+    ap.write_text(
+        '<Annotations><Annotation Id="1" Name="Tumor" LineColor="255"><Regions>'
+        '<Region Id="1" Type="0"><Vertices><Vertex X="1" Y="1"/><Vertex X="50" Y="1"/><Vertex X="50" Y="40"/></Vertices></Region>'
+        '<Region Id="2" Type="2"><Vertices><Vertex X="100" Y="100"/><Vertex X="140" Y="120"/></Vertices></Region>'
+        '</Regions></Annotation></Annotations>',
+        encoding='utf-8',
+    )
     L = AnnotationLayer.load(ap)
     assert len(L) == 2 and L.classes['Tumor'] == '#ff0000'
     hx = tmp_path / 's.annotations'
-    hx.write_text('<Annotations><Annotation Name="Layer 1" LineColor="65280"><Regions>'
-                  '<Region Type="Rectangle" NegativeROA="0"><Vertices><V X="0" Y="0"/><V X="10" Y="10"/></Vertices></Region>'
-                  '<Region Type="Polygon" NegativeROA="1"><Vertices><V X="0" Y="0"/><V X="5" Y="0"/><V X="5" Y="5"/></Vertices></Region>'
-                  '</Regions></Annotation></Annotations>', encoding='utf-8')
+    hx.write_text(
+        '<Annotations><Annotation Name="Layer 1" LineColor="65280"><Regions>'
+        '<Region Type="Rectangle" NegativeROA="0"><Vertices><V X="0" Y="0"/><V X="10" Y="10"/></Vertices></Region>'
+        '<Region Type="Polygon" NegativeROA="1"><Vertices><V X="0" Y="0"/><V X="5" Y="0"/><V X="5" Y="5"/></Vertices></Region>'
+        '</Regions></Annotation></Annotations>',
+        encoding='utf-8',
+    )
     H = AnnotationLayer.load(hx)
     assert len(H) == 2 and 'Layer 1 (negative)' in H.classes
 
@@ -134,8 +155,9 @@ def test_http_api(data, tmp_path):
     from fastapi.testclient import TestClient
 
     from wissi_viz import create_app
+
     reg = SlideRegistry(TileService(disk_dir=tmp_path / 'cache'), warm=False)
-    sid = reg.add(data / 'a.svs', slide_id='a')
+    reg.add(data / 'a.svs', slide_id='a')
     c = TestClient(create_app(reg))
     info = c.get('/wissi-viz/slides/a/info.json').json()
     assert info['width'] == 4000 and info['version']
@@ -150,8 +172,11 @@ def test_http_api(data, tmp_path):
     assert ov.content[:4] == b'WSA1'  # TestClient transparently gunzips
     feat = c.get('/wissi-viz/slides/a/annotations/feature/0', params={'layer': layers[0]['name']}).json()
     assert feat['class'] == 'Tumor'
-    r = c.post('/wissi-viz/slides/a/annotations/add', params={'layer': 'Drawings'},
-               json={'type': 'Feature', 'geometry': {'type': 'Point', 'coordinates': [1, 2]}, 'properties': {}})
+    r = c.post(
+        '/wissi-viz/slides/a/annotations/add',
+        params={'layer': 'Drawings'},
+        json={'type': 'Feature', 'geometry': {'type': 'Point', 'coordinates': [1, 2]}, 'properties': {}},
+    )
     assert r.json()['ok'] and 'Drawings' in reg.layers('a')
     assert c.get('/wissi-viz/static/index.js').status_code == 200
     assert c.get('/wissi-viz/static/../server.py').status_code == 404
@@ -171,7 +196,7 @@ def test_channel_tile_encoding(data):
 
 
 def test_czi_reader(tmp_path):
-    pyczi = pytest.importorskip("pylibCZIrw.czi")  # LGPL: only used to *write* a test file
+    pyczi = pytest.importorskip('pylibCZIrw.czi')  # LGPL: only used to *write* a test file
     p = tmp_path / 'x.czi'
     a = (np.arange(1500 * 2000, dtype=np.uint32).reshape(1500, 2000) % 4096).astype(np.uint16)
     with pyczi.create_czi(str(p), exist_ok=True) as w:
@@ -191,10 +216,12 @@ def test_czifile_reader_mosaic_and_pyramid(tmp_path):
     """Permissive CZI reader: overlapping mosaic + pyramid subblocks, exact at every level."""
     import sys
     from pathlib import Path
+
     sys.path.insert(0, str(Path(__file__).parent))
     from czi_writer import mosaic_with_pyramid
 
     from wissi_viz.sources.czi import CziSource
+
     rng = np.random.default_rng(0)
     H, W = 1100, 1700
     img = (rng.random((2, H, W)) * 4000).astype(np.uint16)
@@ -205,7 +232,7 @@ def test_czifile_reader_mosaic_and_pyramid(tmp_path):
     assert [c.name for c in s.info.channels] == ['DAPI', 'CD3'] and s.info.mpp == (0.5, 0.5)
     assert np.array_equal(s.read_region(0, 0, 0, W, H, 1), img[1])
     for lv, ds in ((1, 2), (2, 4)):
-        ref = img[0][:H // ds * ds, :W // ds * ds].reshape(H // ds, ds, W // ds, ds).mean((1, 3)).astype(np.uint16)
+        ref = img[0][: H // ds * ds, : W // ds * ds].reshape(H // ds, ds, W // ds, ds).mean((1, 3)).astype(np.uint16)
         assert np.array_equal(s.read_region(lv, 0, 0, W // ds, H // ds, 0), ref)
     rgb = (rng.random((H, W, 3)) * 255).astype(np.uint8)
     mosaic_with_pyramid(tmp_path / 'rgb.czi', rgb, levels=(1,))
@@ -217,8 +244,10 @@ def test_slideio_backend_matches(tmp_path):
     pytest.importorskip('slideio')
     import sys
     from pathlib import Path
+
     sys.path.insert(0, str(Path(__file__).parent))
     from czi_writer import mosaic_with_pyramid
+
     rng = np.random.default_rng(1)
     img = (rng.random((1, 700, 900)) * 4000).astype(np.uint16)
     p = tmp_path / 'x.czi'
@@ -235,7 +264,7 @@ def test_tiff_fast_path_matches_zarr(tmp_path, data):
     img = (rng.random((3, 1100, 1500)) * 60000).astype(np.uint16)
     p = tmp_path / 'p.ome.tif'
     with tifffile.TiffWriter(p, ome=True) as tw:
-        o = dict(tile=(256, 256), compression='zlib', photometric='minisblack')
+        o = {'tile': (256, 256), 'compression': 'zlib', 'photometric': 'minisblack'}
         tw.write(img, subifds=2, metadata={'axes': 'CYX'}, **o)
         tw.write(img[:, ::2, ::2].copy(), subfiletype=1, **o)
         tw.write(img[:, ::4, ::4].copy(), subfiletype=1, **o)
@@ -244,9 +273,17 @@ def test_tiff_fast_path_matches_zarr(tmp_path, data):
         chans = range(len(s.info.channels)) if s.info.mode == 'channels' else [None]
         for lv, L in enumerate(s.info.levels):
             for c in chans:
-                for x, y, w, h in ((0, 0, L.width, L.height), (37, 11, 300, 260), (max(0, L.width - 200), max(0, L.height - 150), 200, 150)):
+                for x, y, w, h in (
+                    (0, 0, L.width, L.height),
+                    (37, 11, 300, 260),
+                    (max(0, L.width - 200), max(0, L.height - 150), 200, 150),
+                ):
                     w, h = min(w, L.width - x), min(h, L.height - y)
-                    assert np.array_equal(s.read_region(lv, x, y, w, h, c), s._read_zarr(lv, x, y, w, h, c)), (path, lv, c)
+                    assert np.array_equal(s.read_region(lv, x, y, w, h, c), s._read_zarr(lv, x, y, w, h, c)), (
+                        path,
+                        lv,
+                        c,
+                    )
         assert s._fast, f'fast path disabled for {path}'
     s = open_slide(p)
     assert len(s.info.levels) == 3 and np.array_equal(s.read_region(1, 0, 0, 750, 550, 2), img[2, ::2, ::2])
@@ -259,16 +296,22 @@ def test_decoded_arrays_share_one_budget_across_slides():
 
     from wissi_viz import Level, SlideInfo, SlideRegistry, decoded_cache, set_decoded_cache_mb
     from wissi_viz.sources.callback import CallbackSource
+
     old = decoded_cache().max_bytes
     set_decoded_cache_mb(4)
     try:
         info = SlideInfo(width=2048, height=2048, levels=[Level(2048, 2048, 1.0)], tile_size=256, mpp=(0.5, 0.5))
         reg = SlideRegistry(warm=False, max_level_step=2)
-        ids = [reg.add(CallbackSource(info, read_tile=lambda L, x, y, c, k=k: np.full((256, 256, 3), k, np.uint8)),
-                       slide_id=f's{k}') for k in range(16)]
+        ids = [
+            reg.add(
+                CallbackSource(info, read_tile=lambda L, x, y, c, k=k: np.full((256, 256, 3), k, np.uint8)),
+                slide_id=f's{k}',
+            )
+            for k in range(16)
+        ]
         for sid in ids:
             _, pyr = reg.get(sid)
-            assert len(pyr.info.levels) >= 4          # virtual 2× levels down to one tile
+            assert len(pyr.info.levels) >= 4  # virtual 2× levels down to one tile
             for L in range(1, len(pyr.info.levels)):  # read every virtual level → native tiles memoised
                 lv = pyr.info.levels[L]
                 for ty in range(-(-lv.height // 256)):

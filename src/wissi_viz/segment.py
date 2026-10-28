@@ -49,8 +49,8 @@ def available() -> list[str]:
 
 
 # ------------------------------------------------------------------------------------------------ tiling
-def _tissue_tiles(src, tile_l0: int, overlap_l0: int) -> list[tuple[int, int, int, int]]:
-    """Level-0 tiles (x, y, w, h) that contain tissue (brightfield: not white; fluorescence: above background)."""
+def _tissue_tiles(src, tile_l0: int, overlap_l0: int) -> list[tuple[int, int, int, int, int, int, int]]:
+    """Level-0 tiles (x, y, w, h — with overlap — and the core x, y, size each cell's centre must fall in) with tissue (brightfield: not white; fluorescence: above background)."""
     info = src.info
     lv = max((i for i, L in enumerate(info.levels) if L.width <= 4096), default=len(info.levels) - 1)
     L = info.levels[lv]
@@ -68,7 +68,8 @@ def _tissue_tiles(src, tile_l0: int, overlap_l0: int) -> list[tuple[int, int, in
             t = tissue[int(y / ds):int((y + tile_l0) / ds) + 1, int(x / ds):int((x + tile_l0) / ds) + 1]
             if t.size and t.mean() > 0.02:
                 x0, y0 = max(0, x - overlap_l0), max(0, y - overlap_l0)
-                out.append((x0, y0, min(info.width, x + tile_l0 + overlap_l0) - x0, min(info.height, y + tile_l0 + overlap_l0) - y0))
+                out.append((x0, y0, min(info.width, x + tile_l0 + overlap_l0) - x0, min(info.height, y + tile_l0 + overlap_l0) - y0,
+                            x, y, tile_l0))
     return out
 
 
@@ -90,16 +91,23 @@ def _read(src, x, y, w, h, scale: float) -> np.ndarray:
 
 
 # ------------------------------------------------------------------------------------------------ backends
+def _background(rgb: np.ndarray) -> np.ndarray:
+    return (rgb.min(-1) > 200) & ((rgb.max(-1).astype(np.int16) - rgb.min(-1)) < 25)
+
+
 def _classic_labels(img: np.ndarray, rgb: bool, thr: float | None) -> np.ndarray:
     from scipy import ndimage as ndi
     from skimage.feature import peak_local_max
     from skimage.filters import gaussian
     from skimage.segmentation import watershed
     sig = gaussian(_stain_od(img)['hematoxylin'] if rgb else img[..., 0], 1.0)
-    m = ndi.binary_opening(sig > thr, iterations=1)
+    m = sig > thr
+    if rgb:                                   # never on glass: bright, unsaturated pixels
+        m &= ~_background(img)
+    m = ndi.binary_opening(m, iterations=1)
     m = ndi.binary_fill_holes(m)
     dist = ndi.distance_transform_edt(m)
-    peaks = peak_local_max(dist, min_distance=4, labels=ndi.label(m)[0], exclude_border=False)
+    peaks = peak_local_max(dist, min_distance=6, threshold_abs=2.0, labels=ndi.label(m)[0], exclude_border=False)
     markers = np.zeros(m.shape, np.int32)
     markers[tuple(peaks.T)] = np.arange(1, len(peaks) + 1)
     return watershed(-dist, markers, mask=m).astype(np.int32)
@@ -171,7 +179,7 @@ def _tile_job(args):
     path, tile, scale, overlap_l0, thr, names, min_px = args
     from .sources import open_slide
     src = open_slide(path)
-    x, y, w, h = tile
+    x, y, w, h = tile[:4]
     img = _read(src, x, y, w, h, scale)
     rgb = src.info.mode == 'rgb'
     lab = _classic_labels(img, rgb, thr)
@@ -179,11 +187,10 @@ def _tile_job(args):
 
 
 def _finish_tile(lab, img, rgb, tile, scale, overlap_l0, info, names, min_px):
-    x, y, w, h = tile
+    x, y, w, h, cx, cy, size = tile
     inv = 1 / scale
-    m = overlap_l0 / 2 * scale                  # core = tile minus half the overlap (centre ownership)
-    core = (0 if x == 0 else m, 0 if y == 0 else m,
-            lab.shape[1] - (0 if x + w >= info.width else m), lab.shape[0] - (0 if y + h >= info.height else m))
+    # a cell belongs to the tile whose core (the tile without its overlap) holds its centre: no duplicates
+    core = ((cx - x) * scale, (cy - y) * scale, (cx - x + size) * scale, (cy - y + size) * scale)
     return _objects(lab, img, rgb, core, x, y, inv, names, min_px)
 
 
@@ -214,13 +221,18 @@ def segment_slide(slide: str | Path, out: str | Path, model: str = 'auto', targe
         samp = [tiles[i] for i in rng.choice(len(tiles), min(10, len(tiles)), replace=False)] if tiles else []
         vals = []
         for t in samp:
-            im = _read(src, *t, scale)
-            v = (_stain_od(im)['hematoxylin'] if rgb else im[..., 0]).ravel()[::5]
+            im = _read(src, *t[:4], scale)
+            v = (_stain_od(im)['hematoxylin'][~_background(im)] if rgb else im[..., 0].ravel())[::5]
             vals.append(v)
-        thr = float(threshold_otsu(np.concatenate(vals))) if vals else 0.0
+        v = np.concatenate(vals) if vals else np.zeros(1)
+        thr = float(threshold_otsu(v)) if v.max() > v.min() else 0.0
+        if rgb:
+            thr = max(thr, 0.15)              # haematoxylin OD of a nucleus is well above 0.15
         from concurrent.futures import ProcessPoolExecutor
         jobs = [(str(slide), t, scale, ov_l0, thr, names, min_px) for t in tiles]
-        with ProcessPoolExecutor(workers or os.cpu_count()) as ex:
+        import multiprocessing as mp
+        # spawn on every OS: forking a process that already runs threads (servers, BLAS) can deadlock
+        with ProcessPoolExecutor(workers or os.cpu_count(), mp_context=mp.get_context('spawn')) as ex:
             for k, r in enumerate(ex.map(_tile_job, jobs, chunksize=2)):
                 if r:
                     parts.append(r)
@@ -232,7 +244,7 @@ def segment_slide(slide: str | Path, out: str | Path, model: str = 'auto', targe
         batch = 8
         for b0 in range(0, len(tiles), batch):
             ts = tiles[b0:b0 + batch]
-            imgs = [_read(src, *t, scale) for t in ts]
+            imgs = [_read(src, *t[:4], scale) for t in ts]
             for t, im, lab in zip(ts, imgs, cp.labels(imgs, rgb)):
                 r = _finish_tile(lab, im, rgb, t, scale, ov_l0, info, names, min_px)
                 if r:

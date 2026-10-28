@@ -16,6 +16,17 @@ def main(argv: list[str] | None = None) -> None:
     from ._compat import utf8_stdio
     utf8_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] in (['--demo'], ['demo'], ['--benchmark'], ['benchmark']):
+        _demo_or_benchmark(argv)
+        return
+    if argv[:1] == ['pack']:   # the public sample pack, step by step
+        from .pack import main as pack_main
+        pack_main(argv[1:])
+        return
+    if argv[:1] == ['segment']:   # cells of a whole slide → GeoParquet
+        from .segment import main as seg_main
+        seg_main(argv[1:])
+        return
     if argv[:1] == ['desktop']:  # the viewer in its own window (pywebview), see wissi_viz/desktop.py
         from .desktop import main as desktop_main
         desktop_main(argv[1:])
@@ -138,6 +149,32 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit('no slides found')
     print(f'wissi-viz: {len(reg.ids())} slide(s) → http://{a.host}:{a.port}/')
     uvicorn.run(create_app(reg, prefix=a.prefix, cors=a.cors or None), host=a.host, port=a.port, log_level='warning')
+
+
+def _demo_or_benchmark(argv: list[str]) -> None:
+    """``wissi-viz --demo [quick|full]`` and ``wissi-viz --benchmark [quick|full]`` on the public sample pack."""
+    bench = argv[0].lstrip('-') == 'benchmark'
+    ap = argparse.ArgumentParser(prog=f'wissi-viz --{"benchmark" if bench else "demo"}')
+    ap.add_argument('set', nargs='?', default='quick', choices=['quick', 'full'],
+                    help='quick: 5 images (~1 GB); full: 32 images (~7 GB)')
+    ap.add_argument('--dir', default=None, help='where the images are kept (default: your user cache)')
+    ap.add_argument('--yes', action='store_true', help="don't ask before downloading")
+    if bench:
+        ap.add_argument('--out', default='wissi-viz-benchmark', help='report path without extension (.md + .json)')
+        ap.add_argument('--panes', default='1,4,16,32')
+        ap.add_argument('--headed', action='store_true', help='visible browser: measures your real GPU')
+        ap.add_argument('--seconds', type=float, default=6, help='pan duration per run')
+    else:
+        ap.add_argument('--model', default='auto', choices=['auto', 'cellpose', 'classpose', 'classic'],
+                        help='cell segmentation (auto: Cellpose-SAM if installed, else classic)')
+        ap.add_argument('--browser', action='store_true', help='open in a browser window instead of the desktop app')
+        ap.add_argument('--no-open', action='store_true', help='prepare everything, open nothing')
+    a = ap.parse_args(argv[1:])
+    from . import pack
+    if bench:
+        pack.run_benchmark(a.set, a.dir, a.out, a.panes, a.yes, a.headed, a.seconds)
+    else:
+        pack.run_demo(a.set, a.dir, a.model, a.yes, open_app=not a.no_open, browser=a.browser)
 
 
 if __name__ == '__main__':

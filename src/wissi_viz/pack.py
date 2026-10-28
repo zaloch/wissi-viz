@@ -432,3 +432,154 @@ def main(argv: list[str]) -> None:
         desktop_main(['--session', str(session(sel, d))] + (['--browser'] if a.browser else []))
     else:
         run_demo(a.set, a.dir, a.model, a.yes, browser=a.browser)
+
+
+# ------------------------------------------------------------------------------------------------ benchmark
+def run_benchmark(which: str = 'quick', directory: str | None = None, out: str = 'wissi-viz-benchmark',
+                  panes: str = '1,4,16,32', yes: bool = False, headed: bool = False, seconds: float = 6, log=print) -> Path:
+    """Benchmarks on the sample pack: slide opening and tile serving, panning 1–32 panes in a browser, SAM click
+    latency, region metrics, GeoParquet vs GeoJSON. Writes <out>.md and <out>.json."""
+    import platform
+
+    from . import __version__, annio
+    from .bench import browser_bench, server_bench
+    sel = items(which)
+    d = pack_dir(directory)
+    need = sum(x['size'] for x in sel if not _complete(d / 'downloads' / x['file'], x))
+    if need and not yes:
+        if not sys.stdin or not sys.stdin.isatty():
+            raise SystemExit(f'the benchmark needs to download {_human(need)}; run again with --yes')
+        if input(f'Download {_human(need)} of public slides? [y/N] ').strip().lower() not in ('y', 'yes'):
+            raise SystemExit('cancelled')
+    download(sel, d, log=log)
+    prepare(sel, d, log=log)
+    slides = [str(_slide(x, d)) for x in sel]
+    rep: dict[str, Any] = {'version': __version__, 'set': which, 'images': len(sel), 'platform': platform.platform(),
+                           'python': platform.python_version(), 'cpu': platform.processor() or platform.machine(),
+                           'cpus': os.cpu_count()}
+    log('1/5 slide opening and tile serving')
+    rep['server'] = server_bench(slides)
+    log('2/5 panning in the browser (' + panes + ' panes)')
+    try:
+        rep['browser'] = browser_bench(slides, [int(p) for p in panes.split(',')], headed=headed, pan_seconds=seconds)
+    except Exception as e:  # noqa: BLE001  (no Chromium: install with `playwright install chromium`)
+        rep['browser'] = {'error': f'{type(e).__name__}: {e}'}
+    log('3/5 SAM click latency')
+    rep['sam'] = _bench_sam(slides[:3])
+    log('4/5 region metrics')
+    rep['metrics'] = _bench_metrics(sel[:2], d)
+    log('5/5 GeoParquet vs GeoJSON')
+    rep['formats'] = _bench_formats(sel, d)
+    md = _report_md(rep)
+    Path(out).with_suffix('.json').write_text(json.dumps(rep, indent=1, default=str), encoding='utf-8')
+    p = Path(out).with_suffix('.md')
+    p.write_text(md, encoding='utf-8')
+    print('\n' + md)
+    log(f'report: {p.resolve()}')
+    return p
+
+
+def _bench_sam(slides: list[str]) -> dict:
+    from .sam import SamService
+    from .sources import open_slide
+    svc = SamService()
+    rows = []
+    for path in slides:
+        src = open_slide(path)
+        W, H = src.info.width, src.info.height
+        cx, cy = W / 2, H / 2
+        for zoom, span in (('overview', max(W, H)), ('20x field', 2000)):
+            rect = (cx - span / 2, cy - span / 2, cx + span / 2, cy + span / 2)
+            try:
+                _, a = svc.segment(src, rect, points=[(cx, cy)], labels=[1], key=path)
+                _, b = svc.segment(src, rect, points=[(cx, cy), (cx + span / 10, cy)], labels=[1, 1], key=path)
+                rows.append({'slide': Path(path).name, 'view': zoom, 'backend': a['backend'], 'device': a['device'],
+                             'encode_ms': a['encode_ms'], 'first_click_ms': (a['encode_ms'] or 0) + a['decode_ms'],
+                             'next_click_ms': b['decode_ms']})
+            except Exception as e:  # noqa: BLE001
+                rows.append({'slide': Path(path).name, 'view': zoom, 'error': str(e)})
+    return {'status': svc.status(), 'rows': rows}
+
+
+def _bench_metrics(sel, d: Path) -> list[dict]:
+    from . import annio, spatial
+    from .metrics import objects_from_layer, region_metrics
+    from .sources import open_slide
+    rows = []
+    for x in sel:
+        src = open_slide(_slide(x, d))
+        t0 = time.perf_counter()
+        _, tissue = spatial.tissue_mask(src)
+        t1 = time.perf_counter()
+        cp = _cells(x, d)
+        objs = objects_from_layer(annio.load(cp), (src.info.mpp or (None,))[0]) if cp else None
+        t2 = time.perf_counter()
+        df = region_metrics(tissue, source=src, objects=objs)
+        t3 = time.perf_counter()
+        rows.append({'image': x['id'], 'regions': len(df), 'measurements': len(df.columns), 'cells': len(objs) if objs is not None else 0,
+                     'tissue_s': round(t1 - t0, 2), 'load_cells_s': round(t2 - t1, 2), 'metrics_s': round(t3 - t2, 2)})
+    return rows
+
+
+def _bench_formats(sel, d: Path) -> dict:
+    import tempfile
+
+    from . import annio
+    cps = [c for c in (_cells(x, d) for x in sel) if c]
+    if not cps:
+        return {'note': 'no cell layers yet (run wissi-viz --demo first)'}
+    big = max(cps, key=lambda p: p.stat().st_size)
+    t0 = time.perf_counter()
+    F = annio.read_geoparquet(big)
+    t1 = time.perf_counter()
+    with tempfile.TemporaryDirectory() as tmp:
+        gj = Path(tmp) / 'cells.geojson'
+        annio.write_geojson(F, gj)
+        t2 = time.perf_counter()
+        from .annotations import AnnotationLayer
+        AnnotationLayer.from_geojson(gj)
+        t3 = time.perf_counter()
+        pq_ = annio.write_geoparquet(F, Path(tmp) / 'cells.parquet')
+        t4 = time.perf_counter()
+        return {'layer': big.name, 'features': len(F), 'geoparquet_mb': round(pq_.stat().st_size / 2**20, 1),
+                'geojson_mb': round(gj.stat().st_size / 2**20, 1), 'geoparquet_read_s': round(t1 - t0, 2),
+                'geoparquet_write_s': round(t4 - t3, 2), 'geojson_write_s': round(t2 - t1, 2), 'geojson_read_s': round(t3 - t2, 2)}
+
+
+def _report_md(r: dict) -> str:
+    L = [f'# wissi-viz {r["version"]} benchmark', '',
+         f'{r["images"]} public slides ({r["set"]} set) · {r["platform"]} · Python {r["python"]} · {r["cpus"]} CPUs', '']
+    if r.get('server'):
+        L += ['## Slide opening and tile serving', '', '| slide | open (ms) | cold tile p50 (ms) | warm tile p50 (ms) | tiles/s |',
+              '|---|---|---|---|---|']
+        for s in r['server']:
+            lv = (s.get('levels_bench') or [{}])[0]          # full resolution
+            tput = next((v for k, v in lv.items() if k.startswith('throughput')), '')
+            L.append(f'| {s.get("slide", "")} ({s.get("size", "")}) | {s.get("open_ms", "")} | {lv.get("cold_p50_ms", "")} | '
+                     f'{lv.get("warm_p50_ms", "")} | {tput} |')
+        L.append('')
+    b = r.get('browser') or {}
+    if b.get('error'):
+        L += ['## Panning', '', f'Not run: {b["error"]}', '']
+    elif b:
+        L += ['## Panning in the browser', '', '```', json.dumps(b.get('summary', b), indent=1, default=str)[:4000], '```', '']
+    s = r.get('sam') or {}
+    if s.get('rows'):
+        st = s['status']
+        L += ['## SAM click segmentation', '', f'backend **{st.get("backend")}** on {st.get("device")} (model {st.get("model")})', '',
+              '| slide | view | first click (ms) | next click (ms) |', '|---|---|---|---|']
+        for row in s['rows']:
+            L.append(f'| {row["slide"]} | {row["view"]} | {row.get("first_click_ms", row.get("error", ""))} | {row.get("next_click_ms", "")} |')
+        L.append('')
+    if r.get('metrics'):
+        L += ['## Region metrics', '', '| image | cells | measurements | tissue (s) | metrics (s) |', '|---|---|---|---|---|']
+        for m in r['metrics']:
+            L.append(f'| {m["image"]} | {m["cells"]:,} | {m["measurements"]} | {m["tissue_s"]} | {m["metrics_s"]} |')
+        L.append('')
+    f = r.get('formats') or {}
+    if f.get('features'):
+        L += ['## Annotation formats', '', f'{f["features"]:,} cells ({f["layer"]})', '',
+              '| | size (MB) | write (s) | read (s) |', '|---|---|---|---|',
+              f'| GeoParquet | {f["geoparquet_mb"]} | {f["geoparquet_write_s"]} | {f["geoparquet_read_s"]} |',
+              f'| GeoJSON | {f["geojson_mb"]} | {f["geojson_write_s"]} | {f["geojson_read_s"]} |', '']
+    return '\n'.join(L)

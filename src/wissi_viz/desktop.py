@@ -79,6 +79,7 @@ class Session:
         self._paths: dict[str, Path] = {}
         self._lock = threading.Lock()
         self._recent_file = user_dir('config') / 'recent.json'
+        self.show: list[str] = []          # slide ids to show in panes on load (a session)
 
     # -- opening
     def open(self, paths, slide: str | None = None) -> dict:
@@ -146,6 +147,29 @@ class Session:
         self.registry.remove(slide)
         return {'slides': self.slides()}
 
+    def load_session(self, path: str | os.PathLike, log=print) -> dict:
+        """A session file (``wissi-viz --demo`` writes one): slides with their layers, and which to show."""
+        from . import annio
+        doc = json.loads(Path(path).read_text(encoding='utf-8'))
+        errors, ids = [], {}
+        for e in doc.get('slides', []):
+            r = self.open([e['slide']])
+            errors += r['errors']
+            if not r['opened']:
+                continue
+            sid = r['opened'][0]
+            ids[e.get('id', sid)] = sid
+            for lp in e.get('layers', []):
+                try:
+                    layer = annio.load(lp)
+                    self.registry.add_annotations(sid, layer, name=layer.name)
+                except Exception as ex:  # noqa: BLE001
+                    errors.append(f'{Path(lp).name}: {ex}')
+        self.show = [ids[k] for k in doc.get('show', []) if k in ids][:32] or list(ids.values())[:32]
+        for m in errors:
+            log(f'wissi-viz: {m}')
+        return {'slides': self.slides(), 'errors': errors}
+
     def slides(self) -> list[dict]:
         return [{'id': s, 'name': self.registry._entries[s].name, 'path': str(p)}
                 for s, p in self._paths.items() if s in self.registry]
@@ -196,7 +220,7 @@ class Session:
         @app.get('/app/state')
         def app_state(request: Request):
             check(request)
-            return {'slides': self.slides(), 'recent': self.recent(), 'version': __version__}
+            return {'slides': self.slides(), 'recent': self.recent(), 'version': __version__, 'show': self.show}
 
         @app.post('/app/open')
         async def app_open(request: Request):
@@ -309,7 +333,7 @@ class Bridge:
         return self._s.close(slide)
 
     def state(self):
-        return {'slides': self._s.slides(), 'recent': self._s.recent(), 'version': __version__}
+        return {'slides': self._s.slides(), 'recent': self._s.recent(), 'version': __version__, 'show': self._s.show}
 
     def install_shortcut(self):
         try:
@@ -611,6 +635,7 @@ def main(argv: list[str] | None = None) -> None:
     utf8_stdio()
     ap = argparse.ArgumentParser(prog='wissi-viz desktop', description='wissi-viz in its own window')
     ap.add_argument('files', nargs='*', help='slides, folders, cell tables or annotation files to open')
+    ap.add_argument('--session', default=None, help='a session file (slides + layers), e.g. from wissi-viz --demo')
     ap.add_argument('--browser', action='store_true', help='use a browser window instead of the native one')
     ap.add_argument('--port', type=int, default=None, help='local server port (default: a free one)')
     ap.add_argument('--cache-dir', default=None, help=f'tile / layer cache (default: {user_dir("cache")})')
@@ -630,6 +655,8 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     session = Session(a.cache_dir, memory_mb=a.memory_mb, cache_gb=a.cache_gb)
+    if a.session:
+        session.load_session(a.session)
     res = session.open(a.files) if a.files else None
     for e in (res or {}).get('errors', []):
         print(f'wissi-viz: {e}', file=sys.stderr)

@@ -450,7 +450,7 @@
   await customElements.whenDefined('wissi-viz');
   const st = await call('state');
   slides = st.slides || [];
-  panes = slides.slice(0, Math.min(4, slides.length)).map((s) => s.id);
+  panes = (st.show && st.show.length ? st.show : slides.slice(0, Math.min(4, slides.length)).map((s) => s.id)).slice(0, MAX_PANES);
   apply();
   renderRecent(st.recent);
   if (SERVER) {

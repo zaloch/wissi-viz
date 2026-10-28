@@ -57,7 +57,9 @@ def _regions(regions: Any) -> list[tuple[str, Any]]:
                 g = LineString(rs[0])
             else:
                 g = Point(rs[0][0])
-            nm = name_prop[i] if name_prop is not None and name_prop[i] not in (None, '') else (names[i] or f'region {i + 1}')
+            own = name_prop[i] if name_prop is not None and name_prop[i] not in (None, '') else None
+            cls = names[i] or None
+            nm = (f'{cls} · {own}' if cls and own and own != cls else cls or own or f'region {i + 1}')
             out.append((str(nm), g))
         return out
     from .spatial import roi_geometries

@@ -44,8 +44,13 @@ def test_no_duplicate_requests_and_never_blank(slide, http2):
     assert r['http_protocol'] == ('h2' if http2 else 'http/1.1')
     for run in r['runs']:
         st = run['stats']
-        # every completed request became a texture (no re-requests of tiles waiting for upload)
-        assert st['requests'] - st['cancelled'] - st['aborted'] - st['failed'] <= st['textures'] + 2, st
+        # no tile was fetched again while its texture was held or waiting for upload
+        assert st['duplicate'] == 0, st
+        # every completed request became a texture, unless it is still queued for upload (slow software GPUs), was
+        # freed since (texture budget, a slide closed) or arrived for a slide no longer shown
+        done = st['requests'] - st['cancelled'] - st['aborted'] - st['failed'] - st['inflight']
+        kept = st['textures'] + st['queuedUploads'] + st['evicted'] + st['dropped']
+        assert done <= kept + 2, st
         assert run['open_ms'] is not None and run['zoom_to_sharp_ms'] is not None
         assert run['pan']['blank_while_moving_pct'] < 5 and run['revisit']['sharp_while_moving_pct'] > 90
 

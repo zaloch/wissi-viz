@@ -1057,7 +1057,8 @@ export class WsiGrid extends HTMLElement {
     this.quality = 1.0;
     this.showControls = true;
     this.showLegend = true;
-    this.counters = { requests: 0, completed: 0, bytes: 0, aborted: 0, cancelled: 0, failed: 0, uploaded: 0, wasted: 0 };
+    this.counters = { requests: 0, completed: 0, bytes: 0, aborted: 0, cancelled: 0, failed: 0, uploaded: 0, wasted: 0,
+      evicted: 0, dropped: 0, duplicate: 0 }; // textures freed · arrivals for a closed slide · re-fetched tiles
     // level-of-detail policy (see setLod). LOD_LEGACY reproduces the pre-0.4 behaviour for A/B benchmarks.
     this.lod = { ...LOD_DEFAULT };
     this.fx = { frames: 0, draws: 0, fill: 0, area: 0 }; // draw statistics: tile quads, device px filled vs pane px
@@ -1522,7 +1523,7 @@ export class WsiGrid extends HTMLElement {
     for (const [url, s] of this.slides) {
       if (used.has(s)) continue;
       for (const L of s.layers.values()) L.destroy();
-      for (const [k, t] of this.tex) if (k.startsWith(url + '|')) { this.gl.deleteTexture(t.tex); this.texBytes -= t.bytes; this.tex.delete(k); }
+      for (const [k, t] of this.tex) if (k.startsWith(url + '|')) { this.gl.deleteTexture(t.tex); this.texBytes -= t.bytes; this.tex.delete(k); this.counters.evicted++; }
       this.slides.delete(url);
     }
   }
@@ -2918,7 +2919,7 @@ export class WsiGrid extends HTMLElement {
         continue;
       }
       const { s, L, tx, ty, c } = meta;
-      if (!this.slides.has(s.url) || !s.info) { res.bmp?.close?.(); continue; }
+      if (!this.slides.has(s.url) || !s.info) { res.bmp?.close?.(); this.counters.dropped++; continue; }
       const lv = s.info.levels[L], ts = s.info.tile_size;
       const w = Math.min(ts, lv.width - tx * ts), h = Math.min(ts, lv.height - ty * ts);
       const tex = gl.createTexture();
@@ -2943,7 +2944,7 @@ export class WsiGrid extends HTMLElement {
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       const old = this.tex.get(key);
-      if (old) { gl.deleteTexture(old.tex); this.texBytes -= old.bytes; }
+      if (old) { gl.deleteTexture(old.tex); this.texBytes -= old.bytes; this.counters.duplicate++; }
       this.tex.set(key, { tex, bytes, last: this.frame, w: c == null ? texW : w, h: c == null ? texH : h, drawn: false });
       this.texBytes += bytes;
       this.counters.uploaded++;
@@ -2960,6 +2961,7 @@ export class WsiGrid extends HTMLElement {
       for (const [k, t] of cand) {
         if (this.texBytes <= this.budget * 0.85) break;
         if (!t.drawn) this.counters.wasted++;
+        this.counters.evicted++;
         gl.deleteTexture(t.tex);
         this.texBytes -= t.bytes;
         this.tex.delete(k);

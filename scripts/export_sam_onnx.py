@@ -1,6 +1,6 @@
 """Export SAM 2.1 (Apache-2.0) to ONNX for wissi-viz's ``onnx`` SAM backend, and check it against PyTorch.
 
-    pip install torch "sam2 @ git+https://github.com/facebookresearch/sam2.git" huggingface_hub onnx onnxruntime
+    pip install torch "SAM-2 @ git+https://github.com/facebookresearch/sam2.git" huggingface_hub onnx onnxruntime
     python scripts/export_sam_onnx.py --model small --out dist/sam
 
 Writes ``sam2.1-<model>-encoder.onnx`` (image → embeddings) and ``sam2.1-<model>-decoder.onnx`` (embeddings + point /

@@ -39,7 +39,9 @@ desktop = ["pywebview>=5", "uvicorn>=0.29"]
 # SAM 2.1 click / box annotation (weights Apache-2.0). PyTorch route: transformers (Apache-2.0) + torch (BSD-3);
 # no PyTorch wheels for Intel Macs, which use the ONNX route. ONNX route: ONNX Runtime (MIT); for GPUs install
 # onnxruntime-gpu (CUDA) or onnxruntime-directml (any Windows GPU) instead.
-sam = ["torch>=2.2; sys_platform != 'darwin' or platform_machine != 'x86_64'", "transformers>=4.56", "scipy>=1.11", "scikit-image>=0.22"]
+sam = ["torch>=2.2; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+       "torchvision>=0.17; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+       "transformers>=4.56", "scipy>=1.11", "scikit-image>=0.22"]
 sam-onnx = ["onnxruntime>=1.17", "scipy>=1.11", "scikit-image>=0.22"]
 all = ["wissi-viz[analysis,io,slideio,nicegui,server,polars]"]
 # everything `wissi-viz --demo` / `--benchmark` use (add [sam] or [sam-onnx] for SAM 2.1, cellpose for Cellpose-SAM)

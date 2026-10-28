@@ -298,7 +298,12 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
         e, pyr = registry.get(sid)
         regions = layer(sid, layer_name)
         objs = layer(sid, objects) if objects else None
-        df = region_metrics(regions, source=pyr.source, objects=objs, intensity=intensity, texture=texture)
+        try:
+            df = region_metrics(regions, source=pyr.source, objects=objs, intensity=intensity, texture=texture)
+        except Exception as ex:  # noqa: BLE001  (say what failed instead of a bare 500)
+            import logging
+            logging.getLogger('wissi_viz').exception('region metrics failed')
+            raise HTTPException(500, f'{type(ex).__name__}: {ex}')
         return _table_response(df, fmt, f'{e.name.rsplit(".", 1)[0]} - {layer_name} metrics')
 
     @r.get('/slides/{sid}/annotations/object_metrics')
@@ -307,7 +312,10 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
         """Per-object shape and intensity of a segmented layer (JSON: the first ``limit`` rows; CSV / Parquet: all)."""
         from .metrics import object_metrics
         e, pyr = registry.get(sid)
-        df = object_metrics(layer(sid, layer_name), source=pyr.source, intensity=intensity)
+        try:
+            df = object_metrics(layer(sid, layer_name), source=pyr.source, intensity=intensity)
+        except Exception as ex:  # noqa: BLE001
+            raise HTTPException(500, f'{type(ex).__name__}: {ex}')
         if fmt == 'json':
             df = df.head(limit)
         return _table_response(df, fmt, f'{e.name.rsplit(".", 1)[0]} - {layer_name} objects')

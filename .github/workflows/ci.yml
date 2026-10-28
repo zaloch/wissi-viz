@@ -55,7 +55,7 @@ jobs:
         run: |
           run() { out=$("$@" 2>&1) || { echo "::error::$* :: $(echo "$out" | tail -c 2500 | tr '\n' ' ')"; exit 1; }; echo "$out" | tail -3; }
           run uv venv -p 3.12
-          run uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+          run uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           run uv pip install -e ".[analysis,sam]" pytest pytest-github-actions-annotate-failures
       - name: SAM tests with the real model
         env:

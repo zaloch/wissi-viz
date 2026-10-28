@@ -613,7 +613,7 @@ def _tile_objects(svc, impl, rgb, x, y, ds, d_img, amin, amax, O, edges, geom, j
     with svc._lock:
         emb = impl.embed(rgb)
         for k, (px, py) in enumerate(pts):
-            if k % 128 == 0 and job is not None and job.cancelled:
+            if job is not None and job.cancelled:  # every click: a SAM click can take a while on a slow CPU
                 job.update()
             xi, yi = int(px), int(py)
             if covered[yi, xi]:

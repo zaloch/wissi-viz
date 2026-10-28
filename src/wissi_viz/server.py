@@ -272,6 +272,46 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
         return FileResponse(out, filename=fname, headers=hdrs('no-cache'),
                             background=BackgroundTask(shutil.rmtree, tmpdir, True))
 
+    def _table_response(df, fmt: str, filename: str):
+        """A pandas table as JSON ({columns, rows}), CSV or Parquet."""
+        from fastapi.responses import Response
+        if fmt == 'csv':
+            return Response(df.to_csv(index=False), media_type='text/csv',
+                            headers=hdrs('no-cache', {'Content-Disposition': f'attachment; filename="{filename}.csv"'}))
+        if fmt == 'parquet':
+            import io
+            buf = io.BytesIO()
+            df.to_parquet(buf, index=False)
+            return Response(buf.getvalue(), media_type='application/vnd.apache.parquet',
+                            headers=hdrs('no-cache', {'Content-Disposition': f'attachment; filename="{filename}.parquet"'}))
+        import math
+        rows = [[None if isinstance(v, float) and not math.isfinite(v) else _jsonable(v) for v in r]
+                for r in df.itertuples(index=False, name=None)]
+        return JSONResponse({'columns': list(df.columns), 'rows': rows}, headers=hdrs('no-cache'))
+
+    @r.get('/slides/{sid}/annotations/metrics')
+    def ann_metrics(sid: str, layer_name: str = Query(alias='layer'), objects: str | None = None, fmt: str = 'json',
+                    intensity: bool = True, texture: bool = True):
+        """Measure every region of a layer: shape, intensity / stain, texture and — with ``objects`` (a layer of
+        cells) — counts, densities, composition, diversity, distances and clustering (wissi_viz.metrics)."""
+        from .metrics import region_metrics
+        e, pyr = registry.get(sid)
+        regions = layer(sid, layer_name)
+        objs = layer(sid, objects) if objects else None
+        df = region_metrics(regions, source=pyr.source, objects=objs, intensity=intensity, texture=texture)
+        return _table_response(df, fmt, f'{e.name.rsplit(".", 1)[0]} - {layer_name} metrics')
+
+    @r.get('/slides/{sid}/annotations/object_metrics')
+    def ann_object_metrics(sid: str, layer_name: str = Query(alias='layer'), fmt: str = 'csv', intensity: bool = True,
+                           limit: int = 5000):
+        """Per-object shape and intensity of a segmented layer (JSON: the first ``limit`` rows; CSV / Parquet: all)."""
+        from .metrics import object_metrics
+        e, pyr = registry.get(sid)
+        df = object_metrics(layer(sid, layer_name), source=pyr.source, intensity=intensity)
+        if fmt == 'json':
+            df = df.head(limit)
+        return _table_response(df, fmt, f'{e.name.rsplit(".", 1)[0]} - {layer_name} objects')
+
     if allow_edit:
         @r.post('/slides/{sid}/annotations/add')
         async def ann_add(sid: str, request: Request, layer_name: str = Query(alias='layer')):

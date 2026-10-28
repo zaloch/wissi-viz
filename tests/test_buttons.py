@@ -8,6 +8,7 @@ check here."""
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -165,6 +166,9 @@ def test_every_button_does_what_it_says(data, tmp_path):
             ctx = b.new_context(viewport={'width': 1500, 'height': 920}, accept_downloads=True,
                                 permissions=['clipboard-read', 'clipboard-write'])  # fmt: skip
             pg = ctx.new_page()
+            slow = float(os.environ.get('WISSI_SWEEP_CPU_SLOWDOWN', '0') or 0)
+            if slow > 1:  # find races: a slow machine (e.g. WISSI_SWEEP_CPU_SLOWDOWN=4)
+                ctx.new_cdp_session(pg).send('Emulation.setCPUThrottlingRate', {'rate': slow})
             pg.on('pageerror', lambda e: errors.append(f'pageerror: {e}'))
             pg.on('console', lambda m: errors.append(m.text) if m.type == 'error' else None)
             w = Sweep(pg, url)

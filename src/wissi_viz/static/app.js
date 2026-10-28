@@ -211,18 +211,18 @@ function folderOf(sl) {
   const dir = parts.join('/') || '/';
   return { key: `dir:${dir}`, label: parts.filter(Boolean).slice(-2).join('/') || dir, kind: 'folder', title: dir };
 }
-async function saveProjects() {
+async function saveProjects(render = true) {
   const r = await call('projects', projects);
-  if (r?.projects) projects = r.projects;
+  if (r?.projects && !renaming) projects = r.projects;
   else if (r?.errors) toast({ kind: 'bad', title: 'Projects not saved', sub: r.errors[0] });
-  renderList();
+  if (render && !renaming) renderList();   // never while a name is being typed: that would wipe it
 }
 function uniqueName(base) { let n = 1, name = base; while (projects.some((p) => p.name === name)) name = `${base} ${++n}`; return name; }
 function newProject(seed = []) {
   const name = uniqueName('New project');
   projects.unshift({ name, slides: seed.map(slidePath) });
   renaming = name;
-  saveProjects();
+  renderList();   // the name field at once (saved when it is named)
 }
 function addToProject(name, sl) {
   const pr = projects.find((x) => x.name === name);
@@ -286,6 +286,7 @@ function renderList() {
           g.project.name = v;
           saveProjects();
         } else {   // unchanged: put the name back in place (re-rendering the list here would swallow the click that blurred it)
+          saveProjects(false);   // a new project keeps its default name (no re-render: see above)
           const span = h('span', { class: 'gn', title: g.title || g.label }, g.label);
           span.onclick = () => toggleGroup(g.key);
           span.ondblclick = () => { renaming = g.label; renderList(); };
@@ -294,7 +295,7 @@ function renderList() {
       };
       gn.onkeydown = (e) => { if (e.key === 'Enter') done(true); else if (e.key === 'Escape') done(false); e.stopPropagation(); };
       gn.onblur = () => done(true);
-      setTimeout(() => { gn.focus(); gn.select(); }, 0);
+
     } else {
       gn = h('span', { class: 'gn', title: g.title || g.label }, g.label);
       gn.onclick = () => toggleGroup(g.key);
@@ -328,6 +329,8 @@ function renderList() {
     box.append(sec);
   }
   if (q && !box.children.length) box.append(h('div', { class: 'panel-note', style: 'padding: 8px' }, `No slide matches “${q}”.`));
+  const nameField = box.querySelector('input.gn');
+  if (nameField && document.activeElement !== nameField) { nameField.focus(); nameField.select(); }
   $('s-count').textContent = slides.length ? String(slides.length) : '';
 }
 

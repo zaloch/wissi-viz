@@ -36,6 +36,11 @@ bench = ["playwright>=1.40", "hypercorn>=0.16", "cryptography>=42", "uvicorn>=0.
 # the viewer in its own window: pywebview (BSD-3) → WebView2 via pythonnet (MIT) on Windows, WKWebView via pyobjc (MIT)
 # on macOS. Linux needs GTK or Qt bindings on top (LGPL/GPL, installed separately: see docs/INTEGRATION.md §12).
 desktop = ["pywebview>=5", "uvicorn>=0.29"]
+# SAM 2.1 click / box annotation (weights Apache-2.0). PyTorch route: transformers (Apache-2.0) + torch (BSD-3);
+# no PyTorch wheels for Intel Macs, which use the ONNX route. ONNX route: ONNX Runtime (MIT); for GPUs install
+# onnxruntime-gpu (CUDA) or onnxruntime-directml (any Windows GPU) instead.
+sam = ["torch>=2.2; sys_platform != 'darwin' or platform_machine != 'x86_64'", "transformers>=4.56", "scipy>=1.11", "scikit-image>=0.22"]
+sam-onnx = ["onnxruntime>=1.17", "scipy>=1.11", "scikit-image>=0.22"]
 all = ["wissi-viz[analysis,io,slideio,nicegui,server,polars]"]
 # opt-in, NOT permissive (LGPL): extra formats / alternative CZI backend
 lgpl = ["pylibCZIrw>=4.1", "openslide-python>=1.3", "openslide-bin>=4.0"]

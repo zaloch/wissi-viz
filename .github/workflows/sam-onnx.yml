@@ -1,0 +1,47 @@
+# Exports SAM 2.1 (Apache-2.0) to ONNX, checks it against PyTorch (mask IoU ≥ 0.95), and publishes the files as
+# the GitHub release `sam2.1-onnx-v1`, from which wissi-viz's `onnx` SAM backend downloads them on first use.
+name: sam-onnx
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [scripts/export_sam_onnx.py, .github/workflows/sam-onnx.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - name: Install
+        run: |
+          uv venv -p 3.12
+          uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          SAM2_BUILD_CUDA=0 uv pip install "sam2 @ git+https://github.com/facebookresearch/sam2.git" huggingface_hub onnx onnxruntime
+          uv pip install -e ".[analysis]"
+      - name: Export and check
+        run: |
+          fail() { echo "::error::$1"; exit 1; }
+          out=$(uv run --no-sync python scripts/export_sam_onnx.py --model tiny small --out dist/sam 2>&1) || fail "$(echo "$out" | tail -c 3000 | tr '\n' ' ')"
+          echo "$out" | tail -5
+          echo "::notice::$(cat dist/sam/check.json | tr '\n' ' ')"
+          curl -fsSL -o dist/sam/LICENSE-Apache-2.0.txt https://www.apache.org/licenses/LICENSE-2.0.txt
+          ls -la dist/sam
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view sam2.1-onnx-v1 >/dev/null 2>&1 || gh release create sam2.1-onnx-v1 --title "SAM 2.1 ONNX (Apache-2.0)" \
+            --notes "SAM 2.1 tiny and small exported to ONNX for wissi-viz's onnx SAM backend. Weights by Meta, Apache-2.0. Checked against PyTorch: $(cat dist/sam/check.json | tr -d '\n')"
+          gh release upload sam2.1-onnx-v1 dist/sam/*.onnx dist/sam/SHA256SUMS dist/sam/NOTICE.txt dist/sam/LICENSE-Apache-2.0.txt dist/sam/check.json --clobber
+      - name: The published files work through wissi-viz's onnx backend
+        env:
+          WISSI_TEST_SAM: onnx
+          WISSI_SAM_MODEL: small
+        run: |
+          uv pip install pytest pytest-github-actions-annotate-failures
+          uv run --no-sync pytest -q -rfE tests/test_sam.py -k real_sam

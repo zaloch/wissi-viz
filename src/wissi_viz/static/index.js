@@ -1040,6 +1040,8 @@ export class WsiGrid extends HTMLElement {
     this.syncMode = 'none';
     this.tool = 'pan';
     this.drawLayer = null;
+    this.drawClass = null;   // class of new drawings / SAM masks (default: the draw layer's name)
+    this.drawColor = null;
     this.quality = 1.0;
     this.showControls = true;
     this.showLegend = true;
@@ -1302,8 +1304,14 @@ export class WsiGrid extends HTMLElement {
     }
   }
 
-  /** 'pan' | 'point' | 'rect' | 'ellipse' | 'polygon' | 'line' | 'freehand' */
+  /** Layer that drawings and accepted SAM masks are saved to (created on first use), and their class / colour. */
+  setDrawLayer(name) { this.drawLayer = name || null; }
+  setDrawClass(name, color = null) { this.drawClass = name || null; this.drawColor = color || null; }
+
+  /** 'pan' | 'point' | 'rect' | 'ellipse' | 'polygon' | 'line' | 'freehand' | 'sam'
+   *  sam: click = include, shift/alt-click = exclude, drag = box; Enter or double-click accepts, Esc discards. */
   setTool(tool) {
+    if (this.tool === 'sam' && tool !== 'sam') this.panes.forEach((p) => { p.sam = null; });
     this.tool = tool || 'pan';
     this._drawing = null;
     this.panes.forEach((p) => p.el?.classList.toggle('tool', this.tool !== 'pan'));
@@ -1670,7 +1678,7 @@ export class WsiGrid extends HTMLElement {
       if (!p?.view) return;
       const step = 120 / p.view.scale;
       const k = e.key;
-      if (k === 'Escape') { this._drawing = null; this._drawOverlay(); if (this.tool !== 'pan') return; }
+      if (k === 'Escape') { this._drawing = null; if (this.tool === 'sam') this.samClear(); this._drawOverlay(); if (this.tool !== 'pan') return; }
       if (k === 'Enter') { this._drawFinish(); return; }
       if (k === 'ArrowLeft') this._panBy(p, -step, 0);
       else if (k === 'ArrowRight') this._panBy(p, step, 0);
@@ -1774,6 +1782,11 @@ export class WsiGrid extends HTMLElement {
     const p = hit.p;
     const pt = this._toImage(p, hit.sx, hit.sy);
     const t = this.tool;
+    if (t === 'sam') {
+      this._drawing = { p, pts: [pt], cur: pt, kind: 'sam', dragging: true, neg: e.shiftKey || e.altKey, sx: hit.sx, sy: hit.sy };
+      this._drawOverlay();
+      return;
+    }
     if (t === 'point') { this._drawEmit(p, { type: 'Point', coordinates: pt }); return; }
     if (t === 'polygon' || t === 'line') {
       if (!this._drawing || this._drawing.p !== p) this._drawing = { p, pts: [pt], cur: pt, kind: t };
@@ -1791,6 +1804,14 @@ export class WsiGrid extends HTMLElement {
     const d = this._drawing;
     if (!d || !d.dragging) return;
     const [a, b] = [d.pts[0], d.cur];
+    if (d.kind === 'sam') {
+      this._drawing = null;
+      const px = Math.hypot(b[0] - a[0], b[1] - a[1]) * d.p.view.scale;
+      if (px < 5) this._samPrompt(d.p, { point: a, label: d.neg ? 0 : 1 });
+      else this._samPrompt(d.p, { box: [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])] });
+      this._drawOverlay();
+      return;
+    }
     let g = null;
     if (d.kind === 'rect' && Math.abs(a[0] - b[0]) > 0 && Math.abs(a[1] - b[1]) > 0) {
       g = { type: 'Polygon', coordinates: [[a, [b[0], a[1]], b, [a[0], b[1]], a]] };
@@ -1809,6 +1830,7 @@ export class WsiGrid extends HTMLElement {
     this._drawOverlay();
   }
   _drawFinish() {
+    if (this.tool === 'sam') { this.samAccept(); return; }
     const d = this._drawing;
     if (!d || (d.kind !== 'polygon' && d.kind !== 'line')) return;
     const pts = d.pts.filter((q, i) => i === 0 || q[0] !== d.pts[i - 1][0] || q[1] !== d.pts[i - 1][1]);
@@ -1817,18 +1839,73 @@ export class WsiGrid extends HTMLElement {
     if (d.kind === 'line' && pts.length >= 2) this._drawEmit(d.p, { type: 'LineString', coordinates: pts });
     this._drawOverlay();
   }
-  async _drawEmit(p, geometry) {
-    this._emit('draw', { pane: p.index, slide: p.slide?.info?.id, url: p.slide?.url, tool: this.tool, geometry });
+  async _drawEmit(p, geometry, extra = null) {
+    this._emit('draw', { pane: p.index, slide: p.slide?.info?.id, url: p.slide?.url, tool: this.tool, geometry, class: this.drawClass || this.drawLayer, properties: extra });
     if (this.drawLayer && p.slide) {
       try {
         await fetch(`${p.slide.url}/annotations/add?layer=${encodeURIComponent(this.drawLayer)}`, {
           method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ type: 'Feature', geometry, properties: { classification: { name: this.drawLayer } } }),
+          body: JSON.stringify({ type: 'Feature', geometry, properties: { classification: { name: this.drawClass || this.drawLayer, ...(this.drawColor ? { color: this.drawColor } : {}) }, ...(extra || {}) } }),
         });
         await p.slide.refreshAnnotations();
       } catch (_) { /* surfaced through the draw event */ }
     }
   }
+
+  // ---------------------------------------------------------------- SAM (segment from clicks / boxes)
+  async _samPrompt(p, prompt) {
+    if (!p.slide?.info || !p.view) return;
+    // the session freezes the pane's view rectangle: the server encodes it once, every further prompt is cheap
+    if (!p.sam || p.sam.slide !== p.slide) {
+      const hw = p.rect.w / 2 / p.view.scale, hh = p.rect.h / 2 / p.view.scale;
+      p.sam = { slide: p.slide, rect: [p.view.cx - hw, p.view.cy - hh, p.view.cx + hw, p.view.cy + hh],
+        points: [], labels: [], box: null, polys: [], seq: 0 };
+    }
+    const s = p.sam;
+    if (prompt.box) s.box = prompt.box;
+    else { s.points.push(prompt.point); s.labels.push(prompt.label); }
+    const seq = ++s.seq;
+    s.busy = true;
+    this._emit('samstart', { pane: p.index, slide: p.slide.info.id, points: s.points.length, box: !!s.box });
+    this._drawOverlay();
+    try {
+      const r = await fetch(`${p.slide.url}/sam`, {
+        method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rect: s.rect, points: s.points, labels: s.labels, box: s.box }),
+      });
+      const j = await r.json();
+      if (p.sam !== s || seq !== s.seq) return;           // superseded by a newer prompt
+      if (!r.ok) throw new Error(j.detail || r.statusText);
+      s.polys = j.polygons || [];
+      s.info = j;
+      this._emit('sam', { pane: p.index, slide: p.slide.info.id, polygons: s.polys, score: j.score, backend: j.backend,
+        encode_ms: j.encode_ms, decode_ms: j.decode_ms });
+    } catch (err) {
+      this._emit('sam', { pane: p.index, slide: p.slide.info.id, error: String(err.message || err) });
+    } finally {
+      if (p.sam === s && seq === s.seq) s.busy = false;
+      this._ovDirty = true;
+      this._drawOverlay();
+    }
+  }
+
+  /** Save the current SAM mask(s) of a pane (default: every pane with one) to the draw layer, with the draw class. */
+  async samAccept(pane = null) {
+    const ps = pane == null ? this.panes.filter((p) => p.sam?.polys?.length) : this._panes(pane);
+    for (const p of ps) {
+      const s = p.sam;
+      if (!s?.polys?.length) continue;
+      p.sam = null;
+      for (const ring of s.polys) {
+        await this._drawEmit(p, { type: 'Polygon', coordinates: [[...ring, ring[0]]] },
+          { source: 'sam', score: s.info?.score, backend: s.info?.backend });
+      }
+    }
+    this._ovDirty = true;
+    this._drawOverlay();
+  }
+
+  samClear(pane = 'all') { for (const p of this._panes(pane)) p.sam = null; this._ovDirty = true; this._drawOverlay(); }
 
   // ---------------------------------------------------------------- frame loop
   requestRender() {
@@ -2465,7 +2542,7 @@ export class WsiGrid extends HTMLElement {
     if (!c) return;
     // nothing selected and nothing being drawn: leave the (already clear) 2-D layer alone — clearing it every frame
     // made the compositor re-upload a full-screen canvas per frame
-    const need = !!this._drawing || this.panes.some((p) => p.selection && p.selection.cx != null);
+    const need = !!this._drawing || this.panes.some((p) => (p.selection && p.selection.cx != null) || p.sam);
     if (!need && !this._ovDirty) return;
     this._ovDirty = need;
     const dpr = this.dpr || 1;
@@ -2490,8 +2567,33 @@ export class WsiGrid extends HTMLElement {
           c.setLineDash([]);
         }
       }
+      if (p.sam) {
+        const s = p.sam;
+        c.lineWidth = 2 * dpr;
+        c.strokeStyle = s.busy ? 'rgba(94,208,255,.55)' : '#5ed0ff';
+        c.fillStyle = 'rgba(94,208,255,.22)';
+        for (const ring of s.polys || []) {
+          c.beginPath();
+          ring.forEach((q, i) => { const [x, y] = toS(q[0], q[1]); i ? c.lineTo(x, y) : c.moveTo(x, y); });
+          c.closePath(); c.fill(); c.stroke();
+        }
+        if (s.box) {
+          const [x0, y0] = toS(s.box[0], s.box[1]), [x1, y1] = toS(s.box[2], s.box[3]);
+          c.setLineDash([6 * dpr, 4 * dpr]); c.strokeStyle = '#ffeb3b'; c.strokeRect(x0, y0, x1 - x0, y1 - y0); c.setLineDash([]);
+        }
+        s.points.forEach((q, i) => {
+          const [x, y] = toS(q[0], q[1]);
+          c.fillStyle = s.labels[i] ? '#3ddc84' : '#ff5252';
+          c.strokeStyle = '#000';
+          c.beginPath(); c.arc(x, y, 5 * dpr, 0, Math.PI * 2); c.fill(); c.stroke();
+        });
+      }
       const d = this._drawing;
-      if (d && d.p === p) {
+      if (d && d.kind === 'sam' && d.p === p) {
+        const [x0, y0] = toS(...d.pts[0]), [x1, y1] = toS(...d.cur);
+        c.lineWidth = 1.5 * dpr; c.setLineDash([6 * dpr, 4 * dpr]); c.strokeStyle = '#ffeb3b';
+        c.strokeRect(x0, y0, x1 - x0, y1 - y0); c.setLineDash([]);
+      } else if (d && d.p === p) {
         c.lineWidth = 2 * dpr;
         c.strokeStyle = '#ffeb3b';
         c.fillStyle = 'rgba(255,235,59,.12)';

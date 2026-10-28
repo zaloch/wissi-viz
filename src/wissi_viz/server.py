@@ -312,6 +312,31 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
             df = df.head(limit)
         return _table_response(df, fmt, f'{e.name.rsplit(".", 1)[0]} - {layer_name} objects')
 
+    @r.get('/sam/status')
+    def sam_status(load: bool = False):
+        """Which SAM backend serves click / box segmentation (torch, onnx or the model-free classic fallback)."""
+        from .sam import service
+        return JSONResponse(service().status(load=load), headers=hdrs('no-cache'))
+
+    @r.post('/slides/{sid}/sam')
+    async def sam_segment(sid: str, request: Request):
+        """Segment from prompts: {rect: [x0, y0, x1, y1] (the pane's view, level-0 px), points: [[x, y], …],
+        labels: [1 | 0, …], box: [x0, y0, x1, y1] | null} → {polygons: [[[x, y], …], …], score, backend, …}."""
+        import anyio
+
+        from .sam import service
+        body = await request.json()
+        e, pyr = registry.get(sid)
+
+        def run():
+            return service().segment(pyr.source, body['rect'], body.get('points') or [], body.get('labels') or [],
+                                     body.get('box'), key=f'{sid}@{e.source.version}')
+        try:
+            polys, info = await anyio.to_thread.run_sync(run)
+        except ValueError as ex:
+            raise HTTPException(400, str(ex))
+        return JSONResponse({'polygons': [p.round(2).tolist() for p in polys], **info}, headers=hdrs('no-cache'))
+
     if allow_edit:
         @r.post('/slides/{sid}/annotations/add')
         async def ann_add(sid: str, request: Request, layer_name: str = Query(alias='layer')):

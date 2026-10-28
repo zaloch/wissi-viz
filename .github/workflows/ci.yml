@@ -45,6 +45,23 @@ jobs:
           uv run wissi-viz --help
           uv run wissi-viz desktop --help
 
+  sam:
+    name: SAM 2.1 (PyTorch, CPU)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - name: Install (CPU PyTorch)
+        run: |
+          uv venv -p 3.12
+          uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+          uv pip install -e ".[analysis,sam]" pytest pytest-github-actions-annotate-failures
+      - name: SAM tests with the real model
+        env:
+          WISSI_TEST_SAM: torch
+          WISSI_SAM_MODEL: tiny
+        run: uv run --no-sync pytest -q -rfE tests/test_sam.py
+
   build:
     needs: test
     runs-on: ubuntu-latest

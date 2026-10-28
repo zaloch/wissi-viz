@@ -1,14 +1,19 @@
-"""``wissi-viz serve`` — standalone tile + annotation server with a demo page.
+"""The ``wissi-viz`` command.
 
-wissi-viz serve /data/slides --port 8010 --cache-dir /var/cache/wissi-viz
+wissi-viz --demo                       # 5 public slides, cells segmented, opened in the app
 wissi-viz desktop slide.svs            # the viewer in its own window ("wissi-viz[desktop]")
+wissi-viz serve /data/slides --port 8010 --cache-dir /var/cache/wissi-viz
+wissi-viz serve --allow-open /data/slides --key s3cret     # visitors open slides from that folder
+wissi-viz serve --connect halolink.json                    # images from a tile API
 wissi-viz info slide.svs
 """
 
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -20,7 +25,7 @@ from .bench import fetch_samples, format_zoom_report, zoom_bench
 from .bench import main as bench_main
 from .pack import main as pack_main
 from .registry import SlideRegistry
-from .server import create_app
+from .session import Session, add_connect_args, apply_connects, create_session_app
 from .sources import open_slide
 from .tiles import TileService
 
@@ -54,10 +59,42 @@ def main(argv: list[str] | None = None) -> None:
             import wissi_loadtest as lt
         lt.main(argv[1:])
         return
-    ap = argparse.ArgumentParser(prog='wissi-viz')
-    sub = ap.add_subparsers(dest='cmd', required=True)
-    s = sub.add_parser('serve', help='serve slides from files/directories')
-    s.add_argument('paths', nargs='+', help='slide files or directories (searched recursively)')
+    ap = argparse.ArgumentParser(
+        prog='wissi-viz',
+        description='GPU whole-slide image viewer: desktop app, web server, sample pack and tools.',
+        epilog='Run "wissi-viz <command> --help" for the options of each command.',
+    )
+    sub = ap.add_subparsers(dest='cmd', required=True, metavar='command')
+    # handled above, before argparse; listed here so --help shows them
+    for name, text in (
+        ('--demo', 'download the public sample pack, segment cells and open it all (quick | full)'),
+        ('--benchmark', 'benchmark panning, SAM, metrics and formats on the sample pack (quick | full)'),
+        ('desktop', 'open slides, cell tables and annotations in the app window'),
+        ('pack', 'the sample pack step by step: status, download, prepare, segment, analyze, open'),
+        ('segment', 'segment the cells of a slide into GeoParquet (Cellpose-SAM, Classpose or classic)'),
+        ('loadtest', 'multi-user load test against a running server'),
+    ):
+        sub.add_parser(name, help=text, add_help=False)
+    s = sub.add_parser('serve', help='serve slides to browsers (the app page at /)')
+    s.add_argument('paths', nargs='*', help='slide files or directories (searched recursively)')
+    s.add_argument(
+        '--allow-open',
+        action='append',
+        default=[],
+        metavar='DIR',
+        help='let visitors open slides and add cell / annotation files from this folder (repeatable)',
+    )
+    s.add_argument(
+        '--allow-connect',
+        action='store_true',
+        help='let visitors connect the server to tile APIs (it fetches from them)',
+    )
+    s.add_argument(
+        '--key',
+        default=os.environ.get('WISSI_VIZ_KEY'),
+        help='password visitors type before opening or connecting (default: $WISSI_VIZ_KEY)',
+    )
+    add_connect_args(s)
     s.add_argument('--host', default='127.0.0.1')
     s.add_argument('--port', type=int, default=8010)
     s.add_argument('--prefix', default='/wissi-viz')
@@ -175,16 +212,37 @@ def main(argv: list[str] | None = None) -> None:
         memory_bytes=a.memory_mb * 2**20, disk_dir=a.cache_dir, disk_bytes=int(a.cache_gb * 2**30), workers=a.workers
     )
     reg = SlideRegistry(tiles, max_level_step=a.max_level_step, decoded_cache_mb=a.decoded_cache_mb)
-    for p in a.paths:
-        p = Path(p)
-        if p.is_dir():
-            reg.add_directory(p)
-        else:
-            reg.add(p)
-    if not reg.ids():
-        sys.exit('no slides found')
-    print(f'wissi-viz: {len(reg.ids())} slide(s) → http://{a.host}:{a.port}/')
-    uvicorn.run(create_app(reg, prefix=a.prefix, cors=a.cors or None), host=a.host, port=a.port, log_level='warning')
+    for d in a.allow_open:
+        if not Path(d).expanduser().is_dir():
+            sys.exit(f'--allow-open: not a folder: {d}')
+    session = Session(a.cache_dir, registry=reg, roots=a.allow_open, connect=a.allow_connect, remember=False)
+    for e in session.open(a.paths, trusted=True, eager=False)['errors'] if a.paths else []:
+        print(f'wissi-viz: {e}', file=sys.stderr)
+    apply_connects(session, a, log=lambda m: print(m, file=sys.stderr))
+    if not reg.ids() and not (a.allow_open or a.allow_connect):
+        sys.exit('no slides found (give slide paths, --connect, or --allow-open)')
+    if (a.allow_open or a.allow_connect) and not a.key and not _loopback(a.host):
+        print(
+            f'wissi-viz: warning: anyone who can reach {a.host}:{a.port} may open files / connect; set --key',
+            file=sys.stderr,
+        )
+    what = (
+        [f'{len(reg.ids())} slide(s)']
+        + [f'open from {d}' for d in a.allow_open]
+        + (['connect'] if a.allow_connect else [])
+    )
+    print(f'wissi-viz: {", ".join(what)} → http://{a.host}:{a.port}/')
+    app = create_session_app(session, mode='server', prefix=a.prefix, cors=a.cors or None, key=a.key)
+    uvicorn.run(app, host=a.host, port=a.port, log_level='warning')
+
+
+def _loopback(host: str) -> bool:
+    if host in ('localhost', ''):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _demo_or_benchmark(argv: list[str]) -> None:

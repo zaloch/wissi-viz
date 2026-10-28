@@ -14,6 +14,7 @@ import pytest
 import tifffile
 
 from wissi_viz import desktop as D
+from wissi_viz import session as S
 
 pytest.importorskip('fastapi')
 
@@ -28,6 +29,7 @@ def dirs(tmp_path, monkeypatch):
         return d
 
     monkeypatch.setattr(D, 'user_dir', user_dir)
+    monkeypatch.setattr(S, 'user_dir', user_dir)
     return tmp_path
 
 

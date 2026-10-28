@@ -22,7 +22,6 @@ import importlib.util
 import json
 import os
 import plistlib
-import secrets
 import shutil
 import socket
 import subprocess
@@ -33,256 +32,20 @@ import time
 import webbrowser
 from pathlib import Path
 
-import anyio
-from fastapi import HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
-from starlette.middleware.trustedhost import TrustedHostMiddleware
-from starlette.requests import Request  # module level: FastAPI resolves the string annotations here
-
-from . import annio
 from ._compat import user_dir, utf8_stdio
 from ._version import __version__
-from .annotations import AnnotationLayer
-from .objects import cached_object_layer
-from .registry import SLIDE_EXTS, SlideRegistry
-from .server import app_page, create_app
-from .tiles import TileService
+from .session import ANNOTATION_EXTS, PREFIX, TABLE_EXTS, Session, _kind, _slide_exts, add_connect_args, apply_connects
+
+__all__ = ['ANNOTATION_EXTS', 'PREFIX', 'TABLE_EXTS', 'Bridge', 'Session', '_kind', 'main', 'run_browser', 'run_native']
 
 ASSETS = Path(__file__).resolve().parent / 'assets'
 APP_NAME = 'wissi-viz'
 BUNDLE_ID = 'org.wissiviz.desktop'
-ANNOTATION_EXTS = ('.geojson', '.json', '.xml', '.annotations', '.geoparquet', '.coco.json')
-TABLE_EXTS = (
-    '.csv',
-    '.tsv',
-    '.txt',
-    '.parquet',
-    '.pq',
-    '.feather',
-    '.arrow',
-    '.ipc',
-    '.h5ad',
-)  # .parquet: GeoParquet if it has geometry
-PREFIX = '/wissi-viz'
 
 
 def icon_path(kind: str = 'png') -> Path:
     """The app icon: 'png' (512 px), 'ico' (Windows, 16–256 px), 'icns' (macOS), 'svg'."""
     return ASSETS / f'icon.{kind}'
-
-
-def _slide_exts() -> tuple[str, ...]:
-    return SLIDE_EXTS
-
-
-def _kind(p: Path) -> str:
-    n = p.name.lower()
-    if p.is_dir():
-        return 'folder'
-    if n.endswith(_slide_exts()):
-        return 'slide'
-    if n.endswith(ANNOTATION_EXTS):
-        return 'annotations'
-    if n.endswith(TABLE_EXTS):
-        return 'table'
-    return 'slide'  # let open_slide decide (it raises a clear error for unknown formats)
-
-
-# ------------------------------------------------------------------------------------------------ session
-class Session:
-    """The slides and layers open in one app window. Shared by the native bridge and the HTTP fallback."""
-
-    def __init__(
-        self,
-        cache_dir: str | os.PathLike | None = None,
-        memory_mb: int = 512,
-        cache_gb: float = 10,
-        decoded_cache_mb: int = 512,
-    ) -> None:
-        self.cache_dir = Path(cache_dir) if cache_dir else user_dir('cache')
-        self.tiles = TileService(
-            memory_bytes=memory_mb * 2**20, disk_dir=self.cache_dir / 'tiles', disk_bytes=int(cache_gb * 2**30)
-        )
-        self.registry = SlideRegistry(self.tiles, decoded_cache_mb=decoded_cache_mb)
-        self.token = secrets.token_urlsafe(24)
-        self._paths: dict[str, Path] = {}
-        self._lock = threading.Lock()
-        self._recent_file = user_dir('config') / 'recent.json'
-        self.show: list[str] = []  # slide ids to show in panes on load (a session)
-
-    # -- opening
-    def open(self, paths, slide: str | None = None) -> dict:
-        """Open slide files / folders; attach annotation files and cell tables to ``slide`` (else the first slide
-        opened in this call, else the most recent one). Returns {'opened', 'layers', 'errors', 'slides'}."""
-        opened, layers, errors, extras = [], [], [], []
-        for raw in paths or []:
-            p = Path(str(raw)).expanduser()
-            try:
-                if not p.exists():
-                    raise FileNotFoundError(f'not found: {p}')
-                k = _kind(p)
-                if k in ('annotations', 'table'):
-                    extras.append(p)
-                    continue
-                ids = self.registry.add_directory(p) if k == 'folder' else [self.registry.add(p)]
-                if k == 'folder' and not ids:
-                    raise ValueError(f'no slides in {p}')
-                for sid in ids:
-                    self.registry.info(sid)  # open now: unreadable files fail here, not as a blank pane
-                    self._paths[sid] = p if k != 'folder' else self.registry._entries[sid].path
-                    opened.append(sid)
-            except Exception as e:  # noqa: BLE001
-                errors.append(f'{p.name}: {e}')
-                for sid in [s for s in self.registry.ids() if s not in self._paths]:
-                    self.registry.remove(sid)
-        target = (
-            slide
-            if slide in self._paths
-            else (opened[0] if opened else (list(self._paths)[-1] if self._paths else None))
-        )
-        for p in extras:
-            if target is None:
-                errors.append(f'{p.name}: open a slide first, then add cells / annotations to it')
-                continue
-            try:
-                layers.append({'slide': target, 'layer': self.add_layer(target, p)})
-            except Exception as e:  # noqa: BLE001
-                errors.append(f'{p.name}: {e}')
-        self._remember([self._paths[s] for s in opened] + extras)
-        return {'opened': opened, 'layers': layers, 'errors': errors, 'slides': self.slides()}
-
-    def add_layer(self, slide: str, path: str | os.PathLike) -> str:
-        """Attach an annotation file (GeoJSON / HALO XML / …) or a cell table (CSV / Parquet / AnnData) to a slide.
-        Tables are compiled once into the cache and memory-mapped on later opens."""
-        p = Path(path)
-        try:
-            fmt = annio.detect_format(p)
-        except ValueError:
-            fmt = None
-        if fmt == 'coco' or (fmt == 'geoparquet' and _is_geoparquet(p)):
-            layer = annio.load(p)
-        elif _kind(p) == 'table' or (p.suffix.lower() == '.json' and _looks_like_table(p)):
-            mpp = (self.registry.info(slide).get('mpp') or [None])[0]
-            layer = cached_object_layer(p, self.cache_dir / 'objects', mpp=mpp, name=p.stem)
-        else:
-            layer = AnnotationLayer.load(p)
-        name = layer.name or p.stem
-        if name in self.registry.layers(slide):
-            name = f'{name} ({p.name})'
-        self.registry.add_annotations(slide, layer, name=name)
-        return name
-
-    def close(self, slide: str) -> dict:
-        self._paths.pop(slide, None)
-        self.registry.remove(slide)
-        return {'slides': self.slides()}
-
-    def load_session(self, path: str | os.PathLike, log=print) -> dict:
-        """A session file (``wissi-viz --demo`` writes one): slides with their layers, and which to show."""
-        doc = json.loads(Path(path).read_text(encoding='utf-8'))
-        errors, ids = [], {}
-        for e in doc.get('slides', []):
-            r = self.open([e['slide']])
-            errors += r['errors']
-            if not r['opened']:
-                continue
-            sid = r['opened'][0]
-            ids[e.get('id', sid)] = sid
-            for lp in e.get('layers', []):
-                try:
-                    layer = annio.load(lp)
-                    self.registry.add_annotations(sid, layer, name=layer.name)
-                except Exception as ex:  # noqa: BLE001
-                    errors.append(f'{Path(lp).name}: {ex}')
-        self.show = [ids[k] for k in doc.get('show', []) if k in ids][:32] or list(ids.values())[:32]
-        for m in errors:
-            log(f'wissi-viz: {m}')
-        return {'slides': self.slides(), 'errors': errors}
-
-    def slides(self) -> list[dict]:
-        return [
-            {'id': s, 'name': self.registry._entries[s].name, 'path': str(p)}
-            for s, p in self._paths.items()
-            if s in self.registry
-        ]
-
-    # -- recent files
-    def recent(self) -> list[str]:
-        try:
-            items = json.loads(self._recent_file.read_text(encoding='utf-8'))
-        except (OSError, ValueError):
-            return []
-        return [p for p in items if isinstance(p, str) and Path(p).exists()][:12]
-
-    def _remember(self, paths) -> None:
-        if not paths:
-            return
-        with self._lock:
-            items = [str(p) for p in paths] + [p for p in self.recent() if p not in {str(q) for q in paths}]
-            try:
-                self._recent_file.write_text(json.dumps(items[:12], ensure_ascii=False), encoding='utf-8')
-            except OSError:
-                pass
-
-    def shutdown(self) -> None:
-        try:
-            self.registry.close()
-        except Exception:  # noqa: BLE001  (best-effort cleanup at exit)
-            pass
-
-    # -- HTTP
-    def app(self):
-        """The viewer server plus the app page (``/app``) and its token-protected endpoints."""
-
-        app = create_app(self.registry, prefix=PREFIX, cors=None)
-        app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost', 'testserver'])
-
-        def check(request: Request):
-            if not secrets.compare_digest(request.headers.get('x-wissi-token', ''), self.token):
-                raise HTTPException(403, 'bad token')
-
-        @app.get('/app', response_class=HTMLResponse)
-        def desktop_page():
-            return app_page(PREFIX, mode='desktop', token=self.token)
-
-        @app.get('/app/state')
-        def app_state(request: Request):
-            check(request)
-            return {'slides': self.slides(), 'recent': self.recent(), 'version': __version__, 'show': self.show}
-
-        @app.post('/app/open')
-        async def app_open(request: Request):
-            check(request)
-            body = await request.json()
-            res = await anyio.to_thread.run_sync(lambda: self.open(body.get('paths') or [], body.get('slide')))
-            return JSONResponse(res)
-
-        @app.post('/app/close')
-        async def app_close(request: Request):
-            check(request)
-            return self.close((await request.json()).get('slide'))
-
-        return app
-
-
-def _is_geoparquet(p: Path) -> bool:
-    """A .parquet file with GeoParquet metadata (annotations), as opposed to a plain cell table."""
-    try:
-        import pyarrow.parquet as pq
-
-        return b'geo' in (pq.read_schema(p).metadata or {})
-    except Exception:  # noqa: BLE001
-        return False
-
-
-def _looks_like_table(p: Path) -> bool:
-    """A .json export that is a column table (not GeoJSON)."""
-    try:
-        with open(p, 'rb') as f:
-            head = f.read(4096).lstrip()
-    except OSError:
-        return False
-    return head.startswith(b'[') or (b'"type"' not in head and b'"features"' not in head)
 
 
 # ------------------------------------------------------------------------------------------------ server
@@ -367,7 +130,7 @@ class Bridge:
         return self._s.close(slide)
 
     def state(self):
-        return {'slides': self._s.slides(), 'recent': self._s.recent(), 'version': __version__, 'show': self._s.show}
+        return self._s.state()
 
     def install_shortcut(self):
         try:
@@ -747,6 +510,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument('--install-shortcut', action='store_true', help='add a launcher with the app icon, then exit')
     ap.add_argument('--uninstall-shortcut', action='store_true', help='remove the launcher, then exit')
     ap.add_argument('--debug', action='store_true', help='enable the web inspector')
+    add_connect_args(ap)
     a = ap.parse_args(argv)
     if a.install_shortcut:
         for p in install_shortcut():
@@ -760,9 +524,10 @@ def main(argv: list[str] | None = None) -> None:
     session = Session(a.cache_dir, memory_mb=a.memory_mb, cache_gb=a.cache_gb)
     if a.session:
         session.load_session(a.session)
-    res = session.open(a.files) if a.files else None
+    res = session.open(a.files, trusted=True) if a.files else None
     for e in (res or {}).get('errors', []):
         print(f'wissi-viz: {e}', file=sys.stderr)
+    apply_connects(session, a, log=lambda m: print(m, file=sys.stderr))
     server = _Server(session.app(), a.port)
     url = server.start()
     try:

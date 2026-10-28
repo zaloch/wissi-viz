@@ -70,6 +70,7 @@ It runs the tile server in-process on 127.0.0.1 and shows it with pywebview: Web
 ```bash
 wissi-viz serve /data/slides --port 8010 --cache-dir /var/cache/wissi-viz
 # open http://127.0.0.1:8010/
+wissi-viz serve --allow-open /data/slides --key s3cret   # visitors browse that folder and open slides
 ```
 
 ## Embed as an HTML element (any page, any framework)
@@ -119,7 +120,10 @@ To protect slides with your app's login, pass FastAPI dependencies, which apply 
 
 ## PathCore / HALO Link (or any tile API)
 
-wissi-viz never opens a connection itself. `wissi_viz.connectors` has two **stubs**, `HaloLinkConnection` and `PathCoreConnection`. You subclass one and call the client your app already has (auth and sessions stay in your app):
+Two ways in:
+
+- **A JSON description** for services with plain tile URLs: `wissi-viz serve --connect my_api.json`, `wissi-viz desktop --connect my_api.json`, or **Connect…** in the app. See [INTEGRATION.md §7](INTEGRATION.md#7-connecting-a-tile-api-pathcore-halo-link-).
+- **Your own connector** for everything else. `wissi_viz.connectors` has two **stubs**, `HaloLinkConnection` and `PathCoreConnection`. You subclass one and call the client your app already has (auth and sessions stay in your app). From the command line: `--connect mypkg.halo:make_connection`.
 
 ```python
 from wissi_viz.connectors import HaloLinkConnection, RemoteImageInfo, AnnotationPayload, TileNotFound

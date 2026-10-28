@@ -12,6 +12,7 @@
     "deepzoom_if": {"field": "format", "equals": "dzi"}, "overlap": "overlap",
     "levels": "levels", "level_width": "width", "level_height": "height", "level_id": "id"
   },
+  "list": {"path": "/api/images", "id": "id", "name": "name"},
   "tile": {"path": "/api/images/{image}/tiles/{level}/{col}/{row}", "empty_status": [404, 204], "retry_status": [429, 503]},
   "annotations": {"path": "/api/images/{image}/annotations", "format": "geojson", "units": "um"}
 }

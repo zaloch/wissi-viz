@@ -81,6 +81,7 @@ wissi-viz runs on Windows, macOS (Apple silicon and Intel) and Linux (x86_64, AR
 wissi-viz-app                              # File ▸ Open slides…, or drop files on the window
 wissi-viz desktop slide.svs cells.csv      # or open files from the command line
 wissi-viz desktop --install-shortcut       # add it to the Start menu / Applications / app menu
+wissi-viz desktop --connect my_api.json    # images from a tile API (or: Connect… in the app)
 ```
 
 ![Desktop app: CMU-1 with nuclei coloured by size, overview and 40×](docs/screenshots/desktop-app.jpg)
@@ -97,7 +98,15 @@ wissi-viz convert cells.parquet cells.geojson --to qupath    # or halo / aperio 
 ```bash
 wissi-viz serve /data/slides --port 8010
 # open http://127.0.0.1:8010/   (the bare element demo is at /demo)
+
+wissi-viz serve --allow-open /data/slides --key s3cret   # visitors pick and open slides from that folder
+wissi-viz serve --connect my_api.json --images A1,A2     # images from a tile API (HALO Link, PathCore, OMERO, …)
+wissi-viz serve --allow-connect --key s3cret             # visitors may connect it to tile APIs themselves
 ```
+
+A tile API is described in a small JSON file: base URL, auth header, where the image list, metadata and tiles are
+([guide §7](docs/INTEGRATION.md#7-connecting-a-tile-api-pathcore-halo-link-)). Services without plain tile URLs use
+your own connector class: `--connect mypkg.halo:make_connection`.
 
 **As an HTML element in any page or framework:**
 

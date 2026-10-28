@@ -27,7 +27,7 @@
 
 | Version | Change | What you do |
 |---|---|---|
-| 0.8.0 | **Annotate, measure, demo.** Up to 32 panes; `wissi-viz serve` shows the app UI with a slide list. SAM 2.1 click / box annotation (PyTorch or ONNX Runtime, Apache-2.0 weights). GeoParquet annotation files and `wissi-viz convert`. Region and object metrics. `wissi-viz segment` (Cellpose-SAM, Classpose, classic). `wissi-viz --demo` / `--benchmark` on 32 public slides. | Optional: `[sam]` / `[sam-onnx]` extras (§15); `[demo]` for the demo (§17). Pages that loaded `/` for the bare element demo now use `/demo`. |
+| 0.8.0 | **Annotate, measure, demo.** Up to 32 panes; `wissi-viz serve` shows the app UI with a slide list. SAM 2.1 click / box annotation (PyTorch or ONNX Runtime, Apache-2.0 weights). GeoParquet annotation files and `wissi-viz convert`. Region and object metrics. `wissi-viz segment` (Cellpose-SAM, Classpose, classic). `wissi-viz --demo` / `--benchmark` on 32 public slides. | Optional: `[sam]` / `[sam-onnx]` extras (§15); `[demo]` for the demo (§17). Pages that loaded `/` for the bare element demo now use `/demo`. Also: **Connect…** and `--connect` for tile APIs (§7); `serve --allow-open` with an in-page file picker and `--key` (§8). |
 | 0.7.0 | **Desktop app and platform support.** `wissi-viz-app` opens the viewer in its own native window with its own icon (pywebview), as an option next to the embedded element. Windows, macOS and Linux are supported and CI-tested; packaging moved to uv (`uv.lock`, dependency groups). Python 3.10–3.11 work again (older czifile). | Nothing for embedded use. For the app: `uv tool install "wissi-viz[desktop]"` (§12). For development: `uv sync` (§13). |
 | 0.5.0 | **Object pyramid.** Millions of cells are shown as screen-sized aggregated dots, then as GPU-drawn outlines when zoomed in. There is a **server mode** (default) and a **client mode**. | Use `cached_object_layer` for big tables (§5). Choose `overlays: 'server'\|'client'\|'auto'`. |
 | 0.5.1 | **Polars reader.** `read_objects(engine='auto')` uses Polars, then pyarrow, then pandas. | `pip install "wissi-viz[polars]"`. |
@@ -374,6 +374,20 @@ sid = conn.register(registry, 'image-123')
 ```
 
 - `scripts/probe_configs/mock_api.json` is a complete working example against the mock vendor API.
+- `"list": {"path": "/api/images", "items": "data", "id": "id", "name": "name"}` tells it where the image list is (`items`: the field holding the array; leave it out when the response is the array). Or give a fixed `"images": ["A1", {"id": "A2", "name": "Case 2"}]`.
+
+### From the command line or the app
+
+```bash
+wissi-viz desktop --connect my_api.json                 # every image the service lists, in the slide list
+wissi-viz serve /data/slides --connect my_api.json --images A1,A2
+wissi-viz serve --connect mypkg.halo:make_connection --connector-arg url=https://halo.example.org
+```
+
+- `--connect` takes a JSON description or `module:factory`: a `RemoteConnection` subclass, or a function returning one, called with the `--connector-arg key=value` pairs. That is how the HALO Link / PathCore stubs are used without writing an app.
+- Images are registered lazily: nothing is fetched until a pane shows one. The first is checked at once, so a wrong URL or token fails at start-up with the service's error.
+- In the app, **Connect…** takes the same JSON (pasted, or a path to a `.json` file) and optional image ids. The desktop app always offers it; `wissi-viz serve` only with `--allow-connect`.
+- In Python: `open_connection(spec)` and `image_list(conn, ids)` from `wissi_viz.connectors`; `Session.connect()` does both and registers the images.
 - `halolink.example.json` and `pathcore.example.json` are **templates**. Neither vendor publishes a tile URL scheme: HALO's programmatic access is its GraphQL API (HALO 3.0+), documented in the Indica Labs customer portal, and PathcoreFlow's public manual has no REST reference.
   - Fill them in only if your deployment exposes plain tile URLs; the connector refuses a config that still has `TODO` fields.
   - Otherwise keep the `RemoteConnection` subclass wissi already uses, with its authenticated client.
@@ -402,6 +416,12 @@ sid = conn.register(registry, 'image-123')
 - **Restrict CORS:** for path D, set it to your app's origin, not `'*'`.
 - **Use opaque slide ids:** `registry.add(src, slide_id=…)`. The browser can only address registered ids; file paths are never accepted from the client.
 - **Decide on annotation editing:** `allow_edit=False` disables the annotation-append endpoint used by the drawing tools.
+- **`wissi-viz serve` opens nothing by default.** Visitors see the slides named on the command line.
+  - `--allow-open DIR` lets them browse and open slides (and add cell / annotation files) inside those folders only. Paths are resolved first, so `..` and symlinks cannot leave them.
+  - `--allow-connect` lets them connect the server to tile APIs. The server then requests URLs they choose, so use it on trusted networks. Descriptions sent from the page may not use `${ENV}` variables (they could send the server's secrets elsewhere) or name Python factories.
+  - `--key` (or `$WISSI_VIZ_KEY`): a password the page asks for once per tab before opening or connecting. Without it, a non-loopback `--host` prints a warning.
+  - The slide list is shared: what one visitor opens, everyone sees. Visitors cannot close slides.
+- **The app page is never readable cross-origin.** CORS headers are sent for the API under the prefix only, so other sites can embed the viewer but cannot read the page (it carries the token for the app's own endpoints).
 - **The desktop app** listens on 127.0.0.1 only, on a random port, rejects other `Host` names (DNS rebinding) and sends no CORS headers. Its own endpoints (open a path, list recent files) also need a per-launch token that only its window has.
 
 ## 9. Deployment

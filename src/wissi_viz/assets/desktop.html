@@ -81,6 +81,25 @@
   #mtable th, #mtable td { padding: 3px 6px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
   #mtable th { position: sticky; left: 0; background: var(--panel); text-align: left; color: var(--dim); font-weight: 500; }
   input[type=color] { width: 34px; height: 26px; padding: 1px 2px; }
+  #browser { display: none; text-align: left; border: 1px solid var(--line); border-radius: 6px; max-height: 280px;
+             overflow: auto; margin-bottom: 8px; }
+  #browser .cwd { position: sticky; top: 0; background: var(--panel); padding: 5px 8px; color: var(--dim); font-size: 12px;
+                  border-bottom: 1px solid var(--line); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #browser .none { padding: 8px; color: var(--dim); font-size: 12px; }
+  #browser a { display: flex; gap: 8px; padding: 4px 8px; color: var(--text); text-decoration: none; }
+  #browser a:hover { background: var(--raise); }
+  #browser a .k { color: var(--dim); font-size: 11px; width: 78px; flex: none; }
+  #browser a .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 10px;
+           width: min(640px, calc(100vw - 32px)); padding: 16px; }
+  dialog::backdrop { background: rgba(0, 0, 0, .55); }
+  dialog h2 { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
+  dialog p { color: var(--dim); margin: 0 0 10px; line-height: 1.45; font-size: 12px; }
+  dialog textarea { width: 100%; font: 12px ui-monospace, monospace; resize: vertical; }
+  dialog label { display: grid; grid-template-columns: 84px 1fr; align-items: center; gap: 8px; margin-top: 8px; color: var(--dim); }
+  dialog .row { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+  dialog #c-msg { flex: 1; font-size: 12px; color: var(--dim); }
+  dialog #c-msg.err { color: var(--danger); }
 </style>
 <script type="module" src="__API__/static/index.js"></script>
 </head>
@@ -91,6 +110,7 @@
   <button id="b-open" class="primary" title="Open slides (Ctrl/⌘+O)">Open slides…</button>
   <button id="b-folder" title="Open every slide in a folder">Open folder…</button>
   <button id="b-layer" title="Add a cell table or annotation file to the active pane's slide (Ctrl/⌘+L)" disabled>Add cells / annotations…</button>
+  <button id="b-connect" title="Show the images of a tile API (HALO Link, PathCore, OMERO, any HTTP tile service)" hidden>Connect…</button>
   <span class="sep"></span>
   <label>Panes <select id="n"></select></label>
   <label>Sync <select id="sync"><option>none</option><option>all</option><option>pan</option><option>zoom</option></select></label>
@@ -116,8 +136,10 @@
       <div class="actions">
         <button class="primary" data-act="open">Open slides…</button>
         <button data-act="folder">Open folder…</button>
+        <button data-act="connect" hidden>Connect to a tile API…</button>
       </div>
       <div id="pathbox">
+        <div id="browser"></div>
         <textarea id="paths" placeholder="Paste file or folder paths, one per line"></textarea>
         <div class="row"><button id="b-paths" class="primary">Open</button></div>
       </div>
@@ -159,11 +181,32 @@
       neighbour distances, contacts and clustering — one row per region.</div>
   </section>
 </aside>
+<dialog id="connect">
+  <form id="c-form" method="dialog">
+    <h2>Connect to a tile API</h2>
+    <p>Paste the service description (JSON: base URL, auth header, where the image list, metadata and tiles are), or the
+      path of a <code>.json</code> file on the computer running wissi-viz. The images appear in the slide list; nothing is
+      downloaded until a pane shows one.</p>
+    <textarea id="c-spec" rows="11" spellcheck="false" placeholder='{
+  "base_url": "https://tiles.example.org",
+  "headers": {"Authorization": "Bearer YOUR-TOKEN"},
+  "list": {"path": "/api/images", "id": "id", "name": "name"},
+  "info": {"path": "/api/images/{image}", "width": "width", "height": "height",
+           "tile_size": "tile_size", "mpp": "mpp", "levels": "levels"},
+  "tile": {"path": "/api/images/{image}/tiles/{level}/{col}/{row}"}
+}'></textarea>
+    <label>Image IDs <input id="c-images" placeholder="optional, comma-separated (default: every image the service lists)"></label>
+    <div class="row"><span id="c-msg"></span>
+      <button value="cancel" formnovalidate>Cancel</button><button id="c-go" class="primary" value="connect">Connect</button></div>
+  </form>
+</dialog>
 <footer><span id="log"></span><span>v__VERSION__</span></footer>
 <script type="module">
   const API = '__API__', TOKEN = '__TOKEN__', MODE = '__MODE__';   // MODE: 'desktop' (local files) | 'server' (wissi-viz serve)
   const MAX_PANES = 32;
   const SERVER = MODE === 'server';
+  // what this page may offer, from the server: open / browse files, connect to tile APIs, close slides, needs a key
+  const CAPS = Object.assign({ open: !SERVER, browse: false, connect: false, close: !SERVER, key: false }, __CAPS__);
   const $ = (id) => document.getElementById(id);
   const grid = $('grid');
   const isMac = navigator.platform.toUpperCase().includes('MAC');
@@ -181,31 +224,76 @@
     window.addEventListener('pywebviewready', () => res(true), { once: true });
     setTimeout(() => res(!!native()), 10000);
   });
-  async function http(path, body) {
-    const r = await fetch(path, { method: body ? 'POST' : 'GET', headers: { 'X-Wissi-Token': TOKEN, 'Content-Type': 'application/json' },
-                                  body: body ? JSON.stringify(body) : undefined });
-    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  let KEY = '';                    // wissi-viz serve --key: typed once per browser tab
+  try { KEY = sessionStorage.getItem('wissi-viz-key') || ''; } catch (e) { /* storage blocked */ }
+  async function http(path, body, askKey = true) {
+    const headers = { 'X-Wissi-Token': TOKEN, 'Content-Type': 'application/json' };
+    if (KEY) headers['X-Wissi-Key'] = KEY;
+    const r = await fetch(path, { method: body ? 'POST' : 'GET', headers, body: body ? JSON.stringify(body) : undefined });
+    if (r.status === 401 && CAPS.key && askKey) {
+      const k = window.prompt('This server needs its key to open files or connect:');
+      if (k) {
+        KEY = k;
+        try { sessionStorage.setItem('wissi-viz-key', k); } catch (e) { /* storage blocked */ }
+        return http(path, body, false);
+      }
+    }
+    if (!r.ok) {
+      let m = await r.text();
+      try { m = JSON.parse(m).detail || m; } catch (e) { /* plain text */ }
+      throw new Error(m);
+    }
     return r.json();
   }
+  const quiet = (p) => p.catch((e) => ({ errors: [e.message] }));   // errors go to the status line, not the console
   const call = async (name, ...args) => {
+    if (name === 'connect') return quiet(http('/app/connect', { spec: args[0], images: args[1] }));
+    if (name === 'browse') return quiet(http('/app/browse' + (args[0] ? `?dir=${encodeURIComponent(args[0])}` : '')));
     if (await nativeReady && native()) return native()[name](...args);
-    if (name === 'open_paths') return http('/app/open', { paths: args[0], slide: args[1] });
-    if (name === 'close_slide') return http('/app/close', { slide: args[0] });
+    if (name === 'open_paths') return quiet(http('/app/open', { paths: args[0], slide: args[1] }));
+    if (name === 'close_slide') return quiet(http('/app/close', { slide: args[0] }));
     if (name === 'state') {
-      if (!SERVER) return http('/app/state');
-      const list = await (await fetch(`${API}/slides`, { cache: 'no-cache' })).json();
+      if (TOKEN) return http('/app/state');
+      const list = await (await fetch(`${API}/slides`, { cache: 'no-cache' })).json();   // a page without a session
       return { slides: list.map((s) => ({ ...s, path: s.name })), recent: [] };
     }
-    if (SERVER) return null;                       // a server's slides are chosen by whoever runs it
-    showPathBox(name); return null;               // dialogs need the native window
+    if (!CAPS.open) return null;                  // this server's slides are chosen by whoever runs it
+    showPathBox(name); return null;               // no native dialogs: the in-page picker / path box
   };
 
   function showPathBox(why) {
     $('empty').style.display = '';
     $('pathbox').style.display = 'block';
     $('paths').dataset.slide = why === 'pick_layer' ? activeSlide() || '' : '';
-    $('paths').focus();
-    log('Browser window: paste paths (native file dialogs need the desktop window)');
+    $('paths').placeholder = SERVER ? 'Or paste paths on the server, one per line' : 'Or paste file or folder paths, one per line';
+    if (CAPS.browse) browse($('browser').dataset.dir || '');
+    else $('paths').focus();
+    log(SERVER ? 'Pick files on the server' : 'Browser window: pick files below or paste paths (native dialogs need the desktop window)');
+  }
+
+  const openPaths = async (list) => onResult(await call('open_paths', list, $('paths').dataset.slide || null));
+
+  /** The in-page file picker: one folder of the server (or of this computer in a browser window). */
+  async function browse(dir) {
+    const box = $('browser');
+    const res = await call('browse', dir);
+    if (!res || res.errors) { box.style.display = 'none'; if (res) log(res.errors.join(' · '), true); return; }
+    box.dataset.dir = res.dir;
+    box.style.display = 'block';
+    box.replaceChildren(Object.assign(document.createElement('div'), {
+      className: 'cwd', textContent: res.dir || 'Folders you can open from', title: res.dir }));
+    const item = (kind, name, act, title) => {
+      const a = Object.assign(document.createElement('a'), { href: '#', title: title || name });
+      a.append(Object.assign(document.createElement('span'), { className: 'k', textContent: kind }),
+               Object.assign(document.createElement('span'), { className: 'n', textContent: name }));
+      a.onclick = (e) => { e.preventDefault(); act(); };
+      box.append(a);
+    };
+    if (res.parent != null) item('↑', 'up', () => browse(res.parent), res.parent || 'Folders you can open from');
+    if (res.entries.some((e) => e.kind === 'slide')) item('all', 'Open every slide in this folder', () => openPaths([res.dir]), res.dir);
+    const label = { folder: 'folder', slide: 'slide', table: 'cells', annotations: 'annotations' };
+    for (const e of res.entries) item(label[e.kind] || e.kind, e.name, e.kind === 'folder' ? () => browse(e.path) : () => openPaths([e.path]), e.path);
+    if (!res.entries.length) box.append(Object.assign(document.createElement('div'), { className: 'none', textContent: 'Nothing wissi-viz opens here' }));
   }
 
   function activeSlide() { return panes[active] || null; }
@@ -226,6 +314,7 @@
     const msg = [];
     if (opened.length) msg.push(`opened ${opened.length} slide${opened.length > 1 ? 's' : ''}`);
     if ((res.layers || []).length) msg.push(`added ${res.layers.map((l) => l.layer).join(', ')}`);
+    if (res.connected) msg.push(`${res.service}: ${res.connected} image${res.connected > 1 ? 's' : ''} in the slide list`);
     if (res.installed) msg.push(`shortcut: ${res.installed.join(', ')}`);
     if ((res.errors || []).length) log(res.errors.join(' · '), true);
     else if (msg.length) log(msg.join(' · '));
@@ -264,7 +353,7 @@
       li.title = s.path;
       const name = Object.assign(document.createElement('span'), { className: 'name', textContent: s.name });
       const pane = Object.assign(document.createElement('span'), { className: 'pane', textContent: shown.join(' ') });
-      const x = Object.assign(document.createElement('button'), { textContent: '✕', title: 'Close', hidden: SERVER });
+      const x = Object.assign(document.createElement('button'), { textContent: '✕', title: 'Close', hidden: !CAPS.close });
       x.onclick = async (e) => {
         e.stopPropagation();
         const r = await call('close_slide', s.id);
@@ -316,10 +405,27 @@
   $('b-layer').onclick = addLayer;
   $('fit').onclick = () => grid.fit('all');
   $('b-side').onclick = () => $('side').classList.toggle('hidden');
-  document.querySelectorAll('[data-act]').forEach((b) => (b.onclick = b.dataset.act === 'open' ? openSlides : openFolder));
+  const openConnect = () => { $('c-msg').textContent = ''; $('connect').showModal(); $('c-spec').focus(); };
+  const acts = { open: openSlides, folder: openFolder, connect: openConnect };
+  document.querySelectorAll('[data-act]').forEach((b) => (b.onclick = acts[b.dataset.act]));
+  $('b-connect').onclick = openConnect;
+  $('c-form').onsubmit = async (e) => {
+    if (e.submitter && e.submitter.value === 'cancel') return;      // method=dialog closes it
+    e.preventDefault();
+    const msg = $('c-msg'), spec = $('c-spec').value.trim();
+    msg.className = '';
+    if (!spec) { msg.textContent = 'Paste a service description or a .json path'; msg.className = 'err'; return; }
+    $('c-go').disabled = true;
+    msg.textContent = 'Connecting…';
+    const res = await call('connect', spec, $('c-images').value.trim() || null);
+    $('c-go').disabled = false;
+    if (!res.connected) { msg.textContent = (res.errors || ['failed']).join(' · '); msg.className = 'err'; return; }
+    $('connect').close();
+    onResult(res);
+  };
   $('b-paths').onclick = async () => {
     const list = $('paths').value.split(/\r?\n/).map((s) => s.trim().replace(/^"(.*)"$/, '$1')).filter(Boolean);
-    if (list.length) onResult(await http('/app/open', { paths: list, slide: $('paths').dataset.slide || null }));
+    if (list.length) await openPaths(list);
     $('paths').value = '';
   };
   document.addEventListener('keydown', (e) => {
@@ -336,7 +442,7 @@
   document.addEventListener('dragover', (e) => e.preventDefault());
   document.addEventListener('drop', (e) => {
     e.preventDefault(); dragDepth = 0; document.body.classList.remove('drag');
-    if (!native() && !SERVER) showPathBox('drop');           // a browser can't see a dropped file's path
+    if (!native() && CAPS.open) showPathBox('drop');         // a browser can't see a dropped file's path
   });
 
   /** Show these slide ids in panes (1–32), as if picked in the slide list. */
@@ -453,11 +559,17 @@
   panes = (st.show && st.show.length ? st.show : slides.slice(0, Math.min(4, slides.length)).map((s) => s.id)).slice(0, MAX_PANES);
   apply();
   renderRecent(st.recent);
-  if (SERVER) {
+  if (!CAPS.open) {
     for (const id of ['b-open', 'b-folder', 'b-layer']) $(id).hidden = true;
-    document.querySelector('#empty .actions').hidden = true;
-    document.querySelector('#empty h1').textContent = slides.length ? 'Pick a slide' : 'No slides on this server';
-    document.querySelector('aside .hint').textContent = 'Click a slide to show it in the active pane; double-click to add a pane.';
+    document.querySelectorAll('#empty [data-act=open], #empty [data-act=folder]').forEach((b) => (b.hidden = true));
+  }
+  $('b-connect').hidden = !CAPS.connect;
+  document.querySelector('#empty [data-act=connect]').hidden = !CAPS.connect;
+  if (SERVER) {
+    document.querySelector('#empty h1').textContent = slides.length ? 'Pick a slide'
+      : CAPS.open ? 'Open a slide from this server' : CAPS.connect ? 'Connect to a tile API' : 'No slides on this server';
+    document.querySelector('aside .hint').textContent = 'Click a slide to show it in the active pane; double-click to add a pane.'
+      + (CAPS.open || CAPS.connect ? ' The list is shared by everyone using this server.' : '');
     log(`${slides.length} slide${slides.length === 1 ? '' : 's'} on this server`);
   } else if (!(await nativeReady)) log('Browser window: paste paths to open files');
 </script>

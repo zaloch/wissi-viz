@@ -447,19 +447,41 @@ def _jsonable(o):
         return json.loads(json.dumps(o, default=lambda x: x.item() if hasattr(x, 'item') else str(x)))
 
 
-def create_app(registry: SlideRegistry, prefix: str = '/wissi-viz', cors: str | None = '*'):
-    """Standalone FastAPI app (used by ``wissi-viz serve``)."""
+class _ApiCORS(CORSMiddleware):
+    """CORS for the tile / annotation API only: other sites may embed the viewer, but never read the app page
+    (it carries the token for the app's own endpoints)."""
+
+    def __init__(self, app, path_prefix: str, **kw) -> None:
+        super().__init__(app, **kw)
+        self.path_prefix = path_prefix
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope['type'] == 'http' and not scope['path'].startswith(self.path_prefix):
+            await self.app(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
+
+
+def create_app(registry: SlideRegistry, prefix: str = '/wissi-viz', cors: str | None = '*', index: bool = True):
+    """Standalone FastAPI app: the API under ``prefix``, the app page at ``/`` (``index=False``: none; see
+    :func:`wissi_viz.session.create_session_app` for the page with file opening and connections)."""
 
     app = FastAPI(title='wissi-viz')
     if cors:
         app.add_middleware(
-            CORSMiddleware, allow_origins=[cors] if cors != '*' else ['*'], allow_methods=['*'], allow_headers=['*']
+            _ApiCORS,
+            path_prefix=prefix,
+            allow_origins=[cors] if cors != '*' else ['*'],
+            allow_methods=['*'],
+            allow_headers=['*'],
         )
     app.include_router(create_router(registry, cors=cors), prefix=prefix)
 
-    @app.get('/', response_class=HTMLResponse)
-    def index():  # the app UI: slide list, 1–32 panes, tools
-        return app_page(prefix, mode='server')
+    if index:
+
+        @app.get('/', response_class=HTMLResponse)
+        def index_page():  # the app UI: slide list, 1–32 panes, tools
+            return app_page(prefix, mode='server')
 
     @app.get('/demo', response_class=HTMLResponse)
     def demo():  # the minimal element demo (go-to controls, no slide list)
@@ -474,13 +496,15 @@ def create_app(registry: SlideRegistry, prefix: str = '/wissi-viz', cors: str | 
     return app
 
 
-def app_page(prefix: str = '/wissi-viz', mode: str = 'server', token: str = '') -> str:
-    """The app page (assets/desktop.html). mode='server': slides from the registry, no file opening;
-    mode='desktop': local files through the desktop window's bridge or token-protected endpoints."""
+def app_page(prefix: str = '/wissi-viz', mode: str = 'server', token: str = '', caps: dict | None = None) -> str:
+    """The app page (assets/desktop.html). mode='server': a server's slides; mode='desktop': local files through
+    the desktop window's bridge. ``caps``: what the page may offer (open / browse / connect / close / key); none
+    without a session (:func:`wissi_viz.session.create_session_app`)."""
     page = (ASSETS_DIR / 'desktop.html').read_text(encoding='utf-8')
     return (
         page.replace('__API__', prefix)
         .replace('__TOKEN__', token)
         .replace('__MODE__', mode)
+        .replace('__CAPS__', json.dumps(caps or {}))
         .replace('__VERSION__', __version__)
     )

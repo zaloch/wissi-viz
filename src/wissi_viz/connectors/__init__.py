@@ -6,6 +6,7 @@ from ..sources.remote import RemoteError, RemoteImageInfo, RemotePyramid, Remote
 from .base import AnnotationPayload, RemoteConnection, to_layer
 from .halolink import HaloLinkConnection
 from .http import HttpTileConnection
+from .load import image_list, open_connection
 from .pathcore import PathCoreConnection
 
 __all__ = [
@@ -20,5 +21,7 @@ __all__ = [
     'RemoteSlideSource',
     'RetryAfter',
     'TileNotFound',
+    'image_list',
+    'open_connection',
     'to_layer',
 ]

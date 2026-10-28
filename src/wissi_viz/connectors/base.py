@@ -107,6 +107,11 @@ class RemoteConnection:
         """Optional. Detected objects / cells (often large) — loaded in the background."""
         return []
 
+    def images(self) -> Iterable[str | tuple[str, str]]:
+        """Optional. The images this connection can show, as ids or ``(id, name)`` pairs — what ``--connect``
+        and the app's Connect dialog open when no image ids are given. Empty: the caller must name them."""
+        return []
+
     # ------------------------------------------------------------------ provided
     def bind_loop(self, loop: asyncio.AbstractEventLoop | None = None) -> RemoteConnection:
         """Run this connection's ``async`` methods on ``loop`` (default: the running loop)."""

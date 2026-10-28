@@ -81,19 +81,30 @@ def _get(d: Any, path: str | None, default: Any = None) -> Any:
     return d
 
 
+def _id_name(item: Any, id_key: str, name_key: str) -> tuple[str, str] | None:
+    if isinstance(item, (str, int)):
+        return str(item), str(item)
+    iid = _get(item, id_key)
+    return None if iid is None else (str(iid), str(_get(item, name_key, iid)))
+
+
 class HttpTileConnection(RemoteConnection):
     """Tile API described by a config dict / JSON file (see module docstring). Needs ``httpx`` ([remote] extra)."""
 
     id_prefix = 'http'
 
-    def __init__(self, config: dict | str | os.PathLike):
+    def __init__(self, config: dict | str | os.PathLike, expand_env: bool = True):
+        """``expand_env=False``: leave ``${VAR}`` alone and refuse such configs (a description typed by a visitor of
+        a shared server must not be able to send the server's secrets to a URL of its choosing)."""
         if not isinstance(config, dict):
             config = json.loads(Path(config).read_text(encoding='utf-8-sig'))
         raw = {k: v for k, v in config.items() if not k.startswith('_')}
         todo = [k for k, v in _flat(raw) if isinstance(v, str) and 'TODO' in v]
         if todo:
             raise ValueError('connector config still has TODO fields: ' + ', '.join(todo))
-        self.config = cfg = _expand(raw)
+        if not expand_env and any(isinstance(v, str) and _ENV.search(v) for _, v in _flat(raw)):
+            raise PermissionError('${...} environment variables are not allowed in a description sent from the page')
+        self.config = cfg = _expand(raw) if expand_env else raw
         self.kind = cfg.get('kind', 'custom')
         self.id_prefix = cfg.get('id_prefix', self.kind if self.kind in ('halolink', 'pathcore') else 'http')
         self.max_concurrency = int(cfg.get('max_concurrency', self.max_concurrency))
@@ -188,6 +199,24 @@ class HttpTileConnection(RemoteConnection):
         t = self.config['tile']
         q = {k: str(v).format(channel=channel) for k, v in (t.get('query') or {}).items()}
         return self._req(self._fmt(t['path'], image_id, level=level, col=col, row=row, channel=channel), q).content
+
+    def images(self) -> list[tuple[str, str]]:
+        """``"images": [...]`` from the config, else the ``"list"`` endpoint::
+
+            "list": {"path": "/api/images", "items": "data.items", "id": "id", "name": "name", "query": {...}}
+
+        ``items`` is the (dotted) field holding the array; leave it out when the response is the array itself.
+        Items may be plain ids."""
+        fixed = self.config.get('images')
+        if fixed is not None:
+            return [_id_name(x, 'id', 'name') for x in fixed if _id_name(x, 'id', 'name')]
+        spec = self.config.get('list')
+        if not spec:
+            return []
+        data = self._retrying(lambda: self._req(spec['path'], spec.get('query')).json())
+        items = _get(data, spec['items']) if spec.get('items') else data
+        out = (_id_name(x, spec.get('id', 'id'), spec.get('name', 'name')) for x in (items or []))
+        return [x for x in out if x]
 
     def annotations(self, image_id: str):
         a = self.config.get('annotations')

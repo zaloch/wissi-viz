@@ -64,7 +64,12 @@ def test_mock_api_stays_within_budget_and_reports(slides, tmp_path):
     done = [x for x in r['runs'] if 'cold' in x]
     # timed runs on shared CI machines can see a few timeouts (the mock injects no errors here); correctness is below
     assert done and all(x['cold']['error_pct'] < 5 for x in done), [x['cold'] for x in done]
-    assert all(x['warm']['upstream']['calls'] == 0 for x in done)  # warm reruns: cache only
+    # warm reruns replay the cold path from the cache. Runs are time-capped, so on a slow machine the cold run can stop
+    # early and the faster warm run goes further: only those extra tiles (and any that failed cold) may reach the API
+    for x in done:
+        cold, warm = x['cold'], x['warm']
+        new = max(0, warm['tile_requests'] - cold['tile_requests']) + sum((cold['errors'] or {}).values())
+        assert warm['upstream']['calls'] <= new, (cold, warm)
     assert all(x['cold']['upstream']['calls'] <= x['cold']['tile_requests'] for x in done)  # ≤ 1 call per tile
     for f in ('report.md', 'results.json', 'recommended_settings.py'):
         assert (tmp_path / 'out' / f).exists()

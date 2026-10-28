@@ -28,7 +28,7 @@
 | Version | Change | What you do |
 |---|---|---|
 | 0.8.0 | **Annotate, measure, demo.** Up to 32 panes; `wissi-viz serve` shows the app UI with a slide list. SAM 2.1 click / box annotation (PyTorch or ONNX Runtime, Apache-2.0 weights). GeoParquet annotation files and `wissi-viz convert`. Region and object metrics. `wissi-viz segment` (Cellpose-SAM, Classpose, classic). `wissi-viz --demo` / `--benchmark` on 32 public slides. | Optional: `[sam]` / `[sam-onnx]` extras (§15); `[demo]` for the demo (§17). Pages that loaded `/` for the bare element demo now use `/demo`. |
-| 0.9.0 | **Inspector.** The app's Layers / Analyze / Measure / Draw inspector, object cards with percentiles, hover tips, a radial menu and keyboard shortcuts (§12). Spatial analyses from the app and `wissi_viz.analyses` (§16). Layer summaries, colour-by and removal over HTTP. **Connect…** and `--connect` for tile APIs (§7); `serve --allow-open` with an in-page file picker and `--key` (§8). | The app page's logic moved to `static/app.js`. The per-pane ⚙ menu is off in the app (its controls are in the inspector); the element keeps it. New viewer events: `objecthover`, `panecontext` (opt-in: `grid.hoverEvents`, `grid.contextEvents`) and `layers`; new methods `hitAt()` and `flashLayer()`. |
+| 0.9.0 | **Inspector.** The app's Layers / Analyze / Measure / Draw inspector, object cards with percentiles, hover tips, a radial menu and keyboard shortcuts (§12). Spatial analyses from the app and `wissi_viz.analyses` (§16). Layer summaries, colour-by and removal over HTTP. NiceGUI: `WissiApp` / `mount_app` (the whole app in a page), `on_object_hover` / `on_context` / `on_layers`, `flash_layer`, `summary`, `run_analysis`, and `analyses.echarts_option` for `ui.echart` (§2). **Connect…** and `--connect` for tile APIs (§7); `serve --allow-open` with an in-page file picker and `--key` (§8). | The app page's logic moved to `static/app.js`. The per-pane ⚙ menu is off in the app (its controls are in the inspector); the element keeps it. New viewer events: `objecthover`, `panecontext` (opt-in: `grid.hoverEvents`, `grid.contextEvents`) and `layers`; new methods `hitAt()` and `flashLayer()`. NiceGUI handlers now run once per event (they also ran a second time without the event's data). |
 | 0.7.0 | **Desktop app and platform support.** `wissi-viz-app` opens the viewer in its own native window with its own icon (pywebview), as an option next to the embedded element. Windows, macOS and Linux are supported and CI-tested; packaging moved to uv (`uv.lock`, dependency groups). Python 3.10–3.11 work again (older czifile). | Nothing for embedded use. For the app: `uv tool install "wissi-viz[desktop]"` (§12). For development: `uv sync` (§13). |
 | 0.5.0 | **Object pyramid.** Millions of cells are shown as screen-sized aggregated dots, then as GPU-drawn outlines when zoomed in. There is a **server mode** (default) and a **client mode**. | Use `cached_object_layer` for big tables (§5). Choose `overlays: 'server'\|'client'\|'auto'`. |
 | 0.5.1 | **Polars reader.** `read_objects(engine='auto')` uses Polars, then pyarrow, then pandas. | `pip install "wissi-viz[polars]"`. |
@@ -40,7 +40,7 @@
 
 | Path | Use it when | Python control | Tested here |
 |---|---|---|---|
-| **A. NiceGUI element** `WissiViz` | your app is NiceGUI (wissi) | full: navigation, layers, analysis, events | ✔ `examples/*app.py`, browser tests |
+| **A. NiceGUI** — the whole app (`WissiApp`) or the element (`WissiViz`) under your own controls | your app is NiceGUI (wissi) | full: navigation, layers, summaries, analyses, events | ✔ `examples/nicegui_inspector.py` end to end (`tests/test_nicegui.py`) |
 | **B. Web component in a NiceGUI page** | you prefer to drive it from JavaScript | `ui.run_javascript` | ✔ (same component) |
 | **C. Same server, any ASGI app** (FastAPI, Starlette, Litestar) | one Python service | your own endpoints | ✔ `create_router` / `create_app` |
 | **D. Separate tile server + `<wissi-viz>` in any page** (React, Vue, Svelte, Django or Flask templates, Streamlit, Dash, static HTML) | non-Python front ends, WSGI apps, or scaling tiles separately | over HTTP | ✔ cross-origin test (`tests/test_browser.py`) |
@@ -54,6 +54,41 @@ pip install "wissi-viz[all]"                  # everything permissive (BSD/MIT/A
 ```
 
 ## 2. NiceGUI (path A)
+
+Two ways in, which mix freely: they share one registry, so slides and layers loaded through either are available to both (an open `WissiApp` page picks up layers added from Python when it reloads).
+
+| | `WissiApp` — the whole app | `WissiViz` — the viewer element |
+|---|---|---|
+| What you get | slide list, tool bar, inspector (Layers / Analyze / Measure / Draw), object cards, radial menu, shortcuts: the desktop app's interface | 1–32 panes and nothing else; you build the controls in NiceGUI |
+| How it is drawn | an iframe of the app page, served by NiceGUI's own server under `/wissi-app` | a NiceGUI element |
+| Python control | which slides and layers it shows; it is otherwise self-contained | everything: navigation, layers, events, summaries, analyses |
+| Use it when | users need the full workbench now | the viewer is one part of your own workflow |
+
+![A NiceGUI page: WissiViz with a panel built in Python (layer switches, a summary, an analysis with ui.echart)](screenshots/nicegui-panel.jpg)
+
+### The whole app: `WissiApp`
+
+```python
+from nicegui import ui
+from wissi_viz.nicegui import WissiApp, configure, mount_app
+
+configure(cache_dir='/cache/wissi-viz')  # tiles under /wissi-viz
+mount_app('/wissi-app')  # the app page; open_dirs=[...] lets users browse, dependencies=[...] adds your login check
+
+
+@ui.page('/workbench')
+def workbench():
+    ui.query('.nicegui-content').classes('p-0 gap-0')  # edge to edge
+    WissiApp(['/data/case1.svs', '/data/case1_cells.parquet'], tab='analyze').style('height: 100vh')
+```
+
+- **Slides:** paths or registered slide ids, 1–32 panes. Cell tables (CSV, Parquet, AnnData…) and annotation files in the list attach to the first slide. `tab` picks the inspector tab it opens on.
+- **`mount_app(path, registry=None, open_dirs=None, allow_connect=False, key=None, dependencies=None)`** serves the page once per process and returns its `Session`: `session.open([...], trusted=True)` and `session.add_layer(slide, file)` load anything the app can open (cell tables included). `WissiApp` mounts it on first use if you haven't.
+- **What users can open themselves:** nothing outside your list unless you pass `open_dirs` (an in-page file picker limited to those folders) or `allow_connect=True` (tile APIs). The same rules as `wissi-viz serve` (§8).
+- **Login:** pass the same `dependencies=[Depends(require_login)]` to `configure` and `mount_app` (see the next example for `require_login`).
+- **Behind a reverse proxy with a path prefix,** tell the iframe where it is: `WissiApp([...], url_prefix='/myapp')`. The page itself works under any mount path.
+
+### The element under your own controls: `WissiViz`
 
 ```python
 from fastapi import Depends, Request, HTTPException
@@ -101,12 +136,69 @@ def viewer():
 | `grid.views` (dict pane → view, kept current), `await get_views()` | where every pane is looking (px and µm) |
 | `on_view_change` | called with `{pane, x, y, zoom, mpp, magnification, bounds}` for each pane that moved. It is driven by one batched `views` snapshot, at most about 6 per second, and the final view is always delivered. |
 | `on_click`, `on_object_click`, `on_draw`, `on_slide_load` | other Python callbacks (`paneclick`, `objectclick`, `draw`, `slideload` events) |
+| `on_object_hover`, `on_context`, `on_layers` | the object under the pointer (`{pane, layer, index, class, color, size}` or `None`; throttled to 10/s), a right-click (`{pane, slide, x, y, object}`), a slide's layer list changing (`{slide, names}`). Hover and right-click events are only sent when you pass a handler. |
+| `flash_layer(pane, layer)` | make a layer's objects pulse (e.g. when its row in your own list is hovered) |
+| `await summary(slide, layer, tissue=True)` | count, share and per-class means, numeric columns, region areas, tissue mm² and objects per mm² (`wissi_viz.summary`) |
+| `await run_analysis(slide, analysis, objects, **params)` | one of the app's analyses (`wissi_viz.analyses.catalog()`); result layers appear on every viewer of the slide. Returns `{title, kpis, note, layers, chart, table, seconds}`. |
+| `refresh_annotations(slide=None)` | re-fetch layer lists after changing layers yourself (registry changes do it already) |
 
 **Notes**
 - **Keep the main loop free.** `on_view_change` is throttled, but it should still be cheap. Don't push a large UI update from it (re-render a table, redraw a chart): debounce until the view rests. See §6.
 - **Shared state:** the registry and its caches are per process and shared by all users. Use per-user slide ids if users must not see each other's annotation edits.
 - **Paths:** routes mount on NiceGUI's own FastAPI app, so there is no extra port. Reverse-proxy subpaths (`window.path_prefix`) work.
-- **Analysis:** results go into plain NiceGUI widgets, for example `ui.echart(result.plot())` and `ui.table(rows=plots.table_rows(result.table))`. See `examples/analysis_app.py`.
+- **Analysis, two levels:**
+  - The app's analyses, one call: `out = await grid.run_analysis(slide, 'nn', 'cells', source='CD8', target='Tumor')`, then `ui.echart(analyses.echarts_option(out['chart']))` and `ui.table(columns=…, rows=…)` from `out['table']`. Parameters and their limits are in `analyses.catalog()`, so you can build forms from it.
+  - Full control: call `wissi_viz.spatial` yourself (`res = spatial.nearest_neighbors(objs, 'CD8', 'Tumor')`), show `ui.echart(res.plot())` and `grid.show(slide, res)`. See `examples/analysis_app.py`.
+- **Your own analysis in the app:** decorate a function with `@analyses.analysis(key, name, group, description, params)` before the page loads; it appears in the Analyze tab of every `WissiApp` and desktop window, and in `run_analysis`.
+
+A panel like the screenshot above, in about 30 lines (the full file is `examples/nicegui_inspector.py`):
+
+```python
+from wissi_viz import analyses
+from wissi_viz.nicegui import WissiViz, configure, mount_app
+
+registry = configure()
+session = mount_app()  # also gives you session.open / add_layer for any file the app opens
+SLIDE = session.open(['/data/case1.svs'], trusted=True)['opened'][0]
+CELLS = session.add_layer(SLIDE, '/data/case1_cells.csv')
+
+
+@ui.page('/custom')
+def custom():
+    with ui.row().classes('w-full no-wrap'):
+        grid = WissiViz(
+            [SLIDE],
+            controls=False,
+            on_object_hover=lambda e: hover.set_text(f'{e["class"]} ({e["layer"]})' if e else ''),
+            on_context=lambda e: ui.notify(f'right-click at {e["x"]:.0f}, {e["y"]:.0f}'),
+        ).style('flex: 1; height: 90vh')
+        with ui.column().style('width: 380px'):
+            for name in registry.layers(SLIDE):  # layer switches that pulse the layer on hover
+                with ui.row() as row:
+                    ui.checkbox(name, value=True, on_change=lambda e, n=name: grid.set_layer_visible(0, n, e.value))
+                row.on('mouseenter', lambda _, n=name: grid.flash_layer(0, n))
+            hover = ui.label()
+            chart = ui.echart({}).style('height: 220px')
+
+            async def run():
+                out = await grid.run_analysis(SLIDE, 'density', CELLS, cls='all', cell_um=100)
+                chart.options.update(analyses.echarts_option(out['chart']))
+                chart.update()
+                ui.notify(' · '.join(f'{k["label"]} {k["value"]}' for k in out['kpis']))
+
+            ui.button('Density & hotspots', on_click=run)
+```
+
+### Other Python UI frameworks
+
+The same two levels work outside NiceGUI:
+
+| Framework | The whole app | Your own controls |
+|---|---|---|
+| **FastAPI / Starlette apps** (incl. Reflex, Litestar via ASGI mount) | `parent.mount('/viewer', create_session_app(Session(registry=reg, roots=[], remember=False), mode='server'))`, then link or iframe `/viewer/` | `create_router` (§3) + `<wissi-viz>`; call `analyses.run` / `summary.summary` in your endpoints |
+| **Dash, Streamlit, Panel, Gradio, Flask, Django** (WSGI or their own servers) | run `wissi-viz serve … --allow-open DIR` next to the app and show it in an iframe (`html.Iframe`, `st.components.v1.iframe`, `pn.pane.HTML`) | the element from a separate tile server (§4) and the HTTP endpoints of §16; draw `analyses.echarts_option(out['chart'])` with the framework's ECharts component (dash-echarts, streamlit-echarts, `pn.pane.ECharts`) |
+
+`analyses.run`, `summary.summary` and `echarts_option` are plain Python with no UI dependency, so they also work in notebooks and batch scripts.
 
 ### Path B: the raw component inside NiceGUI
 

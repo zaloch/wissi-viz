@@ -9,6 +9,10 @@
 The tile/annotation routes are mounted on NiceGUI's FastAPI app automatically
 (under ``/wissi-viz`` by default). Everything runs in the NiceGUI process — no extra
 server or port, which is what you want inside a Docker container.
+
+The whole app (slide list, inspector with Layers / Analyze / Measure / Draw) can be embedded too::
+
+    WissiApp(['/data/a.svs', '/data/cells.parquet']).classes('w-full h-[85vh]')
 """
 
 from __future__ import annotations
@@ -22,9 +26,11 @@ from nicegui import app, run
 from nicegui.element import Element
 from nicegui.events import GenericEventArguments
 
+from . import analyses, summary
 from .annotations import AnnotationLayer
 from .registry import SlideRegistry
 from .server import create_router
+from .session import Session, create_session_app
 from .sources import SlideSource
 from .spatial import estimate_stain_vectors
 from .tiles import TileService
@@ -33,6 +39,7 @@ log = logging.getLogger(__name__)
 
 _default: SlideRegistry | None = None
 _mounted: dict[str, SlideRegistry] = {}
+_apps: dict[str, Session] = {}
 
 SlideRef = 'str | os.PathLike | SlideSource | dict'
 
@@ -148,6 +155,9 @@ class WissiViz(
         on_object_click: Callable | None = None,
         on_draw: Callable | None = None,
         on_slide_load: Callable | None = None,
+        on_object_hover: Callable | None = None,
+        on_context: Callable | None = None,
+        on_layers: Callable | None = None,
     ) -> None:
         super().__init__()
         self.registry = registry or _mounted.get(prefix) or default_registry()
@@ -170,6 +180,8 @@ class WissiViz(
             self._props['textureBudgetMb'] = texture_budget_mb
         if lod is not None:
             self._props['lod'] = lod
+        self._props['hoverEvents'] = on_object_hover is not None
+        self._props['contextEvents'] = on_context is not None
 
         def _views(e: GenericEventArguments) -> None:
             # one batched snapshot of every pane (≤ ~6/s, the trailing one always delivered): no per-pane event
@@ -191,6 +203,12 @@ class WissiViz(
             self.on('draw', lambda e: on_draw(e.args))
         if on_slide_load:
             self.on('slideload', lambda e: on_slide_load(e.args))
+        if on_object_hover:  # {pane, layer, index, class, color, size} or None when off any object
+            self.on('objecthover', lambda e: on_object_hover(e.args), throttle=0.1)
+        if on_context:  # right-click: {pane, slide, x, y, object: {layer, index, class} | None}
+            self.on('panecontext', lambda e: on_context(e.args))
+        if on_layers:  # a slide's layer list changed (loaded, added, removed): {slide, names}
+            self.on('layers', lambda e: on_layers(e.args))
 
         unsubscribe = self.registry.subscribe(self._registry_changed)
         self._unsubscribe = unsubscribe
@@ -428,6 +446,37 @@ class WissiViz(
     def select(self, pane: int, layer: str | None, index: int | None):
         return self._call('select', pane, layer, index)
 
+    def flash_layer(self, pane, layer: str, ms: int = 900):
+        """Make a layer's objects pulse for a moment (e.g. when its row in your own layer list is hovered)."""
+        return self._call('flashLayer', pane, layer, ms)
+
+    def refresh_annotations(self, slide: str | None = None):
+        """Re-fetch layer lists (after changing layers on the server yourself; registry changes do this already)."""
+        return self._call('refreshAnnotations', slide)
+
+    # ------------------------------------------------------------ summaries & analyses (the app's inspector, in Python)
+    async def summary(self, slide: Any, layer: str, tissue: bool = True) -> dict:
+        """Count, share and per-class means of a layer, region areas, tissue mm² and objects per mm²
+        (:func:`wissi_viz.summary.summary`), computed off the event loop."""
+        sid = self._ref(slide)
+        L = self.registry.layer(sid, layer)
+        if L is None:
+            raise KeyError(f'no layer {layer!r} on {sid}')
+        e, pyr = self.registry.get(sid)
+        mpp = (self.registry.info(sid).get('mpp') or [None])[0]
+
+        def work():
+            area = summary.tissue_area_mm2(f'{sid}@{e.source.version}', pyr.source) if tissue else None
+            return summary.summary(L, mpp, area)
+
+        return await run.io_bound(work)
+
+    async def run_analysis(self, slide: Any, analysis: str, objects: str, **params: Any) -> dict:
+        """Run a spatial analysis from :func:`wissi_viz.analyses.catalog` on the cell layer ``objects``; its
+        layers are added to the slide (every viewer refreshes). Returns ``{title, kpis, note, layers, chart,
+        table, seconds}``; for an ECharts chart use :mod:`wissi_viz.spatial` directly (``ui.echart(res.plot())``)."""
+        return await run.io_bound(analyses.run, self.registry, self._ref(slide), analysis, objects, params)
+
     async def stats(self) -> dict:
         return await self._call('stats')
 
@@ -452,7 +501,69 @@ class WissiViz(
         super()._handle_delete()
 
 
+# ------------------------------------------------------------------------------------------------ the whole app
+def mount_app(
+    path: str = '/wissi-app',
+    registry: SlideRegistry | None = None,
+    *,
+    open_dirs: Sequence[str | os.PathLike] | None = None,
+    allow_connect: bool = False,
+    key: str | None = None,
+    dependencies: list | None = None,
+) -> Session:
+    """Serve the wissi-viz app (slide list, tool bar, inspector) under ``path`` on NiceGUI's server, sharing
+    the registry with every :class:`WissiViz`. ``open_dirs``: folders users may browse and open slides from (none
+    by default); ``allow_connect``: let users connect tile APIs; ``key``: a password asked once per tab;
+    ``dependencies``: your login check. Call once at startup; :class:`WissiApp` shows it in a page."""
+    path = '/' + path.strip('/')
+    if path in _apps:
+        return _apps[path]
+    reg = registry or _mounted.get('/wissi-viz') or default_registry()
+    session = Session(registry=reg, roots=list(open_dirs or []), connect=allow_connect, remember=False)
+    app.mount(path, create_session_app(session, mode='server', key=key, dependencies=dependencies))
+    _apps[path] = session
+    return session
+
+
+class WissiApp(Element):
+    """The whole wissi-viz app inside a NiceGUI page (an iframe of :func:`mount_app`'s page).
+
+    ``slides``: paths (or registered ids) to open and show, 1–32; cell tables and annotation files in the list
+    attach to the first slide in it. ``url_prefix``: the path prefix a reverse proxy adds in front of NiceGUI
+    (the iframe's address is ``url_prefix + path``). ``tab``: the inspector tab to start on (layers | analyze | measure | draw).
+    """
+
+    def __init__(
+        self,
+        slides: Sequence[Any] = (),
+        *,
+        path: str = '/wissi-app',
+        tab: str | None = None,
+        url_prefix: str = '',
+        **mount_kw: Any,
+    ):
+        super().__init__('iframe')
+        self.session = mount_app(path, **mount_kw)
+        self.path = '/' + path.strip('/')
+        files = [str(s) for s in slides if not (isinstance(s, str) and s in self.session.registry)]
+        shown = [s for s in slides if isinstance(s, str) and s in self.session.registry]
+        res = self.session.open(files, trusted=True) if files else {'opened': [], 'errors': []}
+        for err in res['errors']:
+            log.warning('wissi-viz: %s', err)
+        self.slides = shown + res['opened']
+        q = []
+        if self.slides:
+            q.append('show=' + ','.join(self.slides[:32]))
+        if tab:
+            q.append(f'tab={tab}')
+        self._props['src'] = f'{url_prefix.rstrip("/")}{self.path}/' + ('?' + '&'.join(q) if q else '')
+        self._props['title'] = 'wissi-viz'
+        self._style['border'] = '0'
+        self._style['width'] = '100%'
+        self._style['height'] = '600px'
+
+
 #: backwards-compatible alias
 WsiGrid = WissiViz
 
-__all__ = ['WissiViz', 'WsiGrid', 'configure', 'mount', 'default_registry']
+__all__ = ['WissiApp', 'WissiViz', 'WsiGrid', 'configure', 'default_registry', 'mount', 'mount_app']

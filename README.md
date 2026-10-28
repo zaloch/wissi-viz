@@ -25,7 +25,7 @@
 
 ![Three real H&E slides and a 20× close-up with detected nuclei](docs/screenshots/hero.jpg)
 
-<sub>Screenshots use real slides from the [OpenSlide test data](https://openslide.cs.cmu.edu/download/openslide-testdata/Aperio/) (CMU-1, CMU-2, CMU-3; CC0 1.0). The 148k nuclei were detected on CMU-1 by `scripts/make_screenshots.py`.</sub>
+<sub>Screenshots use real slides from the [OpenSlide test data](https://openslide.cs.cmu.edu/download/openslide-testdata/Aperio/) (CMU-1, CMU-2, CMU-3; CC0 1.0). The 148k nuclei above were detected on CMU-1 by `scripts/make_screenshots.py`; the app screenshots below show a 0.64 × 0.73 mm field of CMU-1 with the 2,189 nuclei detected in it.</sub>
 
 ## Features
 
@@ -39,10 +39,9 @@
   - nearest neighbours, proximity, invasive margins, ROI composition, density and hotspots;
   - Ripley's K/L/g, co-location, cellular neighbourhoods, contact graphs, Moran's I, IHC H-score.
   - Each analysis produces a table, a slide overlay and a chart, from Python or from the app's **Analyze** tab.
-- **An inspector that follows the active pane.** Layers (show, solo, opacity, outline, fill, colour by class or any
-  measurement, per-class toggles and colours), Analyze (run an analysis, see its chart, switch between results),
-  Measure (counts, shares, means per class and cells per mm² of tissue) and Draw. Click a cell for its measurements
-  and where it ranks in its layer; right-click for actions under the cursor; number keys pick tools, `?` lists the rest.
+- **An app with an inspector.** The desktop app, `wissi-viz serve` and NiceGUI's `WissiApp` share one interface: a
+  slide list, a tool bar, and an inspector that follows the active pane (Layers, Analyze, Measure, Draw). Click a cell
+  for its measurements and where it ranks in its layer; right-click for actions under the cursor; `?` lists the keys.
 - **Built for servers:** memory and disk tile caches with byte budgets, memory-mapped object layers, an integration probe and a load tester.
 - **Permissive licences only.** The default install is BSD / MIT / Apache-2.0 / ISC, and a test enforces it. LGPL readers are an opt-in extra.
 
@@ -88,7 +87,21 @@ wissi-viz desktop --install-shortcut       # add it to the Start menu / Applicat
 wissi-viz desktop --connect my_api.json    # images from a tile API (or: Connect… in the app)
 ```
 
-![Desktop app: CMU-1 with nuclei coloured by size, overview and 40×](docs/screenshots/desktop-app.jpg)
+![The app: a CMU-1 field with its nuclei, the Layers tab and a nucleus's card](docs/screenshots/inspector.jpg)
+
+**The inspector**, beside the slide (keys in brackets):
+
+| Tab | What it does |
+|---|---|
+| **Layers** (`L`) | image display (stain view, brightness, contrast, channels); per layer: show / hide (`H`), solo (`S`), opacity, outline, fill, colour by class or any measurement, class toggles with counts and colours, zoom / export / summary / remove; hovering a row pulses its objects on the slide |
+| **Analyze** (`A`) | density & hotspots, nearest neighbours, proximity, margin bands, infiltration, composition, Ripley's L, neighbour enrichment, cellular neighbourhoods, contact graph, Moran's I: each run adds layers to the slide and a card with numbers, a chart, the table and a CSV |
+| **Measure** (`M`) | count, share and averages per class, cells per mm² of tissue, region areas; shape, intensity, texture and cell statistics for every region |
+| **Draw** (`D`) | the layer and class that drawings and SAM masks are saved to |
+
+Tools are on keys `1`–`8` (pan, point, rectangle, ellipse, polygon, freehand, ruler, SAM). Click an object for its
+card, right-click for a radial menu, `?` for every shortcut.
+
+![The Analyze tab: density and Getis-Ord hotspots of the nuclei, with the result's chart](docs/screenshots/analyze.jpg)
 
 **Segment, convert, measure:**
 
@@ -119,22 +132,33 @@ your own connector class: `--connect mypkg.halo:make_connection`.
 <wissi-viz api="/wissi-viz" slides="case1,case2"></wissi-viz>
 ```
 
-**Inside a NiceGUI app:**
+**Inside a NiceGUI app** — the whole app (inspector included) in a page, or the viewer element under your own
+controls:
 
 ```python
 from nicegui import ui
-from wissi_viz.nicegui import WissiViz, configure
+from wissi_viz.nicegui import WissiApp, WissiViz, configure
 
 configure(cache_dir='/var/cache/wissi-viz')  # once, at startup
 
 
 @ui.page('/')
 def index():
-    WissiViz(['/data/case1.svs', '/data/case1_if.czi'], sync='all').classes('w-full h-[85vh]')
+    WissiApp(['/data/case1.svs', '/data/case1_cells.parquet']).style('height: 90vh')
+
+
+@ui.page('/custom')
+def custom():
+    grid = WissiViz(['/data/case1.svs', '/data/case1_if.czi'], sync='all').classes('w-full h-[85vh]')
+    ui.button('20×', on_click=lambda: grid.go_to('all', 15200, 9800, magnification=20))
 
 
 ui.run()
 ```
+
+Your own panels get the same pieces in Python: `await grid.summary(...)`, `await grid.run_analysis(...)`,
+hover / right-click / layer events and `analyses.echarts_option(...)` for `ui.echart`. See
+[integration §2](docs/INTEGRATION.md#2-nicegui-path-a) and `examples/nicegui_inspector.py`.
 
 **Stain deconvolution and spatial analysis:**
 

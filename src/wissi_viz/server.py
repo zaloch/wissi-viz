@@ -524,17 +524,28 @@ class _ApiCORS(CORSMiddleware):
         self.path_prefix = path_prefix
 
     async def __call__(self, scope, receive, send) -> None:
-        if scope['type'] == 'http' and not scope['path'].startswith(self.path_prefix):
+        path, root = scope.get('path', ''), scope.get('root_path', '')
+        if root and path.startswith(root):
+            path = path[len(root) :]
+        if scope['type'] == 'http' and not path.startswith(self.path_prefix):
             await self.app(scope, receive, send)
             return
         await super().__call__(scope, receive, send)
 
 
-def create_app(registry: SlideRegistry, prefix: str = '/wissi-viz', cors: str | None = '*', index: bool = True):
+def create_app(
+    registry: SlideRegistry,
+    prefix: str = '/wissi-viz',
+    cors: str | None = '*',
+    index: bool = True,
+    dependencies: list | None = None,
+):
     """Standalone FastAPI app: the API under ``prefix``, the app page at ``/`` (``index=False``: none; see
-    :func:`wissi_viz.session.create_session_app` for the page with file opening and connections)."""
+    :func:`wissi_viz.session.create_session_app` for the page with file opening and connections). It also works
+    mounted under a path (``parent.mount('/viewer', app)``). ``dependencies``: e.g. your login check, on every
+    route."""
 
-    app = FastAPI(title='wissi-viz')
+    app = FastAPI(title='wissi-viz', dependencies=list(dependencies or []))
     if cors:
         app.add_middleware(
             _ApiCORS,
@@ -548,12 +559,14 @@ def create_app(registry: SlideRegistry, prefix: str = '/wissi-viz', cors: str | 
     if index:
 
         @app.get('/', response_class=HTMLResponse)
-        def index_page():  # the app UI: slide list, 1–32 panes, tools
-            return app_page(prefix, mode='server')
+        def index_page(request: Request):  # the app UI: slide list, 1–32 panes, tools
+            root = request.scope.get('root_path', '')
+            return app_page(root + prefix, mode='server', base=root)
 
     @app.get('/demo', response_class=HTMLResponse)
-    def demo():  # the minimal element demo (go-to controls, no slide list)
-        return (STATIC_DIR / 'demo.html').read_text(encoding='utf-8').replace('__API__', prefix)
+    def demo(request: Request):  # the minimal element demo (go-to controls, no slide list)
+        root = request.scope.get('root_path', '')
+        return (STATIC_DIR / 'demo.html').read_text(encoding='utf-8').replace('__API__', root + prefix)
 
     @app.get('/app/icon.{kind}')
     def app_icon(kind: str):
@@ -564,15 +577,18 @@ def create_app(registry: SlideRegistry, prefix: str = '/wissi-viz', cors: str | 
     return app
 
 
-def app_page(prefix: str = '/wissi-viz', mode: str = 'server', token: str = '', caps: dict | None = None) -> str:
+def app_page(
+    prefix: str = '/wissi-viz', mode: str = 'server', token: str = '', caps: dict | None = None, base: str = ''
+) -> str:
     """The app page (assets/desktop.html). mode='server': a server's slides; mode='desktop': local files through
     the desktop window's bridge. ``caps``: what the page may offer (open / browse / connect / close / key); none
-    without a session (:func:`wissi_viz.session.create_session_app`)."""
+    without a session (:func:`wissi_viz.session.create_session_app`). ``base``: the path the app is mounted at."""
     page = (ASSETS_DIR / 'desktop.html').read_text(encoding='utf-8')
     return (
         page.replace('__API__', prefix)
         .replace('__TOKEN__', token)
         .replace('__MODE__', mode)
         .replace('__CAPS__', json.dumps(caps or {}))
+        .replace('__BASE__', base)
         .replace('__VERSION__', __version__)
     )

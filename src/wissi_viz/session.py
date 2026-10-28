@@ -392,13 +392,15 @@ def create_session_app(
     cors: str | None = None,
     key: str | None = None,
     local_only: bool | None = None,
+    dependencies: list | None = None,
 ):
     """The viewer server plus the app page (``/app``, and ``/`` in server mode) and the endpoints it uses.
 
     Every ``/app/*`` call carries the page's token (so other web pages cannot drive it). ``key``: a password the
     user types once before opening files or connecting (``wissi-viz serve --key``). ``local_only``: accept only
-    127.0.0.1 / localhost as the Host (default: in desktop mode)."""
-    app = create_app(session.registry, prefix=prefix, cors=cors, index=False)
+    127.0.0.1 / localhost as the Host (default: in desktop mode). ``dependencies``: e.g. your login check, on every
+    route. Works mounted under a path (``parent.mount('/viewer', app)``; see :func:`wissi_viz.nicegui.mount_app`)."""
+    app = create_app(session.registry, prefix=prefix, cors=cors, index=False, dependencies=dependencies)
     if local_only if local_only is not None else mode == 'desktop':
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost', 'testserver'])
     caps = {
@@ -415,8 +417,9 @@ def create_session_app(
         if needs_key and key and not secrets.compare_digest(request.headers.get('x-wissi-key', ''), key):
             raise HTTPException(401, 'key required')
 
-    def page() -> str:
-        return app_page(prefix, mode=mode, token=session.token, caps=caps)
+    def page(request: Request) -> str:
+        root = request.scope.get('root_path', '')
+        return app_page(root + prefix, mode=mode, token=session.token, caps=caps, base=root)
 
     app.add_api_route('/app', page, response_class=HTMLResponse, methods=['GET'])
     if mode == 'server':

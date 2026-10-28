@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>wissi-viz</title>
-<link rel="icon" href="/app/icon.svg" type="image/svg+xml">
+<link rel="icon" href="__BASE__/app/icon.svg" type="image/svg+xml">
 <style>
   :root {
     color-scheme: dark;
@@ -69,6 +69,8 @@
   .sep { width: 1px; height: 22px; background: var(--line); margin: 0 2px; }
 
   /* ---- slide rail */
+  /* fixed grid areas: hiding the slide list or the inspector never moves the viewer */
+  #side { grid-column: 1; grid-row: 2; } main { grid-column: 2; grid-row: 2; } #insp { grid-column: 3; grid-row: 2; }
   #side { width: 232px; border-right: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
   #side.hidden { display: none; }
   #side .lbl { margin: 12px 12px 6px; }
@@ -270,7 +272,7 @@
 </head>
 <body>
 <header>
-  <span class="brand"><img src="/app/icon.svg" alt=""> wissi-viz</span>
+  <span class="brand"><img src="__BASE__/app/icon.svg" alt=""> wissi-viz</span>
   <button id="b-side" class="btn icon ghost" title="Show / hide the slide list" aria-label="Show or hide the slide list">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"></path></svg></button>
   <span id="crumb"></span>
@@ -315,7 +317,7 @@
   <div id="keyflash" class="hud"></div>
   <div id="empty">
     <div class="card">
-      <img src="/app/icon.svg" alt="">
+      <img src="__BASE__/app/icon.svg" alt="">
       <h1>Open a whole-slide image</h1>
       <p>SVS, CZI, OME-TIFF, NDPI and more, brightfield or fluorescence. Add a cell table (CSV, Parquet, AnnData)
          or annotations (GeoJSON, HALO XML) on top.</p>
@@ -436,7 +438,7 @@
 </dialog>
 
 <footer><span id="log"></span><span>v__VERSION__</span></footer>
-<script>window.WISSI_APP = { api: '__API__', token: '__TOKEN__', mode: '__MODE__', caps: __CAPS__ };</script>
+<script>window.WISSI_APP = { api: '__API__', base: '__BASE__', token: '__TOKEN__', mode: '__MODE__', caps: __CAPS__ };</script>
 <script type="module" src="__API__/static/app.js"></script>
 </body>
 </html>

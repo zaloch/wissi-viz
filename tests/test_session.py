@@ -329,3 +329,26 @@ def test_page_picker_and_connect_dialog(tree, mock_api):
             b.close()
     finally:
         srv.should_exit = True
+
+
+def test_app_mounted_under_a_path(tree):
+    """The app inside another ASGI app (NiceGUI's mount_app, a reverse-proxy subpath): every URL in the page
+    carries the mount path, and CORS still covers the API only."""
+    from fastapi import FastAPI
+    from starlette.testclient import TestClient
+
+    allowed, _ = tree
+    s = Session(roots=[], connect=False, remember=False)
+    sid = s.open([allowed / 'a.svs'], trusted=True)['opened'][0]
+    parent = FastAPI()
+    parent.mount('/viewer', create_session_app(s, mode='server', cors='*'))
+    c = TestClient(parent)
+    page = c.get('/viewer/').text
+    assert '/viewer/wissi-viz/static/index.js' in page and '/viewer/wissi-viz/static/app.js' in page
+    assert "base: '/viewer'" in page and 'src="/viewer/app/icon.svg"' in page
+    token = page.split("token: '")[1].split("'")[0]
+    assert c.get('/viewer/app/state', headers={'x-wissi-token': token}).json()['slides'][0]['id'] == sid
+    assert c.get('/viewer/app/icon.svg').status_code == 200
+    origin = {'origin': 'https://elsewhere.example'}
+    assert c.get('/viewer/wissi-viz/slides', headers=origin).headers.get('access-control-allow-origin') == '*'
+    assert 'access-control-allow-origin' not in c.get('/viewer/', headers=origin).headers

@@ -45,7 +45,7 @@ jobs:
         with:
           enable-cache: true
       - name: Install (locked)
-        run: uv sync --locked --extra analysis --extra io --extra polars --extra server --extra remote --extra bench --extra slideio --extra desktop
+        run: uv sync --locked --extra analysis --extra io --extra polars --extra server --extra remote --extra bench --extra slideio --extra desktop --extra nicegui
       - name: Chromium for the browser tests
         run: uv run playwright install --with-deps chromium
         shell: bash

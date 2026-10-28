@@ -1,7 +1,7 @@
 // NiceGUI (Vue) wrapper around the <wissi-viz> web component.
 import { WissiViz } from "wissi-viz";
 
-const EVENTS = ["viewchange", "views", "paneclick", "objectclick", "draw", "activepane", "slideload"];
+const EVENTS = ["viewchange", "views", "paneclick", "objectclick", "draw", "activepane", "slideload", "objecthover", "panecontext", "layers"];
 
 export default {
   template: `<div style="position:relative"></div>`,
@@ -17,6 +17,8 @@ export default {
     textureBudgetMb: Number,
     lod: [String, Object],
     legend: { type: Boolean, default: true },
+    hoverEvents: Boolean,
+    contextEvents: Boolean,
   },
   mounted() {
     void WissiViz; // ensure the custom element is registered
@@ -28,7 +30,9 @@ export default {
     if (this.quality) el.setAttribute("quality", String(this.quality));
     if (this.drawLayer) el.setAttribute("draw-layer", this.drawLayer);
     if (this.legend === false) el.setAttribute("legend", "false");
-    for (const ev of EVENTS) el.addEventListener(ev, (e) => this.$emit(ev, e.detail));
+    // forward as Vue events only: the element's own DOM events would also reach NiceGUI's listeners (bubbling),
+    // and each Python handler would run twice, once without the event's data
+    for (const ev of EVENTS) el.addEventListener(ev, (e) => { e.stopPropagation(); this.$emit(ev, e.detail); });
     this.$el.appendChild(el);
     this.grid = el;
     el.setSlides(this.slides || []);
@@ -36,6 +40,8 @@ export default {
     if (this.tool) el.setTool(this.tool);
     if (this.textureBudgetMb) el.setTextureBudget(this.textureBudgetMb);
     if (this.lod) el.setLod(this.lod);
+    el.hoverEvents = !!this.hoverEvents;
+    el.contextEvents = !!this.contextEvents;
   },
   unmounted() {
     this.grid?.fetcher?.destroy();

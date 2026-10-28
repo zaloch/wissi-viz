@@ -4,7 +4,7 @@
 // token-protected endpoints (/app/*, see wissi_viz/session.py) or the desktop window's native bridge.
 
 const cfg = window.WISSI_APP || {};
-const API = cfg.api, TOKEN = cfg.token, MODE = cfg.mode;
+const API = cfg.api, BASE = cfg.base || '', TOKEN = cfg.token, MODE = cfg.mode;   // BASE: where the app is mounted
 const SERVER = MODE === 'server';
 const CAPS = Object.assign({ open: !SERVER, browse: false, connect: false, close: !SERVER, key: false }, cfg.caps || {});
 const MAX_PANES = 32;
@@ -120,13 +120,13 @@ async function api(path, body = null, method = null) {
 }
 const quiet = (p) => p.catch((e) => ({ errors: [e.message] }));
 const call = async (name, ...args) => {
-  if (name === 'connect') return quiet(http('/app/connect', { spec: args[0], images: args[1] }));
-  if (name === 'browse') return quiet(http('/app/browse' + (args[0] ? `?dir=${enc(args[0])}` : '')));
+  if (name === 'connect') return quiet(http(`${BASE}/app/connect`, { spec: args[0], images: args[1] }));
+  if (name === 'browse') return quiet(http(`${BASE}/app/browse` + (args[0] ? `?dir=${enc(args[0])}` : '')));
   if (await nativeReady && native()) return native()[name](...args);
-  if (name === 'open_paths') return quiet(http('/app/open', { paths: args[0], slide: args[1] }));
-  if (name === 'close_slide') return quiet(http('/app/close', { slide: args[0] }));
+  if (name === 'open_paths') return quiet(http(`${BASE}/app/open`, { paths: args[0], slide: args[1] }));
+  if (name === 'close_slide') return quiet(http(`${BASE}/app/close`, { slide: args[0] }));
   if (name === 'state') {
-    if (TOKEN) return http('/app/state');
+    if (TOKEN) return http(`${BASE}/app/state`);
     const list = await (await fetch(`${API}/slides`, { cache: 'no-cache' })).json();   // a page without a session
     return { slides: list.map((x) => ({ ...x, path: x.name })), recent: [] };
   }
@@ -754,7 +754,8 @@ function chart(c) {
         fill: SERIES[si % SERIES.length], opacity: 0.9 }, s('title', {}, `${xs[i]}: ${fmt(v)}`)));
     }));
     const labels = numeric ? [[0, xs[0]], [n / 2, xs[Math.floor(n / 2)]], [n, c.x_end ?? xs[n - 1]]] : (n <= 8 ? xs.map((v, i) => [i + 0.5, v]) : [[0.5, xs[0]], [n - 0.5, xs[n - 1]]]);
-    for (const [i, v] of labels) svg.append(txt(L + gw * i, H - 8, typeof v === 'number' ? fmt(v, 3) : String(v).slice(0, 10), { 'text-anchor': 'middle' }));
+    labels.forEach(([i, v], k) => svg.append(txt(L + gw * i, H - 8, typeof v === 'number' ? fmt(v, 3) : String(v).slice(0, 10),
+      { 'text-anchor': k === 0 && numeric ? 'start' : k === labels.length - 1 && numeric ? 'end' : 'middle' })));
   } else {
     const band = series.filter((x) => x.band);
     if (band.length === 2) {
@@ -765,7 +766,7 @@ function chart(c) {
       const d = sr.values.map((v, i) => (v == null ? null : `${xp(xs[i])},${y(v)}`)).filter(Boolean);
       svg.append(s('polyline', { points: d.join(' '), fill: 'none', stroke: SERIES[si % SERIES.length], 'stroke-width': 1.8 }));
     });
-    for (const v of [x0, (x0 + x1) / 2, x1]) svg.append(txt(xp(v), H - 8, fmt(v, 3), { 'text-anchor': 'middle' }));
+    [x0, (x0 + x1) / 2, x1].forEach((v, k) => svg.append(txt(xp(v), H - 8, fmt(v, 3), { 'text-anchor': ['start', 'middle', 'end'][k] })));
     if (lo < 0 && hi > 0) svg.append(s('line', { x1: L, x2: W - R, y1: y(0), y2: y(0), stroke: '#4a5562', 'stroke-dasharray': '3 3' }));
   }
   if (c.marker != null && numeric) {
@@ -1098,7 +1099,11 @@ async function start() {
   await customElements.whenDefined('wissi-viz');
   const st = await call('state');
   slides = st.slides || [];
-  panes = (st.show && st.show.length ? st.show : slides.slice(0, Math.min(4, slides.length)).map((x) => x.id)).slice(0, MAX_PANES);
+  // ?show=a,b (an embedding page picks the panes), else the session's choice, else the first four slides
+  const asked = (new URLSearchParams(location.search).get('show') || '').split(',').filter((id) => slides.some((x) => x.id === id));
+  panes = (asked.length ? asked : st.show && st.show.length ? st.show : slides.slice(0, Math.min(4, slides.length)).map((x) => x.id)).slice(0, MAX_PANES);
+  const tabAsked = new URLSearchParams(location.search).get('tab');
+  if (tabAsked) setTab(tabAsked);
   apply();
   renderRecent(st.recent);
   if (!CAPS.open) {

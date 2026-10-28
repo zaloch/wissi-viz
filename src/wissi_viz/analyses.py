@@ -99,6 +99,83 @@ def catalog() -> list[dict]:
     return [s.describe() for s in CATALOG.values()]
 
 
+def echarts_option(chart: dict | None, dark: bool = False) -> dict | None:
+    """A result's ``chart`` as an Apache ECharts option, for ``ui.echart`` in NiceGUI, Dash, Panel, Streamlit
+    or plain ECharts. Bars, lines (with the random-layout band as a shaded area) and heat maps."""
+    if not chart:
+        return None
+    text = '#c9d1d9' if dark else '#333'
+    if chart['kind'] == 'heat':
+        vals = chart.get('values') or []
+        data = [[j, i, v] for i, row in enumerate(vals) for j, v in enumerate(row) if v is not None]
+        nums = [d[2] for d in data] or [0.0]
+        lo, hi = min(nums), max(nums)
+        diverging = lo < 0 < hi
+        m = max(abs(lo), abs(hi)) or 1.0
+        return {
+            'tooltip': {'position': 'top'},
+            'grid': {'left': 100, 'right': 16, 'top': 10, 'bottom': 70},
+            'xAxis': {'type': 'category', 'data': chart.get('cols', []), 'axisLabel': {'rotate': 30, 'color': text}},
+            'yAxis': {'type': 'category', 'data': chart.get('rows', []), 'axisLabel': {'color': text}},
+            'visualMap': {
+                'min': -m if diverging else min(0.0, lo),
+                'max': m if diverging else hi,
+                'calculable': True,
+                'orient': 'horizontal',
+                'left': 'center',
+                'bottom': 0,
+                'text': [chart.get('label', ''), ''],
+                'inRange': {'color': ['#2b8cbe', '#f7f7f7', '#e66101'] if diverging else ['#f2f0f7', '#54278f']},
+            },
+            'series': [{'type': 'heatmap', 'data': data, 'label': {'show': len(chart.get('cols', [])) <= 8}}],
+        }
+    x = chart.get('x') or []
+    numeric = chart['kind'] == 'lines' and all(isinstance(v, (int, float)) for v in x)
+    series = []
+    for sr in chart.get('series') or []:
+        vals = sr.get('values') or []
+        if chart['kind'] == 'bars':
+            series.append({'name': sr['name'], 'type': 'bar', 'data': vals})
+        else:
+            data = [[xv, yv] for xv, yv in zip(x, vals)] if numeric else vals
+            style = {'type': 'dashed', 'width': 1, 'color': '#9aa3ad'} if sr.get('band') else {'width': 2}
+            series.append({'name': sr['name'], 'type': 'line', 'data': data, 'showSymbol': False, 'lineStyle': style})
+    if chart.get('marker') is not None and series:
+        mk = chart['marker']
+        pos = (
+            mk
+            if numeric
+            else min(range(len(x)), key=lambda i: abs(x[i] - mk))
+            if x and isinstance(x[0], (int, float))
+            else None
+        )
+        if pos is not None:
+            series[0]['markLine'] = {
+                'symbol': 'none',
+                'label': {'formatter': chart.get('marker_label') or ''},
+                'data': [{'xAxis': pos}],
+            }
+    xaxis = (
+        {'type': 'value', 'name': chart.get('xlabel', ''), 'nameLocation': 'middle', 'nameGap': 26}
+        if numeric
+        else {
+            'type': 'category',
+            'data': [f'{v:g}' if isinstance(v, (int, float)) else str(v) for v in x],
+            'name': chart.get('xlabel', ''),
+            'nameLocation': 'middle',
+            'nameGap': 26,
+        }
+    )
+    return {
+        'tooltip': {'trigger': 'axis'},
+        'legend': {'show': len(series) > 1, 'textStyle': {'color': text}},
+        'grid': {'left': 50, 'right': 16, 'top': 30 if len(series) > 1 else 12, 'bottom': 40},
+        'xAxis': xaxis,
+        'yAxis': {'type': 'value', 'name': chart.get('ylabel', '')},
+        'series': series,
+    }
+
+
 _cache_lock = threading.Lock()
 _objects: OrderedDict = OrderedDict()  # (slide, layer, version) → ObjectTable
 

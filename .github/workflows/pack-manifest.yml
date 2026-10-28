@@ -1,0 +1,33 @@
+# Builds src/wissi_viz/data/pack32.json (the 32-image public sample pack: URLs, sizes, checksums, licences) and
+# pushes it to the `pack-manifest` branch for review.
+name: pack-manifest
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [scripts/build_pack_manifest.py, .github/workflows/pack-manifest.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  manifest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Build
+        run: |
+          out=$(python scripts/build_pack_manifest.py src/wissi_viz/data/pack32.json 2>&1) || { echo "::error::$(echo "$out" | tail -c 3000 | tr '\n' ' ')"; exit 1; }
+          echo "$out"
+          echo "::notice::$(echo "$out" | head -1)"
+      - name: Push to the pack-manifest branch
+        run: |
+          git config user.name gzeballo
+          git config user.email gzeballo@bu.edu
+          git checkout -B pack-manifest
+          git add -f src/wissi_viz/data/pack32.json
+          git commit -m "Sample pack manifest"
+          out=$(git push -f origin pack-manifest 2>&1) || { echo "::error::$out"; exit 1; }

@@ -154,6 +154,10 @@ class Session:
                 if k in ('annotations', 'table'):
                     extras.append(p)
                     continue
+                same = self._open_path(p) if k != 'folder' else None
+                if same is not None:  # already open: show it (re-registering would close it under the viewer)
+                    opened.append(same)
+                    continue
                 ids = self.registry.add_directory(p) if k == 'folder' else [self.registry.add(p)]
                 if k == 'folder' and not ids:
                     raise ValueError(f'no slides in {p}')
@@ -181,6 +185,17 @@ class Session:
                 errors.append(f'{p.name}: {e}')
         self._remember([self._paths[s] for s in opened] + [str(p) for p in extras])
         return {'opened': opened, 'layers': layers, 'errors': errors, 'slides': self.slides()}
+
+    def _open_path(self, p: Path) -> str | None:
+        """The id of an open slide with this file, if any."""
+        try:
+            rp = p.resolve()
+        except OSError:
+            return None
+        for sid, q in self._paths.items():
+            if sid in self.registry and ':' not in q[2:] and Path(q).resolve() == rp:
+                return sid
+        return None
 
     def add_layer(self, slide: str, path: str | os.PathLike) -> str:
         """Attach an annotation file (GeoJSON / HALO XML / …) or a cell table (CSV / Parquet / AnnData) to a slide.

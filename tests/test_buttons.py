@@ -110,7 +110,15 @@ class Sweep:
         loc = loc.nth(nth) if nth is not None else loc.first
         loc.click(button=button)
         if cond:
-            self.pg.wait_for_function(cond, timeout=timeout)
+            try:
+                self.pg.wait_for_function(cond, timeout=timeout)
+            except Exception as e:
+                state = self.pg.evaluate(
+                    """() => ({ log: document.getElementById("log").textContent,
+                        picker: document.getElementById("picker").className, toasts: [...document.querySelectorAll(".toast")].map((t) => t.textContent),
+                        panes: (document.getElementById("grid").panes || []).map((p) => p.slide?.info?.id || null) })"""
+                )
+                raise AssertionError(f'{selector}: {cond} never became true; page: {state}') from e
 
     def cover(self, *selectors: str) -> None:
         self.covered.update(selectors)

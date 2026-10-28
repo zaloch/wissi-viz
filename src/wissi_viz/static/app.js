@@ -431,12 +431,12 @@ const openPaths = async (list) => {
 let browseSeq = 0;
 async function browse(dir) {
   const seq = ++browseSeq;
+  $('pk-filter').value = '';   // now, not when the listing arrives: that would wipe what is typed meanwhile
   const res = await call('browse', dir);
   if (seq !== browseSeq) return;   // a later folder was asked for meanwhile (a slow listing must not overwrite it)
   if (!res || res.errors) { if (res) { log(res.errors.join(' · '), true); $('pk-info').textContent = res.errors[0]; } return; }
   pk.dir = res.dir; pk.parent = res.parent; pk.entries = res.entries; pk.sel.clear();
   $('browser').dataset.dir = res.dir;
-  $('pk-filter').value = '';
   renderPlaces(res.places || []);
   renderCrumbs(res.dir);
   renderEntries();

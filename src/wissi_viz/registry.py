@@ -74,6 +74,7 @@ class SlideEntry:
     id: str
     name: str
     path: Path | None = None
+    stamp: tuple | None = None  # (mtime ns, size) when added: re-adding an unchanged file keeps the open one
     factory: Callable[[], SlideSource] | None = None
     source: SlideSource | None = None
     pyramid: PyramidSlide | None = None
@@ -163,7 +164,18 @@ class SlideRegistry:
                 if not p.exists():
                     raise FileNotFoundError(p)
                 sid = slide_id or make_id(str(p))
+                st = p.stat()
+                stamp = (st.st_mtime_ns, st.st_size)
+                old = self._entries.get(sid)
+                if (
+                    old is not None
+                    and old.path == p
+                    and getattr(old, 'stamp', None) == stamp
+                    and name in (None, old.name)
+                ):
+                    return sid  # already open and unchanged: keep it (replacing would close it under its viewers)
                 e = SlideEntry(sid, name or p.name, path=p)
+                e.stamp = stamp
             if not _ID_OK.match(sid):
                 raise ValueError(f'invalid slide id {sid!r}')
             old = self._entries.get(sid)

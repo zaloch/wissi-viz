@@ -15,6 +15,7 @@ Formats (read / write):
 | ``geojson`` / ``qupath`` | .geojson .json | ✔ | ✔ | ``qupath`` adds ``objectType`` and RGB class colours |
 | ``halo`` | .annotations .xml | ✔ | ✔ | HALO annotation XML |
 | ``aperio`` | .xml | ✔ | ✔ | Aperio ImageScope XML |
+| ``asap`` | .xml | ✔ | | ASAP XML (CAMELYON and other challenge datasets) |
 | ``csv`` | .csv .tsv | ✔ (object tables) | ✔ | one row per feature: class, centroid, bbox, area, properties (+ WKT) |
 | ``coco`` | .coco.json | ✔ | ✔ | COCO instance segmentation (polygons) |
 | ``mask`` | .tif .tiff | ✔ (label masks) | ✔ | label image (feature ids or class ids) at a chosen downsample |
@@ -844,6 +845,8 @@ def detect_format(path: str | Path) -> str:
             head = Path(path).read_text(encoding='utf-8-sig', errors='ignore')[:4000]
         except OSError:
             head = ''
+        if '<ASAP_Annotations' in head:
+            return 'asap'
         return 'halo' if '<V ' in head or '<V\n' in head or 'HALO' in head else 'aperio'
     if n.endswith(('.csv', '.tsv', '.txt')):
         return 'csv'

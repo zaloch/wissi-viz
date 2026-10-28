@@ -421,6 +421,35 @@ class AnnotationLayer:
         return layer
 
     @classmethod
+    def from_asap_xml(cls, path: str | Path, name: str | None = None, groups: dict | None = None, **kw) -> 'AnnotationLayer':
+        """ASAP XML (CAMELYON16/17, many challenge datasets): ``<ASAP_Annotations>`` with polygons, rectangles, dots and
+        splines; the class is the annotation's ``PartOfGroup`` (renamed through ``groups``, e.g. {'_2': 'Exclusion'})."""
+        root, stem = _xml_root(path)
+        layer = cls(name=name or stem, **kw)
+        colors = {g.get('Name'): g.get('Color') for g in root.iter('Group')}
+        groups = groups or {}
+        for ann in root.iter('Annotation'):
+            v = np.array([[float(c.get('X')), float(c.get('Y'))] for c in sorted(
+                ann.iter('Coordinate'), key=lambda c: int(c.get('Order') or 0))], np.float32)
+            if not len(v):
+                continue
+            grp = ann.get('PartOfGroup') or ann.get('Name') or 'annotation'
+            cname = groups.get(grp, grp)
+            color = ann.get('Color') or colors.get(grp)
+            t = (ann.get('Type') or 'Polygon').lower()
+            if t in ('dot', 'pointset') or len(v) == 1:
+                for x, y in v:
+                    layer.add_point(x, y, cls=cname, color=color)
+            elif t == 'rectangle' and len(v) >= 2:
+                (x0, y0), (x1, y1) = v.min(0), v.max(0)
+                layer.add_rect(x0, y0, x1 - x0, y1 - y0, cls=cname, color=color)
+            elif len(v) >= 3:
+                layer.add_polygon(v, cls=cname, color=color, props={'name': ann.get('Name')} if ann.get('Name') else None)
+            else:
+                layer.add_polyline(v, cls=cname, color=color)
+        return layer
+
+    @classmethod
     def from_halo_xml(cls, path: str | Path, name: str | None = None, **kw) -> 'AnnotationLayer':
         """HALO ``.annotations`` XML (path, or XML text/bytes as returned by an API)."""
         root, stem = _xml_root(path)
@@ -457,6 +486,8 @@ class AnnotationLayer:
             return cls.from_halo_xml(p, **kw)
         if ext == '.xml':
             head = p.read_text(errors='ignore', encoding='utf-8-sig')[:4000]
+            if '<ASAP_Annotations' in head:
+                return cls.from_asap_xml(p, **kw)
             return cls.from_halo_xml(p, **kw) if '<V ' in head or '<V\n' in head else cls.from_aperio_xml(p, **kw)
         raise ValueError(f'unsupported annotation file: {p.name}')
 

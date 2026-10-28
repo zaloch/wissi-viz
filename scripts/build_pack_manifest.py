@@ -24,7 +24,8 @@ from pathlib import Path
 
 GDC = 'https://api.gdc.cancer.gov'
 TCGA = ['TCGA-BRCA', 'TCGA-LUAD', 'TCGA-LUSC', 'TCGA-COAD', 'TCGA-PRAD', 'TCGA-SKCM', 'TCGA-KIRC', 'TCGA-LIHC',
-        'TCGA-STAD', 'TCGA-BLCA', 'TCGA-HNSC', 'TCGA-THCA', 'TCGA-UCEC', 'TCGA-GBM', 'TCGA-OV', 'TCGA-PAAD']
+        'TCGA-STAD', 'TCGA-BLCA', 'TCGA-HNSC', 'TCGA-THCA', 'TCGA-UCEC', 'TCGA-GBM', 'TCGA-OV', 'TCGA-PAAD',
+        'TCGA-READ', 'TCGA-KIRP']
 CAMELYON = 'https://camelyon-dataset.s3.amazonaws.com'
 OPENSLIDE = 'https://openslide.cs.cmu.edu/download/openslide-testdata/Aperio'
 XENIUM = [
@@ -90,7 +91,7 @@ def tcga() -> list[dict]:
     return out
 
 
-def camelyon(n: int = 7) -> list[dict]:
+def camelyon(n: int = 5) -> list[dict]:
     def listing(prefix):
         items, token = [], None
         while True:
@@ -141,6 +142,7 @@ def xenium() -> list[dict]:
 def main() -> None:
     out = Path(sys.argv[1] if len(sys.argv) > 1 else 'pack32.json')
     items, errors = [], []
+    # 3 OpenSlide + 5 CAMELYON16 + 18 TCGA + 6 Xenium = 32
     for f in (openslide, camelyon, tcga, xenium):
         try:
             items += f()

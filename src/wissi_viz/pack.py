@@ -504,7 +504,7 @@ def _bench_sam(slides: list[str]) -> dict:
                 _, a = svc.segment(src, rect, points=[(cx, cy)], labels=[1], key=path)
                 _, b = svc.segment(src, rect, points=[(cx, cy), (cx + span / 10, cy)], labels=[1, 1], key=path)
                 rows.append({'slide': Path(path).name, 'view': zoom, 'backend': a['backend'], 'device': a['device'],
-                             'encode_ms': a['encode_ms'], 'first_click_ms': (a['encode_ms'] or 0) + a['decode_ms'],
+                             'encode_ms': a['encode_ms'], 'first_click_ms': round((a['encode_ms'] or 0) + a['decode_ms'], 1),
                              'next_click_ms': b['decode_ms']})
             except Exception as e:  # noqa: BLE001
                 rows.append({'slide': Path(path).name, 'view': zoom, 'error': str(e)})
@@ -572,7 +572,16 @@ def _report_md(r: dict) -> str:
     if b.get('error'):
         L += ['## Panning', '', f'Not run: {b["error"]}', '']
     elif b:
-        L += ['## Panning in the browser', '', '```', json.dumps(b.get('summary', b), indent=1, default=str)[:4000], '```', '']
+        L += ['## Panning in the browser', '',
+              f'{b.get("webgl_renderer", "")} ({"software" if b.get("software_rendering") else "GPU"}), {b.get("http_protocol", "")}', '',
+              '| panes | open (ms) | zoom to sharp (ms) | fps (median) | frame p95 (ms) | sharp while moving | settle (ms) | GPU textures (MB) |',
+              '|---|---|---|---|---|---|---|---|']
+        for run in b.get('runs', []):
+            pn = run.get('pan', {})
+            L.append(f'| {run.get("panes")} | {run.get("open_ms")} | {run.get("zoom_to_sharp_ms")} | {pn.get("fps_median")} | '
+                     f'{pn.get("frame_p95_ms")} | {pn.get("sharp_while_moving_pct")} % | {pn.get("settle_ms")} | '
+                     f'{(run.get("stats") or {}).get("textureMB")} |')
+        L.append('')
     s = r.get('sam') or {}
     if s.get('rows'):
         st = s['status']

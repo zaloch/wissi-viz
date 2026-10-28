@@ -130,7 +130,10 @@ def test_app_sam_accept_export_and_measure(slide, tmp_path):
             pg.wait_for_function('() => [...document.querySelectorAll("#m-regions option")].some(o => o.value === "Annotations")')
             pg.select_option('#m-regions', 'Annotations')
             pg.click('#m-run')
-            pg.wait_for_selector('#mtable table')
+            # slow CI machines: first use imports scikit-image's texture code; an error would show in the log
+            pg.wait_for_function('() => document.querySelector("#mtable table") || /measure:/.test(document.getElementById("log").textContent)',
+                                 timeout=180_000)
+            assert pg.query_selector('#mtable table'), pg.inner_text('#log')
             txt = pg.inner_text('#mtable')
             assert 'shape_area_um2' in txt and 'int_hematoxylin_od_mean' in txt
             assert not errors, errors

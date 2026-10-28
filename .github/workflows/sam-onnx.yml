@@ -19,10 +19,12 @@ jobs:
       - uses: astral-sh/setup-uv@v7
       - name: Install
         run: |
-          uv venv -p 3.12
-          uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          SAM2_BUILD_CUDA=0 uv pip install "sam2 @ git+https://github.com/facebookresearch/sam2.git" huggingface_hub onnx onnxruntime
-          uv pip install -e ".[analysis]"
+          run() { out=$("$@" 2>&1) || { echo "::error::$* :: $(echo "$out" | tail -c 2500 | tr '\n' ' ')"; exit 1; }; echo "$out" | tail -3; }
+          run uv venv -p 3.12
+          run uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          run uv pip install setuptools wheel numpy huggingface_hub onnx onnxruntime hydra-core iopath tqdm pillow
+          SAM2_BUILD_CUDA=0 run uv pip install --no-build-isolation "sam2 @ git+https://github.com/facebookresearch/sam2.git"
+          run uv pip install -e ".[analysis]"
       - name: Export and check
         run: |
           fail() { echo "::error::$1"; exit 1; }

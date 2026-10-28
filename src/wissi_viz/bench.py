@@ -43,6 +43,7 @@ from typing import Any
 
 import numpy as np
 
+from . import certs
 from .registry import SlideRegistry
 from .server import create_app
 from .tiles import TileService
@@ -670,7 +671,7 @@ def fetch_samples(
             try:
                 html = urllib.request.urlopen(base, timeout=60).read().decode('utf-8', 'replace')
             except Exception as e:  # noqa: BLE001
-                log(f'  cannot list {base}: {e}')
+                log(f'  cannot list {base}: {e}{certs.hint(e)}')
                 continue
             for href in sorted(set(re.findall(r'href="([^"?/][^"]*)"', html))):
                 if href.lower().endswith(SLIDE_SUFFIXES):
@@ -691,7 +692,7 @@ def fetch_samples(
             req = urllib.request.Request(u, method='HEAD')
             size = int(urllib.request.urlopen(req, timeout=60).headers.get('Content-Length', 0)) / 2**20
         except Exception as e:  # noqa: BLE001
-            log(f'  skip {u}: {e}')
+            log(f'  skip {u}: {e}{certs.hint(e)}')
             continue
         if size > max_mb:
             log(f'  skip {name}: {size:.0f} MB > --max-mb {max_mb}')

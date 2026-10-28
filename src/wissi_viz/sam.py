@@ -43,6 +43,7 @@ from skimage.filters import gaussian
 from skimage.measure import find_contours
 from skimage.segmentation import flood
 
+from . import certs
 from ._compat import otsu, user_dir
 
 MODELS = {
@@ -278,7 +279,7 @@ class SamService:
                     self._impl = _Classic()
                 break
             except Exception as e:  # noqa: BLE001  (missing package, no weights, no network → next backend)
-                errs.append(f'{b}: {type(e).__name__}: {e}'[:300])
+                errs.append(f'{b}: {type(e).__name__}: {e}'[:300] + certs.hint(e))
         self._error = '; '.join(errs) or None
         return self._impl
 

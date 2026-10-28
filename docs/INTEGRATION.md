@@ -1,6 +1,6 @@
 # Integrating wissi-viz
 
-*Current as of wissi-viz 0.9.0.* This guide covers how to put wissi-viz into an app: NiceGUI (wissi), other Python web frameworks, JavaScript frameworks and notebooks. It also covers:
+*Current as of wissi-viz 0.9.1.* This guide covers how to put wissi-viz into an app: NiceGUI (wissi), other Python web frameworks, JavaScript frameworks and notebooks. It also covers:
 - how to show large cell and object tables;
 - how to keep the viewer smooth, including on clients without a GPU;
 - how to connect a vendor tile API such as PathCore or HALO Link;
@@ -29,6 +29,7 @@
 |---|---|---|
 | 0.8.0 | **Annotate, measure, demo.** Up to 32 panes; `wissi-viz serve` shows the app UI with a slide list. SAM 2.1 click / box annotation (PyTorch or ONNX Runtime, Apache-2.0 weights). GeoParquet annotation files and `wissi-viz convert`. Region and object metrics. `wissi-viz segment` (Cellpose-SAM, Classpose, classic). `wissi-viz --demo` / `--benchmark` on 32 public slides. | Optional: `[sam]` / `[sam-onnx]` extras (§15); `[demo]` for the demo (§17). Pages that loaded `/` for the bare element demo now use `/demo`. |
 | 0.9.0 | **Inspector.** The app's Layers / Analyze / Measure / Draw inspector, object cards with percentiles, hover tips, a radial menu and keyboard shortcuts (§12). Spatial analyses from the app and `wissi_viz.analyses` (§16). Layer summaries, colour-by and removal over HTTP. NiceGUI: `WissiApp` / `mount_app` (the whole app in a page), `on_object_hover` / `on_context` / `on_layers`, `flash_layer`, `summary`, `run_analysis`, and `analyses.echarts_option` for `ui.echart` (§2). **Connect…** and `--connect` for tile APIs (§7); `serve --allow-open` with an in-page file picker and `--key` (§8). | The app page's logic moved to `static/app.js`. The per-pane ⚙ menu is off in the app (its controls are in the inspector); the element keeps it. New viewer events: `objecthover`, `panecontext` (opt-in: `grid.hoverEvents`, `grid.contextEvents`) and `layers`; new methods `hitAt()` and `flashLayer()`. NiceGUI handlers now run once per event (they also ran a second time without the event's data). |
+| 0.9.1 | `--system-certs` / `WISSI_VIZ_SYSTEM_CERTS=1`: downloads trust the operating system's certificates, for networks that inspect HTTPS (§13). | Nothing; use the flag where downloads fail with `CERTIFICATE_VERIFY_FAILED`. `truststore` (MIT) is a new core dependency. |
 | 0.7.0 | **Desktop app and platform support.** `wissi-viz-app` opens the viewer in its own native window with its own icon (pywebview), as an option next to the embedded element. Windows, macOS and Linux are supported and CI-tested; packaging moved to uv (`uv.lock`, dependency groups). Python 3.10–3.11 work again (older czifile). | Nothing for embedded use. For the app: `uv tool install "wissi-viz[desktop]"` (§12). For development: `uv sync` (§13). |
 | 0.5.0 | **Object pyramid.** Millions of cells are shown as screen-sized aggregated dots, then as GPU-drawn outlines when zoomed in. There is a **server mode** (default) and a **client mode**. | Use `cached_object_layer` for big tables (§5). Choose `overlays: 'server'\|'client'\|'auto'`. |
 | 0.5.1 | **Polars reader.** `read_objects(engine='auto')` uses Polars, then pyarrow, then pandas. | `pip install "wissi-viz[polars]"`. |
@@ -668,8 +669,22 @@ uv build                                     # sdist + wheel in dist/
 | czifile 2026.x | Python ≥ 3.12 | Python 3.10–3.11 get czifile 2019.7.2.x; the CZI reader supports both (tested). |
 | slideio (`[slideio]`) | no Linux ARM wheels; no macOS Intel wheel for Python 3.14 | skipped on Linux ARM by a marker; VSI/ZVI/DICOM/SCN/AFI need x86_64 Linux, Windows or macOS there. |
 | pylibCZIrw (`[lgpl]`) | no Python 3.14 wheels yet | use czifile (the default) on 3.14. |
-| proxy-tools (pulled in by pywebview) | pure-Python source package, no wheel | builds automatically in a second; only `--only-binary :all:` installs refuse it. |
+| proxy-tools (pulled in by pywebview) | pure-Python source package, no wheel | builds automatically in a second; only `--only-binary :all:` installs refuse it. Some web filters block it (403 Forbidden) because of its name: `uv sync … --no-install-package proxy-tools`, then copy `proxy_tools` from another environment, or install once on another network (uv keeps it). |
 
+- **Networks that inspect HTTPS** (most corporate networks) re-sign connections with their own certificate, which
+  the computer trusts but Python and uv don't (`invalid peer certificate: UnknownIssuer`,
+  `CERTIFICATE_VERIFY_FAILED`). Tell both to use the operating system's certificates:
+
+  ```bash
+  export UV_SYSTEM_CERTS=1                   # uv: installing packages
+  export WISSI_VIZ_SYSTEM_CERTS=1            # wissi-viz: every download (or --system-certs on any command)
+  uv run wissi-viz --demo --system-certs     # the same, for one run
+  ```
+
+  The flag verifies certificates with the macOS keychain, the Windows certificate store or the Linux CA bundle
+  (through `truststore`, MIT) for the demo and sample pack, the benchmark images, SAM weights and tile APIs. From
+  Python, call `wissi_viz.certs.use_system_certs()` before the first download. A download that fails on a
+  certificate says so and names the flag.
 - **What was made cross-platform:**
   - **Text files** are read and written as UTF-8 everywhere, and console output is UTF-8 (reports with µ, ≤, → print on Windows consoles and pipes).
   - **Memory-mapped layer files:** Windows cannot delete or rename a file that is mapped, so layers are saved into fresh folders and old ones are swept when unmapped.
@@ -774,6 +789,7 @@ wissi-viz segment slide.svs cells.parquet --model cellpose   # pip install cellp
 wissi-viz segment slide.svs cells.parquet --model classpose  # H&E cell types, in its own uvx environment
 uv run wissi-viz --demo [quick|full]                         # [demo] extra
 uv run wissi-viz --benchmark [quick|full]
+uv run wissi-viz --demo --system-certs                       # networks that inspect HTTPS (§13)
 wissi-viz pack status | download | prepare | segment | analyze | open --set full
 ```
 

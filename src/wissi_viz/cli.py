@@ -6,6 +6,7 @@ wissi-viz serve /data/slides --port 8010 --cache-dir /var/cache/wissi-viz
 wissi-viz serve --allow-open /data/slides --key s3cret     # visitors open slides from that folder
 wissi-viz serve --connect halolink.json                    # images from a tile API
 wissi-viz info slide.svs
+wissi-viz --demo --system-certs        # on networks that inspect HTTPS (corporate): trust this computer's certificates
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import desktop, pack
+from . import certs, desktop, pack
 from ._compat import utf8_stdio
 from .annio import convert
 from .bench import fetch_samples, format_zoom_report, zoom_bench
@@ -32,7 +33,7 @@ from .tiles import TileService
 
 def main(argv: list[str] | None = None) -> None:
     utf8_stdio()
-    argv = list(sys.argv[1:] if argv is None else argv)
+    argv = certs.take_flag(list(sys.argv[1:] if argv is None else argv))
     if argv[:1] in (['--demo'], ['demo'], ['--benchmark'], ['benchmark']):
         _demo_or_benchmark(argv)
         return
@@ -64,6 +65,7 @@ def main(argv: list[str] | None = None) -> None:
         description='GPU whole-slide image viewer: desktop app, web server, sample pack and tools.',
         epilog='Run "wissi-viz <command> --help" for the options of each command.',
     )
+    certs.add_arg(ap)  # works with every command
     sub = ap.add_subparsers(dest='cmd', required=True, metavar='command')
     # handled above, before argparse; listed here so --help shows them
     for name, text in (
@@ -258,6 +260,7 @@ def _demo_or_benchmark(argv: list[str]) -> None:
     )
     ap.add_argument('--dir', default=None, help='where the images are kept (default: your user cache)')
     ap.add_argument('--yes', action='store_true', help="don't ask before downloading")
+    certs.add_arg(ap)
     if bench:
         ap.add_argument('--out', default='wissi-viz-benchmark', help='report path without extension (.md + .json)')
         ap.add_argument('--panes', default='1,4,16,32')

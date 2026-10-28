@@ -36,7 +36,7 @@ from typing import Any
 import numpy as np
 import tifffile
 
-from . import annio
+from . import annio, certs
 from ._compat import user_dir
 from ._version import __version__
 from .annotations import AnnotationLayer
@@ -142,7 +142,7 @@ def download(sel: list[dict], d: Path, workers: int = 4, log=print) -> None:
     finally:
         stop.set()
     if errors:
-        raise RuntimeError('download failed for: ' + '; '.join(errors))
+        raise RuntimeError('download failed for: ' + '; '.join(errors) + certs.hint(errors))
     log(f'downloaded in {time.time() - t0:.0f} s')
 
 

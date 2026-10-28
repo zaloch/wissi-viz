@@ -32,6 +32,7 @@ import time
 import webbrowser
 from pathlib import Path
 
+from . import certs
 from ._compat import user_dir, utf8_stdio
 from ._version import __version__
 from .session import ANNOTATION_EXTS, PREFIX, TABLE_EXTS, Session, _kind, _slide_exts, add_connect_args, apply_connects
@@ -499,7 +500,9 @@ def _install_linux(cmd: list[str]) -> list[Path]:
 # ------------------------------------------------------------------------------------------------ entry points
 def main(argv: list[str] | None = None) -> None:
     utf8_stdio()
+    argv = certs.take_flag(list(sys.argv[1:] if argv is None else argv))
     ap = argparse.ArgumentParser(prog='wissi-viz desktop', description='wissi-viz in its own window')
+    certs.add_arg(ap)
     ap.add_argument('files', nargs='*', help='slides, folders, cell tables or annotation files to open')
     ap.add_argument('--session', default=None, help='a session file (slides + layers), e.g. from wissi-viz --demo')
     ap.add_argument('--browser', action='store_true', help='use a browser window instead of the native one')

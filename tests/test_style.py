@@ -30,7 +30,7 @@ STDLIB = set(sys.stdlib_module_names) | {'__future__'}
 PLATFORM_ONLY = {'resource', 'fcntl', 'termios', 'pwd', 'grp', 'winreg', 'msvcrt', '_winapi'}
 # import names of the core dependencies (pyproject `dependencies`) and what fastapi always brings along
 CORE = {'numpy', 'fastapi', 'starlette', 'anyio', 'pydantic', 'tifffile', 'zarr', 'imagecodecs', 'czifile', 'PIL'}
-CORE |= {'mapbox_earcut'}
+CORE |= {'mapbox_earcut', 'truststore'}
 DIST_TO_IMPORT = {'pillow': 'PIL', 'mapbox-earcut': 'mapbox_earcut'}
 # modules that require an extra anyway may import that extra at the top
 EXTRA_AT_TOP = {

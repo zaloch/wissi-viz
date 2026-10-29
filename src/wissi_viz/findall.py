@@ -790,15 +790,20 @@ def _expand(registry, sid, polys, boxes, keep, score, tsim, d0, scope, strictnes
         hit = [j for j in hit if shapely.contains_xy(shapes[j], *c)]
         seeds.update(hit[:1])
     how = 'matches'
-    if not seeds:  # only boxes around groups: the object-sized outlines inside the best boxes
+    if len(seeds) < 5:  # few (or only boxes around groups): add the object-sized outlines inside the best boxes
         b = np.asarray(boxes, float)[keep]
         best = [i for i in np.argsort(-score, kind='stable') if score[i] >= 0.12][:3]
         cand = set()
         for i in best:
             cand.update(int(j) for j in tree.query(shapely.box(*b[i]), predicate='contains'))
         cand = sorted(j for j in cand if 0.5 * d0 <= dia[j] <= 2.0 * d0)
-        seeds = set(sorted(cand, key=lambda j: abs(math.log(dia[j] / d0)))[:16])
-        how = 'outlines inside the best matches'
+        more = set(sorted(cand, key=lambda j: abs(math.log(dia[j] / d0)))[:16])
+        how = (
+            'matches and outlines inside the best ones'
+            if seeds and more - seeds
+            else ('matches' if seeds else 'outlines inside the best matches')
+        )
+        seeds |= more
     if not seeds:
         return None
     lvm = _level_for(src, d0)

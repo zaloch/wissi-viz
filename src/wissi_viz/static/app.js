@@ -1533,7 +1533,7 @@ async function setLicense(accept) {
     await api('/models/sam3/license', { accept });
     findCaps = null;
     $('sam3-lic').close();
-    toast({ title: accept ? 'SAM License accepted' : 'SAM License acceptance withdrawn', sub: accept ? 'SAM 3 downloads on its first run (about 1.3 GB, once).' : 'By text uses Grounding DINO + SAM 2.1.' });
+    toast({ title: accept ? 'SAM License accepted' : 'SAM License acceptance withdrawn', sub: accept ? 'SAM 3 downloads on its first run (about 1.5 GB, once).' : 'By text uses Grounding DINO + SAM 2.1.' });
     if (!accept) $('f-model').value = 'grounding';
     renderDraw();
   } catch (e) { toast({ kind: 'bad', title: 'Could not save', sub: e.message }); }
@@ -1590,7 +1590,7 @@ async function renderDraw() {
   $('f-model-row').hidden = findMode !== 'text';
   $('f-text-row').hidden = $('f-expand-row').hidden = findMode !== 'text' || cellModel;
   $('f-lic-row').hidden = findMode !== 'text' || model !== 'sam3';
-  $('f-lic-msg').textContent = s3.accepted ? `SAM License accepted${s3.downloaded ? '' : ' · downloads ~1.3 GB on the first run'}.`
+  $('f-lic-msg').textContent = s3.accepted ? `SAM License accepted${s3.downloaded ? '' : ' · downloads ~1.5 GB on the first run'}.`
     : 'SAM 3 needs its licence accepted first.';
   $('f-lic').textContent = s3.accepted ? 'Licence' : 'Read the licence…';
   $('f-head').textContent = findMode === 'text' ? (cellModel ? 'Find every cell' : 'Find all by name') : findMode === 'areas' ? 'Map the areas' : 'Find all like them';
@@ -1618,7 +1618,7 @@ async function renderDraw() {
     } else if (findMode === 'text') {
       const words = $('f-prompt').value.split(/[.,;\n]+/).map((w) => w.trim()).filter(Boolean);
       const g = tx.grounding || {};
-      const dl = model === 'sam3' ? (s3.downloaded ? '' : ' Downloads SAM 3 once (~1.3 GB).') : (g.downloaded ? '' : ` Downloads Grounding DINO once (~${g.size_mb || 250} MB).`);
+      const dl = model === 'sam3' ? (s3.downloaded ? '' : ' Downloads SAM 3 once (~1.5 GB).') : (g.downloaded ? '' : ` Downloads Grounding DINO once (~${g.size_mb || 250} MB).`);
       if (model === 'sam3' && s3.published === false && !s3.downloaded) { msg = 'SAM 3 is not available for this version yet (its download is not published): use Grounding DINO + SAM 2.1, or point WISSI_SAM3_DIR at an export of your own.'; ok = false; }
       else if (model === 'sam3' && !s3.accepted) { msg = 'Accept the SAM License to use SAM 3, or pick Grounding DINO + SAM 2.1.'; ok = false; }
       else if (!words.length) { msg = 'Type what to find, e.g. “nucleus”, or “gland. vessel” (one class per phrase).'; ok = false; }

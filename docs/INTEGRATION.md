@@ -803,7 +803,7 @@ of them, the object-sized outlines inside its best boxes are the examples. Body:
 | Model | Licence | How it works | Download (once) |
 |---|---|---|---|
 | **Grounding DINO + SAM 2.1** (default) | Apache-2.0 | Grounding DINO tiny (IDEA Research) turns the prompt into boxes; the bundled SAM 2.1 outlines each box | ~250 MB (int8) from this project's GitHub release `grounding-dino-tiny-onnx-v1`; `WISSI_GROUNDING_MODEL=fp32` for the float32 file (660 MB) |
-| **SAM 3** (opt-in) | SAM License (Meta) | finds and outlines every instance of the named concept in one model | ~1.3 GB (int8) from release `sam3-onnx-v1`, **only after you accept the SAM License** in the app |
+| **SAM 3** (opt-in) | SAM License (Meta) | finds and outlines every instance of the named concept in one model | ~1.5 GB (int8 where that keeps the results) from release `sam3-onnx-v1`, **only after you accept the SAM License** in the app |
 
 Both run on ONNX Runtime (no PyTorch). Grounding DINO was trained on natural images and returns a few hundred boxes
 at most per tile: it finds larger structures (glands, vessels, fat, folds, tissue pieces) well, but in dense fields of

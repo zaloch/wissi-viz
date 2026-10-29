@@ -7,7 +7,7 @@ weapons, nuclear or espionage use, trade-control compliance). So wissi-viz never
 config folder). Without accepting, "find by text" uses Grounding DINO + SAM 2.1 (Apache-2.0).
 
 The model files are ONNX exports of Meta's official checkpoint (``facebook/sam3``), made by this project's
-``sam3-onnx`` workflow with samexporter (MIT) and quantized to int8 (release ``sam3-onnx-v1``, about 1.3 GB, with the
+``sam3-onnx`` workflow with samexporter (MIT) and quantized to int8 where that keeps the results (release ``sam3-onnx-v1``, about 1.3–2 GB, with the
 licence and a check against the PyTorch model). ``WISSI_SAM3_DIR`` points at your own export (the three
 ``sam3_*.onnx`` files from ``samexporter.export_sam3`` plus ``bpe_simple_vocab_16e6.txt.gz``).
 
@@ -41,17 +41,17 @@ LICENSE_FILE = Path(__file__).resolve().parent / 'models' / 'SAM-License.txt'
 LICENSE_NAME = 'SAM License'
 LICENSE_URL = 'https://github.com/facebookresearch/sam3/blob/main/LICENSE'
 FILES = {  # release assets, kept under their names (the graphs refer to their external-data files by name)
-    'sam3-image-encoder-int8.onnx': 'sam3-image-encoder-int8.onnx',
-    'sam3-language-encoder-int8.onnx': 'sam3-language-encoder-int8.onnx',
-    'sam3-decoder-int8.onnx': 'sam3-decoder-int8.onnx',
+    'sam3-image-encoder.onnx': 'sam3-image-encoder.onnx',
+    'sam3-language-encoder.onnx': 'sam3-language-encoder.onnx',
+    'sam3-decoder.onnx': 'sam3-decoder.onnx',
     'bpe_simple_vocab_16e6.txt.gz': 'bpe_simple_vocab_16e6.txt.gz',
     'LICENSE-SAM.txt': 'LICENSE-SAM.txt',
     'NOTICE.txt': 'NOTICE.txt',
 }
 GRAPHS = {  # part → file names it may have: this release's, the export script's links, samexporter's own output
-    'image_encoder': ('sam3-image-encoder-int8.onnx', 'image_encoder.onnx', 'sam3_image_encoder.onnx'),
-    'language_encoder': ('sam3-language-encoder-int8.onnx', 'language_encoder.onnx', 'sam3_language_encoder.onnx'),
-    'decoder': ('sam3-decoder-int8.onnx', 'decoder.onnx', 'sam3_decoder.onnx'),
+    'image_encoder': ('sam3-image-encoder.onnx', 'image_encoder.onnx', 'sam3_image_encoder.onnx'),
+    'language_encoder': ('sam3-language-encoder.onnx', 'language_encoder.onnx', 'sam3_language_encoder.onnx'),
+    'decoder': ('sam3-decoder.onnx', 'decoder.onnx', 'sam3_decoder.onnx'),
 }
 
 
@@ -303,7 +303,7 @@ def folder() -> Path | None:
     env = os.environ.get('WISSI_SAM3_DIR')
     if env:
         return Path(env)
-    return weights.have('sam3-int8', FILES)
+    return weights.have('sam3', FILES)
 
 
 _DET: Sam3 | None = None
@@ -323,7 +323,7 @@ def detector(progress=None, device: str | None = None) -> Sam3:
             d = folder()
             if d is None:
                 try:
-                    d = weights.fetch(RELEASE, FILES, 'sam3-int8', progress, also=lambda n: n.endswith('.data'))
+                    d = weights.fetch(RELEASE, FILES, 'sam3', progress, also=lambda n: n.endswith('.data'))
                 except FileNotFoundError as e:
                     raise FileNotFoundError(
                         f'{e}. SAM 3 has not been exported for wissi-viz yet; set WISSI_SAM3_DIR to an export of your '
@@ -336,7 +336,7 @@ def detector(progress=None, device: str | None = None) -> Sam3:
 def status() -> dict:
     here = folder() is not None
     return {
-        'model': 'sam3 (int8)',
+        'model': 'sam3',
         'license': LICENSE_NAME,
         'license_url': LICENSE_URL,
         'accepted': accepted(),
@@ -344,5 +344,5 @@ def status() -> dict:
         # False: this version's download is not published (nothing to fetch); None: GitHub not reachable from here
         'published': True if here else weights.published(RELEASE),
         'loaded': _DET is not None,
-        'size_mb': 1300,
+        'size_mb': 1600,
     }

@@ -73,7 +73,7 @@ jobs:
             CHECK="int8 checked against the float32 graphs"
           fi
           gh release view sam3-onnx-v1 >/dev/null 2>&1 || gh release create sam3-onnx-v1 --title "SAM 3 ONNX (SAM License)" \
-            --notes "SAM 3 by Meta, $FROM, quantized to int8 for wissi-viz's opt-in find by text. These files are under the SAM License (LICENSE-SAM.txt): by downloading or using them you agree to it. wissi-viz downloads them only after you accept it in the app. See NOTICE.txt. $CHECK: $S"
+            --notes "SAM 3 by Meta, $FROM, quantized (int8 where that keeps the results) for wissi-viz's opt-in find by text. These files are under the SAM License (LICENSE-SAM.txt): by downloading or using them you agree to it. wissi-viz downloads them only after you accept it in the app. See NOTICE.txt. $CHECK: $S"
           gh release upload sam3-onnx-v1 /mnt/w/dist/* --clobber
       - name: The published files work through wissi-viz
         env:

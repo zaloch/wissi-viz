@@ -18,7 +18,7 @@ checked against its SHA-256), quantizes it the same way and checks the int8 grap
 
     python scripts/export_sam3_onnx.py --samexporter path/to/samexporter --out dist/sam3 --mirror
 
-Writes ``sam3-{image-encoder,language-encoder,decoder}-int8.onnx`` (and external-data files if any),
+Writes ``sam3-{image-encoder,language-encoder,decoder}.onnx`` (int8 where that keeps the results; ``.data`` files),
 ``bpe_simple_vocab_16e6.txt.gz``, ``LICENSE-SAM.txt``, ``NOTICE.txt``, ``check.json`` and ``SHA256SUMS``. Run by
 .github/workflows/sam3-onnx.yml, which publishes them as the GitHub release ``sam3-onnx-v1``. You may run it yourself
 and point ``WISSI_SAM3_DIR`` at the output instead.
@@ -190,23 +190,61 @@ def self_reference(fp32: Path) -> dict:
     return out
 
 
-def quantize(work: Path, out: Path) -> None:
+#: tried in order; the first whose results match the reference is published (quantizing a graph that holds
+#: Sam3Processor's fixed 0.5 cut can push borderline instances under it)
+CONFIGS = [
+    ('image_encoder', 'language_encoder', 'decoder'),
+    ('image_encoder', 'language_encoder'),
+    ('image_encoder',),
+    (),
+]
+
+
+def quantize(work: Path, out: Path, quant=tuple(PARTS)) -> dict:
+    """Write ``sam3-<part>.onnx`` (+ ``.data`` when large): the parts in ``quant`` with int8 matrix multiplications,
+    the others as they are (float32). Returns {part: precision}."""
     import onnx
     from onnxruntime.quantization import QuantType, quantize_dynamic
 
+    prec = {}
     for local, name in PARTS.items():
         src = work / f'sam3_{local}.onnx'
-        dst = out / f'sam3-{name}-int8.onnx'
+        dst = out / f'sam3-{name}.onnx'
+        for p in out.glob(f'sam3-{name}.onnx*'):
+            p.unlink()
         big = _graph_bytes(src) > 1.5 * 2**30
-        quantize_dynamic(str(src), str(dst), weight_type=QuantType.QInt8, op_types_to_quantize=['MatMul', 'Gemm'],
-                         use_external_data_format=big)  # fmt: skip
-        if big:  # keep the weights next to the graph under a stable name
-            m = onnx.load(str(dst))
-            for p in out.glob(f'sam3-{name}-int8.onnx*.data'):
-                p.unlink()
+        if local in quant:
+            quantize_dynamic(str(src), str(dst), weight_type=QuantType.QInt8, op_types_to_quantize=['MatMul', 'Gemm'],
+                             use_external_data_format=big)  # fmt: skip
+            prec[local] = 'int8'
+        else:
+            prec[local] = 'float32'
+        m = onnx.load(str(dst if local in quant else src))
+        for p in out.glob(f'sam3-{name}.onnx?*'):  # the quantizer's own external-data names
+            p.unlink()
+        if big:  # the weights next to the graph under a stable name
             onnx.save_model(m, str(dst), save_as_external_data=True, all_tensors_to_one_file=True,
-                            location=f'sam3-{name}-int8.onnx.data', size_threshold=1024)  # fmt: skip
-        print(local, '→', dst.name, f'{dst.stat().st_size / 2**20:.0f} MB', flush=True)
+                            location=f'sam3-{name}.onnx.data', size_threshold=1024)  # fmt: skip
+        else:
+            onnx.save_model(m, str(dst))
+        del m
+        gc.collect()
+        size = sum(p.stat().st_size for p in out.glob(f'sam3-{name}.onnx*')) / 2**20
+        print(local, '→', dst.name, prec[local], f'{size:.0f} MB', flush=True)
+    return prec
+
+
+def _wissi_dir(out: Path) -> Path:
+    """The release files under the names :mod:`wissi_viz.sam3` looks for (links), for checking."""
+    d = out / '_wissi'
+    shutil.rmtree(d, ignore_errors=True)
+    d.mkdir()
+    for local, name in PARTS.items():
+        for f in out.glob(f'sam3-{name}.onnx.data'):
+            (d / f.name).symlink_to(f.resolve())
+        (d / f'{local}.onnx').symlink_to((out / f'sam3-{name}.onnx').resolve())
+    shutil.copy(out / 'bpe_simple_vocab_16e6.txt.gz', d / 'bpe_simple_vocab_16e6.txt.gz')
+    return d
 
 
 def _iou(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -286,12 +324,11 @@ def main() -> None:
         ref = None if a.skip_check else reference(a.checkpoint)
         if not (work / 'sam3_decoder.onnx').exists():
             export(sx, work, a.checkpoint)
-    quantize(work, out)
     shutil.copy(sx / 'samexporter' / 'assets' / 'bpe_simple_vocab_16e6.txt.gz', out / 'bpe_simple_vocab_16e6.txt.gz')
     shutil.copy(sx / 'sam3' / 'LICENSE', out / 'LICENSE-SAM.txt')
     rev = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=sx, capture_output=True, text=True).stdout.strip()
     rev3 = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=sx / 'sam3', capture_output=True, text=True).stdout.strip()
-    (out / 'NOTICE.txt').write_text(
+    notice = (
         'SAM 3 by Meta Platforms, Inc., licensed under the SAM License (LICENSE-SAM.txt), which applies to these files.\n'
         'Weights: https://huggingface.co/facebook/sam3 (official checkpoint). Model code: '
         f'https://github.com/facebookresearch/sam3 ({rev3}).\n'
@@ -301,47 +338,54 @@ def main() -> None:
             else 'Exported to ONNX with samexporter (MIT, https://github.com/vietanhdev/samexporter): the public '
             f'float32 export at {source}, made with an earlier samexporter revision.\n'
         )
-        + 'Modified by wissi-viz: the weights of the matrix multiplications were quantized to 8-bit integers '
-        '(scripts/export_sam3_onnx.py).\n'
+        + 'Modified by wissi-viz: the weights of the matrix multiplications of {quantized} were quantized to 8-bit '
+        'integers (scripts/export_sam3_onnx.py; check.json lists each part).\n'
         'If you publish results obtained with SAM 3, the SAM License asks you to acknowledge its use.\n'
-        'The CLIP tokenizer vocabulary (bpe_simple_vocab_16e6.txt.gz) is from OpenAI CLIP (MIT).\n',
-        encoding='utf-8',
+        'The CLIP tokenizer vocabulary (bpe_simple_vocab_16e6.txt.gz) is from OpenAI CLIP (MIT).\n'
     )
     rep: dict = {'samexporter': rev, 'sam3': rev3, 'float32_from': source or 'facebook/sam3 via samexporter'}
-    if ref is not None or (a.mirror and not a.skip_check):
+    if a.skip_check:
+        rep['precision'] = quantize(work, out)
+    else:
         fp32 = work / '_wissi'
         fp32.mkdir(exist_ok=True)
         for f in work.iterdir():  # the graphs and their external data
             if f.is_file() and not (fp32 / f.name).exists():
                 (fp32 / f.name).symlink_to(f.resolve())
         shutil.copy(out / 'bpe_simple_vocab_16e6.txt.gz', fp32 / 'bpe_simple_vocab_16e6.txt.gz')
-        int8 = out / '_wissi'
-        int8.mkdir(exist_ok=True)
-        for local, name in PARTS.items():
-            for f in out.glob(f'sam3-{name}-int8.onnx*'):
-                if f.suffix == '.data':
-                    (int8 / f.name).unlink(missing_ok=True)
-                    (int8 / f.name).symlink_to(f.resolve())
-            (int8 / f'{local}.onnx').unlink(missing_ok=True)
-            (int8 / f'{local}.onnx').symlink_to((out / f'sam3-{name}-int8.onnx').resolve())
-        shutil.copy(out / 'bpe_simple_vocab_16e6.txt.gz', int8 / 'bpe_simple_vocab_16e6.txt.gz')
-        if ref is None:  # mirror: the float32 graphs through wissi-viz are the reference for the int8 ones
+        if ref is None:  # mirror: the float32 graphs through wissi-viz are the reference for the release
             ref = self_reference(fp32)
-            rep.update(check(ref, {'int8': int8}))
             rep['reference'] = 'the float32 graphs through wissi_viz.sam3 (no PyTorch reference without HF access)'
+            need = 0.85
         else:
-            rep.update(check(ref, {'fp32': fp32, 'int8': int8}))
-        shutil.rmtree(int8)
+            base = check(ref, {'fp32': fp32})
+            rep['fp32'] = base
+            if base['summary']['fp32']['recall_iou75'] < 0.8:
+                raise SystemExit("wissi-viz SAM 3 pipeline does not match Meta's Sam3Processor: see the log")
+            need = base['summary']['fp32']['recall_iou75'] - 0.1
+        rep['tried'] = []
+        for quant in CONFIGS:
+            prec = quantize(work, out, quant)
+            r = check(ref, {'release': _wissi_dir(out)})
+            ok = r['summary']['release']['recall_iou75'] >= need
+            rep['tried'].append({'precision': prec, 'summary': r['summary']['release'], 'kept': ok})
+            print('tried', json.dumps(rep['tried'][-1]), flush=True)
+            if ok:
+                rep.update(r)
+                rep['precision'] = prec
+                break
+        shutil.rmtree(out / '_wissi', ignore_errors=True)
+        if 'precision' not in rep:
+            raise SystemExit('no configuration finds what the reference finds: see the log')
+    q = [k.replace('_', ' ') for k, v in rep['precision'].items() if v == 'int8']
+    (out / 'NOTICE.txt').write_text(
+        notice.replace('{quantized}', ', '.join(q) if q else 'no part (all float32)'), encoding='utf-8'
+    )
     rep['sizes_mb'] = {p.name: round(p.stat().st_size / 2**20, 1) for p in sorted(out.iterdir()) if p.is_file()}
     (out / 'check.json').write_text(json.dumps(rep, indent=1), encoding='utf-8')
     names = sorted(p.name for p in out.iterdir() if p.is_file() and p.name != 'SHA256SUMS')
     (out / 'SHA256SUMS').write_text(''.join(f'{_sha(out / n)}  {n}\n' for n in names), encoding='utf-8')
-    print(json.dumps(rep.get('summary'), indent=1), json.dumps(rep['sizes_mb']))
-    s = rep.get('summary')
-    if s and 'fp32' in s and s['fp32']['recall_iou75'] < 0.8:
-        raise SystemExit("wissi-viz SAM 3 pipeline does not match Meta's Sam3Processor: see check.json")
-    if s and 'fp32' not in s and s['int8']['recall_iou75'] < 0.8:
-        raise SystemExit('the int8 graphs do not find what the float32 ones find: see check.json')
+    print(json.dumps(rep.get('summary'), indent=1), json.dumps(rep['precision']), json.dumps(rep['sizes_mb']))
 
 
 if __name__ == '__main__':

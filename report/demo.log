@@ -1,0 +1,68 @@
+wissi-viz demo (quick): 5 images in /home/runner/work/wissi-viz/wissi-viz/pack
+downloading 5 file(s), 1.1 GB → /home/runner/work/wissi-viz/wissi-viz/pack/downloads
+  439.4 MB / 1.1 GB  (87.9 MB/s, ~8 s left)
+  498.4 MB / 1.1 GB  (49.8 MB/s, ~13 s left)
+  555.4 MB / 1.1 GB  (37.0 MB/s, ~16 s left)
+  622.4 MB / 1.1 GB  (31.1 MB/s, ~17 s left)
+  683.4 MB / 1.1 GB  (27.3 MB/s, ~18 s left)
+  737.4 MB / 1.1 GB  (24.6 MB/s, ~17 s left)
+  801.4 MB / 1.1 GB  (22.9 MB/s, ~16 s left)
+  851.4 MB / 1.1 GB  (21.3 MB/s, ~15 s left)
+  902.7 MB / 1.1 GB  (20.1 MB/s, ~13 s left)
+  941.7 MB / 1.1 GB  (18.8 MB/s, ~12 s left)
+  974.7 MB / 1.1 GB  (17.7 MB/s, ~11 s left)
+  1013.7 MB / 1.1 GB  (16.9 MB/s, ~9 s left)
+  1.0 GB / 1.1 GB  (16.3 MB/s, ~7 s left)
+  1.1 GB / 1.1 GB  (15.6 MB/s, ~5 s left)
+  1.1 GB / 1.1 GB  (14.7 MB/s, ~4 s left)
+  1.1 GB / 1.1 GB  (14.1 MB/s, ~3 s left)
+  1.1 GB / 1.1 GB  (13.4 MB/s, ~2 s left)
+  1.1 GB / 1.1 GB  (12.9 MB/s, ~0 s left)
+downloaded in 91 s
+xenium-breast: merging Xenium morphology channels
+xenium-kidney-protein: merging Xenium morphology channels
+CMU-1.svs: 369 tissue tiles, model classic, 0.50 µm/px
+  50/369 tiles, 44 s
+  100/369 tiles, 84 s
+  150/369 tiles, 125 s
+  200/369 tiles, 162 s
+  250/369 tiles, 206 s
+  300/369 tiles, 243 s
+  350/369 tiles, 282 s
+268,373 cells → /home/runner/work/wissi-viz/wissi-viz/pack/layers/cmu-1.cells.parquet (297 s)
+CMU-2.svs: 867 tissue tiles, model classic, 0.50 µm/px
+  50/867 tiles, 45 s
+  100/867 tiles, 85 s
+  150/867 tiles, 122 s
+  200/867 tiles, 160 s
+  250/867 tiles, 196 s
+  300/867 tiles, 232 s
+  350/867 tiles, 271 s
+  400/867 tiles, 312 s
+  450/867 tiles, 351 s
+  500/867 tiles, 389 s
+  550/867 tiles, 428 s
+  600/867 tiles, 466 s
+  650/867 tiles, 505 s
+  700/867 tiles, 544 s
+  750/867 tiles, 578 s
+  800/867 tiles, 612 s
+  850/867 tiles, 645 s
+411,148 cells → /home/runner/work/wissi-viz/wissi-viz/pack/layers/cmu-2.cells.parquet (656 s)
+CMU-3.svs: 497 tissue tiles, model classic, 0.50 µm/px
+  50/497 tiles, 40 s
+  100/497 tiles, 76 s
+  150/497 tiles, 115 s
+  200/497 tiles, 155 s
+  250/497 tiles, 193 s
+  300/497 tiles, 230 s
+  350/497 tiles, 266 s
+  400/497 tiles, 303 s
+  450/497 tiles, 344 s
+246,487 cells → /home/runner/work/wissi-viz/wissi-viz/pack/layers/cmu-3.cells.parquet (377 s)
+cmu-1: 4 regions × 125 measurements (11 s)
+cmu-2: 82 regions × 125 measurements (31 s)
+cmu-3: 26 regions × 125 measurements (13 s)
+xenium-breast: 1 regions × 77 measurements (1 s)
+xenium-kidney-protein: 1 regions × 133 measurements (4 s)
+ready: /home/runner/work/wissi-viz/wissi-viz/pack/session-5.json  (metrics: /home/runner/work/wissi-viz/wissi-viz/pack/metrics/all_regions.csv)

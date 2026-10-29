@@ -1,0 +1,68 @@
+[0;93m2026-10-29 19:11:14.892661345 [W:onnxruntime:Default, device_discovery.cc:95 GetPciBusId] Skipping pci_bus_id for PCI path at "/sys/devices/LNXSYSTM:00/LNXSYBUS:00/ACPI0004:00/MSFT1000:00/5620e0c7-8062-4dce-aeb7-520c7ef76171" because filename "5620e0c7-8062-4dce-aeb7-520c7ef76171" did not match expected pattern of [0-9a-f]+:[0-9a-f]+:[0-9a-f]+[.][0-9a-f]+[m
+all images already downloaded
+1/5 slide opening and tile serving
+2/5 panning in the browser (1,4,16,32 panes)
+WebGL renderer: ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)  (software — no GPU)
+ 1 panes  open 816 ms  zoom 287 ms  pan: 59.9 fps (p95 16.8 ms), sharp 100.0%, blank 0.0%, settle 16 ms | revisit 59.9 fps, sharp 100.0%
+ 4 panes  open 1397 ms  zoom 108 ms  pan: 59.9 fps (p95 33.3 ms), sharp 99.0%, blank 0.0%, settle 468 ms | revisit 59.9 fps, sharp 100.0%
+16 panes  open 6747 ms  zoom 450 ms  pan: 59.9 fps (p95 33.4 ms), sharp 99.0%, blank 0.0%, settle 1543 ms | revisit 59.9 fps, sharp 100.0%
+32 panes  open 6910 ms  zoom 573 ms  pan: 59.9 fps (p95 33.4 ms), sharp 98.7%, blank 0.0%, settle 1194 ms | revisit 59.9 fps, sharp 99.4%
+3/5 SAM click latency
+4/5 region metrics
+5/5 GeoParquet vs GeoJSON
+
+# wissi-viz 0.12.0 benchmark
+
+5 public slides (quick set) · Linux-7.0.0-1017-azure-x86_64-with-glibc2.39 · Python 3.12.3 · 4 CPUs
+
+## Slide opening and tile serving
+
+| slide | open (ms) | cold tile p50 (ms) | warm tile p50 (ms) | tiles/s |
+|---|---|---|---|---|
+| CMU-1.svs (46000x32914) | 6.2 | 1.09 | 0.004 | 664.9 |
+| CMU-2.svs (78000x30462) | 7.8 | 1.12 | 0.003 | 693.4 |
+| CMU-3.svs (66000x45402) | 9.4 | 1.04 | 0.004 | 686.2 |
+| xenium-breast.ome.tif (5792x3529) | 4.8 | 10.83 | 0.003 | 234.7 |
+| xenium-kidney-protein.ome.tif (2963x6915) | 24.6 | 1.04 | 0.003 | 244.3 |
+
+## Panning in the browser
+
+ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver) (software), http/1.1
+
+| panes | open (ms) | zoom to sharp (ms) | fps (median) | frame p95 (ms) | sharp while moving | settle (ms) | GPU textures (MB) |
+|---|---|---|---|---|---|---|---|
+| 1 | 816 | 287 | 59.9 | 16.8 | 100.0 % | 16 | 66.4 |
+| 4 | 1397 | 108 | 59.9 | 33.3 | 99.0 % | 468 | 208.3 |
+| 16 | 6747 | 450 | 59.9 | 33.4 | 99.0 % | 1543 | 570.6 |
+| 32 | 6910 | 573 | 59.9 | 33.4 | 98.7 % | 1194 | 1020.2 |
+
+## SAM click segmentation
+
+backend **onnx** on cpu (model sam2.1-tiny (int8, bundled))
+
+| slide | view | first click (ms) | next click (ms) |
+|---|---|---|---|
+| CMU-1.svs | overview | 2289.3 | 28.9 |
+| CMU-1.svs | 20x field | 1376.2 | 30.1 |
+| CMU-2.svs | overview | 1243.2 | 26.1 |
+| CMU-2.svs | 20x field | 1254.9 | 25.3 |
+| CMU-3.svs | overview | 1230.4 | 24.5 |
+| CMU-3.svs | 20x field | 1241.6 | 34.9 |
+
+## Region metrics
+
+| image | cells | measurements | tissue (s) | metrics (s) |
+|---|---|---|---|---|
+| cmu-1 | 268,373 | 124 | 0.39 | 3.21 |
+| cmu-2 | 411,148 | 124 | 2.12 | 16.76 |
+
+## Annotation formats
+
+411,148 cells (cmu-2.cells.parquet)
+
+| | size (MB) | write (s) | read (s) |
+|---|---|---|---|
+| GeoParquet | 64.1 | 1.03 | 0.48 |
+| GeoJSON | 330.7 | 13.57 | 22.72 |
+
+report: /home/runner/work/wissi-viz/wissi-viz/wissi-viz-benchmark.md

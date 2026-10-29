@@ -579,6 +579,8 @@
         <button class="mode" data-mode="text" aria-pressed="false" title="Name what to find (nucleus, gland…): a text-prompted detector finds them and SAM outlines them"><b>By text</b><span>type what to find: nucleus, gland…</span></button>
       </div>
       <div class="f2" id="f-text-row" hidden>Find <input type="text" id="f-prompt" placeholder="nucleus. gland. blood vessel" aria-label="What to find (one class per phrase)" spellcheck="false"></div>
+      <label class="panel-note" id="f-expand-row" hidden style="display: flex; gap: 6px; align-items: flex-start"><input type="checkbox" id="f-expand" checked>
+        <span>Then find all like the best matches: they become examples for <i>segment everything</i> (finds the dense small objects, e.g. nuclei, the text model misses; one phrase)</span></label>
       <div class="f2" id="f-model-row" hidden>Model <select id="f-model" aria-label="Text model">
         <option value="grounding">Grounding DINO + SAM 2.1 · Apache-2.0</option>
         <option value="sam3">SAM 3 · SAM License (opt-in)</option></select></div>

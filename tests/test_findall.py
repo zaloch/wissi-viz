@@ -234,6 +234,45 @@ def test_find_by_text(session, monkeypatch, masks):
         findall.find_by_text(reg, sid, prompt=' ,. ', detector=det)
 
 
+def test_find_by_text_expands_from_the_best_matches(session, monkeypatch):
+    """expand: the best text matches become examples for segment everything, which finds the rest; a text model that
+    only boxes groups of objects still yields examples (the objects inside its best boxes)."""
+    from wissi_viz import findall
+    from wissi_viz.sam import SamService
+
+    monkeypatch.setattr(findall, 'sam_service', lambda: SamService(backend='classic'))
+    s, sid = session
+    reg = s.registry
+    rect = {'kind': 'view', 'rect': [900, 900, 1350, 1350]}
+
+    class FewBig(_FakeText):  # only the 3 best blobs, as a weak text model would
+        def detect(self, rgb, names, min_score=0.1):
+            b, sc, lab = super().detect(rgb, names, min_score)[:3]
+            k = np.argsort(-((b[:, 2] - b[:, 0]) * (b[:, 3] - b[:, 1])))[:3]
+            return b[k], np.full(len(k), 0.3, np.float32), lab[k]
+
+    class Groups(_FakeText):  # one box (and mask) around a group of blobs
+        masks = True
+
+        def detect(self, rgb, names, min_score=0.1):
+            h, w = rgb.shape[:2]
+            m = np.zeros((1, h, w), bool)
+            m[0, : h // 2, : w // 2] = True
+            return np.array([[0, 0, w / 2, h / 2]], np.float32), np.array([0.4], np.float32), np.zeros(1, np.int64), m
+
+    for det, how in ((FewBig(), 'matches as examples'), (Groups(), 'outlines inside the best matches')):
+        out = findall.find_by_text(reg, sid, prompt='nucleus', scope=rect, object_um=10, strictness=0.0,
+                                   detector=det, expand=True)  # fmt: skip
+        assert out['mode'] == 'text' and how in out['note'], out['note']
+        kp = dict(out['kpis'])
+        assert int(kp['examples']) >= 1 and out['count'] > int(kp['text matches']), (
+            out
+        )  # found more than the text model
+        assert out['layer'].startswith('Text · nucleus') and reg.layer(sid, out['layer']).origin == 'found'
+        assert '_seeds' not in reg.layers(sid)
+        assert findall.rethreshold(reg, out['result'], 0.9)['count'] <= out['count']
+
+
 def test_find_by_text_over_http(session, monkeypatch, tmp_path):
     from wissi_viz import findall, sam3
 

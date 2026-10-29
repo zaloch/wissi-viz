@@ -73,7 +73,7 @@ class _Classic:
         lab = rgb2lab(gaussian(rgb, 1.0, channel_axis=-1, preserve_range=True).astype(np.uint8))
         return {'rgb': rgb, 'lab': lab}
 
-    def predict(self, emb, points, labels, box):
+    def predict(self, emb, points, labels, box, area=None):
         lab, rgb = emb['lab'], emb['rgb']
         h, w = lab.shape[:2]
         mask = np.zeros((h, w), bool)
@@ -137,7 +137,7 @@ class _Torch:
         inputs = self.processor(images=rgb, return_tensors='pt')
         return {'pixel_values': inputs['pixel_values'].to(self.device), 'sizes': inputs['original_sizes'], 'emb': None}
 
-    def predict(self, emb, points, labels, box):
+    def predict(self, emb, points, labels, box, area=None):
         torch = self.torch
         kw: dict[str, Any] = {'original_sizes': emb['sizes'], 'return_tensors': 'pt'}
         if points:
@@ -157,7 +157,7 @@ class _Torch:
                 out = self.model(**inputs, image_embeddings=emb['emb'], multimask_output=multi)
         masks = self.processor.post_process_masks(out.pred_masks.cpu(), emb['sizes'])[0]  # (objects, masks, H, W)
         scores = out.iou_scores.detach().float().cpu().numpy().reshape(-1)
-        k = int(np.argmax(scores)) if multi else 0
+        k = _pick(scores, [float(masks[0, i].sum()) for i in range(len(scores))], area) if multi else 0
         return np.asarray(masks[0, k], bool), float(scores[k])
 
 
@@ -180,7 +180,7 @@ class _Onnx:
         e, h0, h1 = self.enc.run(None, {'image': x})
         return {'e': e, 'h0': h0, 'h1': h1, 'hw': (h, w)}
 
-    def predict(self, emb, points, labels, box):
+    def predict(self, emb, points, labels, box, area=None):
         h, w = emb['hw']
         pts, lab = [], []
         if box is not None:
@@ -199,10 +199,22 @@ class _Onnx:
                 'point_labels': np.asarray(lab, np.float32).reshape(1, -1),
             },
         )
-        k = int(np.argmax(iou[0]))
+        px = h * w / (masks.shape[-1] * masks.shape[-2])  # image px per mask px
+        k = _pick(iou[0], [float((masks[0, i] > 0).sum()) * px for i in range(masks.shape[1])], area)
         low = Image.fromarray(masks[0, k].astype(np.float32))
         up = np.asarray(low.resize((w, h), Image.BILINEAR))
         return up > 0, float(iou[0, k])
+
+
+def _pick(scores, areas, area) -> int:
+    """Which of SAM's candidate masks (part / object / whole): the best scored, or, given ``area=(min, max)`` px,
+    the best scored of those that size (a click on a nucleus in dense tissue otherwise often returns the tissue)."""
+    scores = np.asarray(scores, float).reshape(-1)
+    if area is not None:
+        ok = [i for i, a in enumerate(areas) if area[0] <= a <= area[1]]
+        if ok:
+            return int(max(ok, key=lambda i: scores[i]))
+    return int(np.argmax(scores))
 
 
 def _onnx_files(model: str | None) -> Path:

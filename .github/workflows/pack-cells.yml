@@ -1,0 +1,72 @@
+# Segments the cells of the full public sample pack (32 images) once, in 4 parallel shards, and publishes them as
+# the GitHub release `pack32-results-v1`: `wissi-viz --demo full` then downloads the cells instead of segmenting
+# every slide on the user's computer (the same classic segmentation the demo runs without Cellpose).
+name: pack-cells
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [.github/workflows/pack-cells.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  shard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - name: Room
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          sudo mkdir -p /mnt/pack && sudo chown "$USER" /mnt/pack && df -h / /mnt
+      - name: Install
+        run: |
+          uv venv -p 3.12 -q
+          uv pip install -q -e ".[demo]"
+      - name: Download, prepare, segment (shard ${{ matrix.shard }} of 4)
+        run: |
+          uv run --no-sync python - <<'PY'
+          import time
+          from wissi_viz import pack
+          sel = pack.items('full')[${{ matrix.shard }}::4]
+          d = pack.pack_dir('/mnt/pack')
+          print('images:', [x['id'] for x in sel], flush=True)
+          t0 = time.time()
+          pack.download(sel, d)
+          pack.prepare(sel, d)
+          pack.segment(sel, d, model='auto')
+          print(f'::notice::shard ${{ matrix.shard }}: {len(sel)} images in {(time.time() - t0) / 60:.0f} min', flush=True)
+          PY
+          ls -la /mnt/pack/layers
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cells-${{ matrix.shard }}
+          path: /mnt/pack/layers/*.cells.parquet
+          if-no-files-found: ignore
+          retention-days: 3
+
+  publish:
+    needs: shard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cells-*
+          path: cells
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd cells && ls -la && sha256sum *.cells.parquet > SHA256SUMS
+          echo "::notice::$(ls *.cells.parquet | wc -l) cell layers, $(du -sh . | cut -f1)"
+          gh release view pack32-results-v1 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || gh release create pack32-results-v1 --repo "$GITHUB_REPOSITORY" \
+            --title "Sample pack cells" --notes "Cells of the public sample pack (classic segmentation), downloaded by wissi-viz --demo instead of segmenting locally. Made by .github/workflows/pack-cells.yml."
+          gh release upload pack32-results-v1 --repo "$GITHUB_REPOSITORY" *.cells.parquet SHA256SUMS --clobber

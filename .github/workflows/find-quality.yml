@@ -1,0 +1,35 @@
+# Find all on a real H&E slide (CMU-1-Small-Region): the outlines as pictures and counts, published as the GitHub
+# release `find-quality` (replaced on every run) so changes to segment everything / find by text can be looked at.
+name: find-quality
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [src/wissi_viz/findall.py, src/wissi_viz/sam.py, src/wissi_viz/grounding.py, scripts/find_quality.py,
+            .github/workflows/find-quality.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - name: Install
+        run: |
+          uv venv -p 3.12 -q
+          uv pip install -q -e ".[analysis]"
+      - name: Run
+        run: |
+          uv run --no-sync python scripts/find_quality.py --out dist/quality 2>&1 | grep -v -E "pci_bus_id|unauthenticated" | tail -20
+          echo "::notice::$(uv run --no-sync python -c "import json;r=json.load(open('dist/quality/quality.json'));print(json.dumps({k:{x:v.get(x) for x in ('count','of','seconds','median_size_um','error')} for k,v in r['runs'].items()}))")"
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view find-quality >/dev/null 2>&1 || gh release create find-quality --prerelease --title "Find all on a real slide (latest run)" \
+            --notes "Segment everything and find by text on CMU-1-Small-Region (OpenSlide test data): pictures and counts from the latest run of .github/workflows/find-quality.yml. Not a download for users."
+          gh release upload find-quality dist/quality/*.jpg dist/quality/quality.json --clobber

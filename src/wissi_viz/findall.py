@@ -73,6 +73,8 @@ def scope_geometry(registry, sid: str, scope: dict | None, tissue: bool = False)
     src = _source(registry, sid)
     W, H = src.info.width, src.info.height
     kind = scope.get('kind', 'slide')
+    if kind == 'geometry':  # internal: a shapely geometry already in level-0 px
+        return scope['geom'], scope.get('label', 'the given area')
     if kind == 'view':
         x0, y0, x1, y1 = [float(v) for v in scope['rect']]
         g = shapely.box(max(0, x0), max(0, y0), min(W, x1), min(H, y1))
@@ -124,6 +126,11 @@ class Examples:
                     (neg if ex.get('neg') else pos).append(ring)
                     names.append(cls[i])
             colors.update(L.classes)
+        for ring in ex.get('polygons') or []:  # outlines given directly (level-0 px), e.g. confident text matches
+            ring = np.asarray(ring, float)
+            if len(ring) >= 3:
+                pos.append(ring)
+                names.append(str(ex.get('name') or 'object'))
         self.picks: list[tuple[str, int, bool]] = []
         for p in ex.get('picks') or []:
             L = registry.layer(sid, p['layer'])
@@ -638,7 +645,7 @@ def _tile_objects(svc, impl, rgb, x, y, ds, d_img, amin, amax, O, edges, geom, j
                 sub = {'rgb': emb['rgb'][cy0:cy1, cx0:cx1], 'lab': emb['lab'][cy0:cy1, cx0:cx1]}
                 m, score = impl.predict(sub, [(xi - cx0, yi - cy0)], [1], None)
             else:
-                m, score = impl.predict(emb, [(px, py)], [1], None)
+                m, score = impl.predict(emb, [(px, py)], [1], None, area=(amin, amax))
                 cx0, cy0 = 0, 0
                 ys, xs = np.nonzero(m)
                 if not len(ys):
@@ -718,6 +725,75 @@ def _box_nms(boxes: np.ndarray, scores: np.ndarray, iou: float = 0.5) -> np.ndar
     return np.asarray(keep, np.int64)
 
 
+class _Sub:
+    """A slice of a job's progress bar (one stage of a two-stage run); cancelling still cancels the job."""
+
+    def __init__(self, job: Job, lo: float, hi: float) -> None:
+        self.job, self.lo, self.hi = job, lo, hi
+
+    def update(self, progress: float | None = None, message: str | None = None) -> None:
+        p = None if progress is None else self.lo + (self.hi - self.lo) * float(np.clip(progress, 0, 1))
+        self.job.update(p, message)
+
+    @property
+    def cancelled(self) -> bool:
+        return self.job.cancelled
+
+
+def _expand(registry, sid, polys, boxes, keep, score, tsim, d0, scope, strictness, name, cls, color, label, job):
+    """Find all like the best text matches: segment everything in the scope (no examples), take the outlines at the
+    best matches as examples (outlined the same way as everything they are compared with), keep those like them.
+
+    Examples: outlines containing the centre of a match about the object's size (0.4–2.5× its diameter); when the
+    text model only boxed groups of objects (dense nuclei), the outlines of about that size inside its ≤ 3 best boxes.
+    None if there is nothing to take examples from."""
+    src = _source(registry, sid)
+    tmp = _unique(registry, sid, '_expand')
+    seg = segment_everything(registry, sid, scope=scope, object_um=d0 * _mpp(src), name=tmp,
+                             job=_Sub(job, 0.5, 0.9) if job else None)  # fmt: skip
+    F = annio.from_layer(registry.layer(sid, seg['layer']))
+    registry.remove_annotations(sid, seg['layer'])
+    if not len(F):
+        return None
+    shapes = shapely.polygons([shapely.linearrings(F.rings(i)[0]) for i in range(len(F))])
+    dia = np.sqrt(4 * np.abs(shapely.area(shapes)) / math.pi)
+    tree = shapely.STRtree(shapes)
+    tdia = np.sqrt(4 * np.abs(shapely.area(shapely.polygons([shapely.linearrings(p) for p in polys]))) / math.pi)
+    good = np.nonzero((score >= 0.12) & (tsim >= threshold(0.0)) & (tdia >= 0.4 * d0) & (tdia <= 2.5 * d0))[0]
+    good = good[np.argsort(-score[good], kind='stable')][:16]
+    seeds: set[int] = set()
+    for i in good:  # the outline under each good match's centre
+        c = np.asarray(polys[i]).mean(0)
+        hit = tree.query(shapely.Point(*c))
+        hit = [j for j in hit if shapely.contains_xy(shapes[j], *c)]
+        seeds.update(hit[:1])
+    how = 'matches'
+    if not seeds:  # only boxes around groups: the object-sized outlines inside the best boxes
+        b = np.asarray(boxes, float)[keep]
+        best = [i for i in np.argsort(-score, kind='stable') if score[i] >= 0.12][:3]
+        cand = set()
+        for i in best:
+            cand.update(int(j) for j in tree.query(shapely.box(*b[i]), predicate='contains'))
+        cand = sorted(j for j in cand if 0.5 * d0 <= dia[j] <= 2.0 * d0)
+        seeds = set(sorted(cand, key=lambda j: abs(math.log(dia[j] / d0)))[:16])
+        how = 'outlines inside the best matches'
+    if not seeds:
+        return None
+    lvm = _level_for(src, d0)
+    M = _measure(F, src, lvm)
+    idx = np.array(sorted(seeds))
+    sim, keys = similarity(M, {k: v[idx] for k, v in M.items()})
+    G = copy.copy(F)
+    lname, n = _publish(registry, sid, G, sim, strictness, name, cls, color)
+    rid = uuid.uuid4().hex[:10]
+    _remember(rid, slide=sid, F=G, sim=sim, name=lname, cls=cls, color=color, extra={}, strictness=strictness)
+    return _summary(
+        rid, lname, n, len(F), strictness, seg['where'], time.perf_counter(), 'text',
+        note=f'{len(idx)} {label} {how} as examples among {len(F):,} outlines ({seg["note"]}); compared on {", ".join(keys)}',
+        kpis=[['found', f'{n:,}'], ['outlined', f'{len(F):,}'], ['examples', str(len(idx))]],
+    )  # fmt: skip
+
+
 def find_by_text(
     registry,
     sid: str,
@@ -732,15 +808,21 @@ def find_by_text(
     job: Job | None = None,
     max_tiles: int = 2000,
     detector=None,
+    expand: bool = False,
 ) -> dict:
     """Outline everything in the scope that matches the text ``prompt`` (one class per phrase: "nucleus. gland").
 
     ``grounding``: Grounding DINO finds boxes, SAM 2.1 outlines each; ``sam3``: SAM 3 finds and outlines in one go.
     The slide is read in tiles at the scale where an object of ``object_um`` (or the examples' size) is ~48 px
-    across. With examples, only matches like them are kept too."""
+    across. With examples, only matches like them are kept too.
+
+    ``expand`` (one phrase): the confident matches of about the object's size become the examples of
+    :func:`segment_everything`, which outlines every object in the scope and keeps those like them. For dense small
+    objects (nuclei) the text model alone marks only a few; this finds the rest."""
     t0 = time.perf_counter()
-    upd = job.update if job else (lambda *a, **k: None)
     names = grounding.phrases(prompt)
+    expand = bool(expand) and len(names) == 1
+    upd = (_Sub(job, 0.0, 0.5) if expand else job).update if job else (lambda *a, **k: None)
     if not names:
         raise ValueError('type what to find, e.g. "nucleus" or "gland. vessel" (one class per phrase)')
     src = _source(registry, sid)
@@ -874,6 +956,14 @@ def find_by_text(
         sim_ex, keys = similarity(_measure(F, src, lvm), P, N)
         sim = np.minimum(sim, sim_ex)
         note += f'; also like the examples ({", ".join(keys)})'
+    if expand:
+        out = _expand(registry, sid, polys, boxes, keep, score, sim, d0, scope, strictness, name, names[0],
+                      classes[0][1], label, job)  # fmt: skip
+        if out is not None:
+            out.update(seconds=round(time.perf_counter() - t0, 1))
+            out['kpis'] = [*out['kpis'], ['text matches', f'{len(polys):,}']]
+            return out
+        note += f'; no match about {d0 * mpp:.0f} µm across to find more like (check the object size)'
     extra = {'score': np.round(score, 3)}
     lname, n = _publish(registry, sid, F, sim, strictness, name, names[0], classes[0][1], extra, classes, lab)
     rid = uuid.uuid4().hex[:10]
@@ -1124,5 +1214,6 @@ def run(registry, sid: str, body: dict, job: Job | None = None) -> dict:
             ex = None
         return find_by_text(registry, sid, prompt=body.get('prompt') or '', model=body.get('model') or 'grounding',
                             examples=ex, scope=body.get('scope'), strictness=float(body.get('strictness', 0.5)),
-                            object_um=float(body.get('object_um') or 10), name=body.get('name'), job=job)  # fmt: skip
+                            object_um=float(body.get('object_um') or 10), name=body.get('name'), job=job,
+                            expand=bool(body.get('expand')))  # fmt: skip
     raise ValueError(f'unknown mode {mode!r} (objects | segment | areas | text)')

@@ -1412,6 +1412,7 @@ $('f-size').oninput = () => { $('f-size-o').textContent = `${$('f-size').value} 
 $('f-prompt').oninput = () => renderDraw();
 $('f-prompt').onkeydown = (e) => { if (e.key === 'Enter' && !$('f-run').disabled) { e.preventDefault(); $('f-run').click(); } };
 $('f-model').onchange = () => renderDraw();
+$('f-expand').onchange = () => renderDraw();
 // SAM 3: shown under its licence, accepted once per computer before anything is downloaded
 async function openLicense() {
   const d = $('sam3-lic');
@@ -1478,6 +1479,7 @@ async function renderDraw() {
   $('f-cand-row').hidden = findMode !== 'objects';
   $('f-size-row').hidden = findMode !== 'segment' && findMode !== 'text';
   $('f-text-row').hidden = $('f-model-row').hidden = findMode !== 'text';
+  $('f-expand-row').hidden = findMode !== 'text';
   const tx = caps.text || {}, model = $('f-model').value, s3 = tx.sam3 || {};
   $('f-lic-row').hidden = findMode !== 'text' || model !== 'sam3';
   $('f-lic-msg').textContent = s3.accepted ? `SAM License accepted${s3.downloaded ? '' : ' · downloads ~1.3 GB on the first run'}.`
@@ -1506,6 +1508,7 @@ async function renderDraw() {
       const dl = model === 'sam3' ? (s3.downloaded ? '' : ' Downloads SAM 3 once (~1.3 GB).') : (g.downloaded ? '' : ` Downloads Grounding DINO once (~${g.size_mb || 250} MB).`);
       if (model === 'sam3' && !s3.accepted) { msg = 'Accept the SAM License to use SAM 3, or pick Grounding DINO + SAM 2.1.'; ok = false; }
       else if (!words.length) { msg = 'Type what to find, e.g. “nucleus”, or “gland. vessel” (one class per phrase).'; ok = false; }
+      else if ($('f-expand').checked && words.length === 1) msg = `${model === 'sam3' ? 'SAM 3' : 'Grounding DINO + SAM 2.1'} finds ${words[0]} about ${$('f-size').value} µm across; the best matches then become examples and SAM outlines everything like them.${dl} The whole slide can take long without a GPU.`;
       else msg = `${model === 'sam3' ? 'SAM 3' : 'Grounding DINO + SAM 2.1'} finds every ${words.join(', ')} about ${$('f-size').value} µm across${pos ? `, keeping those like your ${pos} example${pos === 1 ? '' : 's'}` : ''}.${dl} ${model === 'sam3' ? 'SAM 3 handles dense small objects well.' : 'Grounding DINO finds larger structures (glands, vessels, fat, folds) far better than dense nuclei: for those, use Segment everything with examples, or SAM 3.'} The whole slide can take long without a GPU.`;
     } else {
       const k = classes.filter((c) => c.n > 0);
@@ -1537,7 +1540,7 @@ $('f-run').onclick = async () => {
     mode: findMode, scope: findScope(), strictness: +$('f-strict').value,
     examples: { layer: drawLayer, classes: cls ? [cls] : null, picks: mine.map(({ layer, index, neg }) => ({ layer, index, neg })), name: cls || null, color: $('a-color').value },
     candidates: $('f-cand').value || null, object_um: +$('f-size').value, training: drawLayer, detail: $('f-detail').value,
-    prompt: $('f-prompt').value, model: $('f-model').value,
+    prompt: $('f-prompt').value, model: $('f-model').value, expand: $('f-expand').checked,
   };
   if (findMode === 'text') findCaps = null;   // the model may download: show it as downloaded afterwards
   if (!(await layerExists(drawLayer))) body.examples.layer = null;

@@ -98,7 +98,18 @@ def download(sel: list[dict], d: Path, workers: int = 4, log=print) -> None:
     lock = threading.Lock()
     t0 = time.time()
 
-    def one(x):
+    def one(x, attempts: int = 6):
+        """One file; a dropped connection or a short read resumes where it stopped (up to ``attempts`` times)."""
+        for k in range(attempts):
+            try:
+                return fetch(x)
+            except OSError as e:  # network errors (URLError, resets, timeouts) and short reads
+                if 'MD5' in str(e) or k == attempts - 1:
+                    raise
+                log(f'  {x["file"]}: {e} — resuming in {2**k} s')
+                time.sleep(2**k)
+
+    def fetch(x):
         dst = raw / x['file']
         part = dst.with_name(dst.name + '.part')
         have = part.stat().st_size if part.exists() else 0

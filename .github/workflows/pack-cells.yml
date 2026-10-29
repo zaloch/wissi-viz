@@ -1,6 +1,7 @@
 # Segments the cells of the full public sample pack (32 images) once, in 4 parallel shards, and publishes them as
 # the GitHub release `pack32-results-v1`: `wissi-viz --demo full` then downloads the cells instead of segmenting
 # every slide on the user's computer (the same classic segmentation the demo runs without Cellpose).
+# Downloads resume after dropped connections (pack.download retries).
 name: pack-cells
 on:
   workflow_dispatch:

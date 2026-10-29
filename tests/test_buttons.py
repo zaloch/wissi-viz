@@ -148,10 +148,29 @@ class Sweep:
             self.missed.setdefault(f, where)
 
 
-def test_every_button_does_what_it_says(data, tmp_path):
+class _FakeText:
+    """Stands in for the text-prompted models (no download in the sweep): three objects in every tile."""
+
+    name, label, tile, masks = 'fake', 'fake model', 800, True
+
+    def detect(self, rgb, names, min_score=0.1):
+        h, w = rgb.shape[:2]
+        boxes = np.array([[w * f - 10, h * f - 10, w * f + 10, h * f + 10] for f in (0.3, 0.5, 0.7)], np.float32)
+        masks = np.zeros((3, h, w), bool)
+        for k, (x0, y0, x1, y1) in enumerate(boxes.astype(int)):
+            masks[k, max(0, y0) : y1, max(0, x0) : x1] = True
+        return boxes, np.array([0.6, 0.5, 0.4], np.float32), np.zeros(3, np.int64), masks
+
+
+def test_every_button_does_what_it_says(data, tmp_path, monkeypatch):
     from playwright.sync_api import sync_playwright
 
     from wissi_viz import desktop as D
+    from wissi_viz import findall, sam3
+
+    monkeypatch.setattr(findall, 'text_detector', lambda model='grounding', progress=None: _FakeText())
+    monkeypatch.setattr(sam3, 'user_dir', lambda kind: tmp_path / kind)  # the licence choice stays in the test
+    monkeypatch.delenv('WISSI_SAM3_ACCEPT_LICENSE', raising=False)
 
     s = D.Session(cache_dir=tmp_path / 'cache', remember=False)
     srv = D._Server(s.app())
@@ -493,6 +512,35 @@ def _brightfield(w, data, s):
     pg.click('#f-run')
     pg.wait_for_selector('#f-cancel', state='visible')
     w.check('#f-cancel', '() => document.getElementById("f-job").hidden', timeout=60000)
+    # by text: a prompt, the model choice, SAM 3's licence (shown, declined, accepted, withdrawn), a run
+    w.check('#f-modes [data-mode=text]', '() => !document.getElementById("f-text-row").hidden')
+    pg.wait_for_function('() => document.getElementById("f-run").disabled')  # nothing typed yet
+    pg.select_option('#f-model', 'sam3')
+    pg.wait_for_selector('#f-lic', state='visible')
+    w.check(
+        '#f-lic',
+        '() => document.getElementById("sam3-lic").open && /Grant of Rights/.test(document.getElementById("lic-text").textContent)',
+    )
+    w.check('#lic-cancel', '() => !document.getElementById("sam3-lic").open')
+    pg.click('#f-lic')
+    pg.wait_for_function('() => /Grant of Rights/.test(document.getElementById("lic-text").textContent)')
+    w.check(
+        '#lic-accept',
+        '() => !document.getElementById("sam3-lic").open && /accepted/.test(document.getElementById("f-lic-msg").textContent)',
+    )
+    pg.click('#f-lic')
+    pg.wait_for_selector('#lic-withdraw', state='visible')
+    w.check(
+        '#lic-withdraw',
+        '() => !document.getElementById("sam3-lic").open && document.getElementById("f-model").value === "grounding"',
+    )
+    pg.fill('#f-prompt', 'nucleus. gland')
+    pg.dispatch_event('#f-prompt', 'input')
+    pg.select_option('#f-where', 'view')
+    pg.wait_for_function('() => !document.getElementById("f-run").disabled')
+    n_before = pg.locator('#f-results .result').count()
+    w.check('#f-run', f'() => document.querySelectorAll("#f-results .result").length > {n_before}', timeout=60000)
+    assert pg.locator('#f-results .result >> nth=0').get_attribute('data-layer').startswith('Text · nucleus, gland')
     w.check('#f-modes [data-mode=objects]', '() => !document.getElementById("f-cand-row").hidden')
     w.check('#a-pick', '() => document.body.classList.contains("picking")')
     for k in (5, 6, 7):

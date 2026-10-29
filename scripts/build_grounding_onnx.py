@@ -81,6 +81,21 @@ def fetch(out: Path, revision: str | None) -> dict:
     return {'onnx_repo': ONNX_REPO, 'onnx_revision': rev}
 
 
+def describe(path: Path) -> None:
+    """Inputs, outputs and operator counts of a graph (in the log, for the record)."""
+    import collections
+
+    import onnx
+
+    m = onnx.load(str(path), load_external_data=False)
+    ops = collections.Counter(n.op_type for n in m.graph.node)
+    print(
+        'inputs', [(i.name, [d.dim_param or d.dim_value for d in i.type.tensor_type.shape.dim]) for i in m.graph.input]
+    )
+    print('outputs', [o.name for o in m.graph.output])
+    print('opset', [(o.domain, o.version) for o in m.opset_import], 'ops', dict(ops.most_common(40)), flush=True)
+
+
 def quantize(out: Path) -> None:
     from onnxruntime.quantization import QuantType, quantize_dynamic
 
@@ -89,7 +104,9 @@ def quantize(out: Path) -> None:
         str(out / 'grounding-dino-tiny-int8.onnx'),
         weight_type=QuantType.QInt8,
         op_types_to_quantize=['MatMul', 'Gemm'],
+        extra_options={'MatMulConstBOnly': True},  # weights only: activations × activations stay float
     )
+    print('int8:', f'{(out / "grounding-dino-tiny-int8.onnx").stat().st_size / 2**20:.0f} MB', flush=True)
 
 
 def check(out: Path) -> dict:
@@ -190,11 +207,19 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--out', default='dist/grounding')
     ap.add_argument('--revision', default=None, help='onnx-community revision (default: the latest)')
+    ap.add_argument('--step', choices=('fetch', 'quantize', 'check', 'all'), default='all')
     a = ap.parse_args()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    src = fetch(out, a.revision)
-    quantize(out)
+    if a.step in ('fetch', 'all'):
+        src = fetch(out, a.revision)
+        (out / 'source.json').write_text(json.dumps(src), encoding='utf-8')
+        describe(out / 'grounding-dino-tiny-fp32.onnx')
+    if a.step in ('quantize', 'all'):
+        quantize(out)
+    if a.step not in ('check', 'all'):
+        return
+    src = json.loads((out / 'source.json').read_text(encoding='utf-8'))
     rep = check(out)
     rep['source'] = src
     rep['sizes_mb'] = {p.name: round(p.stat().st_size / 2**20, 1) for p in sorted(out.glob('*.onnx'))}

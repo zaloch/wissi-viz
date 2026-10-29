@@ -1409,6 +1409,37 @@ let findMode = 'objects', findCaps = null, findJob = null;
 for (const b of $('f-modes').children) b.onclick = () => { findMode = b.dataset.mode; renderDraw(); };
 $('f-strict').oninput = () => { $('f-strict-o').textContent = (+$('f-strict').value).toFixed(2); };
 $('f-size').oninput = () => { $('f-size-o').textContent = `${$('f-size').value} µm`; };
+$('f-prompt').oninput = () => renderDraw();
+$('f-prompt').onkeydown = (e) => { if (e.key === 'Enter' && !$('f-run').disabled) { e.preventDefault(); $('f-run').click(); } };
+$('f-model').onchange = () => renderDraw();
+// SAM 3: shown under its licence, accepted once per computer before anything is downloaded
+async function openLicense() {
+  const d = $('sam3-lic');
+  $('lic-text').textContent = 'Loading…';
+  d.showModal();
+  try {
+    const L = await api('/models/sam3/license');
+    $('lic-text').textContent = L.text;
+    $('lic-state').textContent = L.accepted ? 'Accepted on this computer.' : `${L.name} · ${L.url}`;
+    $('lic-withdraw').hidden = !L.accepted || findCaps?.edit === false;
+    $('lic-accept').hidden = !!L.accepted;
+    $('lic-accept').disabled = findCaps?.edit === false;   // a read-only server cannot record it
+  } catch (e) { $('lic-text').textContent = e.message; }
+}
+async function setLicense(accept) {
+  try {
+    await api('/models/sam3/license', { accept });
+    findCaps = null;
+    $('sam3-lic').close();
+    toast({ title: accept ? 'SAM License accepted' : 'SAM License acceptance withdrawn', sub: accept ? 'SAM 3 downloads on its first run (about 1.3 GB, once).' : 'By text uses Grounding DINO + SAM 2.1.' });
+    if (!accept) $('f-model').value = 'grounding';
+    renderDraw();
+  } catch (e) { toast({ kind: 'bad', title: 'Could not save', sub: e.message }); }
+}
+$('f-lic').onclick = openLicense;
+$('lic-accept').onclick = () => setLicense(true);
+$('lic-withdraw').onclick = () => setLicense(false);
+$('lic-cancel').onclick = () => $('sam3-lic').close();
 async function ensureFindCaps() {
   if (findCaps) return findCaps;
   try { findCaps = await api('/find/capabilities'); } catch (e) { findCaps = { error: e.message }; }
@@ -1445,7 +1476,14 @@ async function renderDraw() {
     ...regions.map((L) => h('option', { value: `region:${L.name}` }, `inside ${L.name}`)));
   ws.value = [...ws.options].some((o) => o.value === keepW) ? keepW : 'view';
   $('f-cand-row').hidden = findMode !== 'objects';
-  $('f-size-row').hidden = findMode !== 'segment';
+  $('f-size-row').hidden = findMode !== 'segment' && findMode !== 'text';
+  $('f-text-row').hidden = $('f-model-row').hidden = findMode !== 'text';
+  const tx = caps.text || {}, model = $('f-model').value, s3 = tx.sam3 || {};
+  $('f-lic-row').hidden = findMode !== 'text' || model !== 'sam3';
+  $('f-lic-msg').textContent = s3.accepted ? `SAM License accepted${s3.downloaded ? '' : ' · downloads ~1.3 GB on the first run'}.`
+    : 'SAM 3 needs its licence accepted first.';
+  $('f-lic').textContent = s3.accepted ? 'Licence' : 'Read the licence…';
+  $('f-head').textContent = findMode === 'text' ? 'Find all by name' : findMode === 'areas' ? 'Map the areas' : 'Find all like them';
   $('f-detail-row').hidden = findMode !== 'areas';
   $('f-strict-row').hidden = findMode === 'areas';
   const mine = picks.filter((x) => x.slide === sid);
@@ -1462,6 +1500,13 @@ async function renderDraw() {
     } else if (findMode === 'segment') {
       msg = pos ? `${caps.sam || 'SAM'} outlines every object, keeping those like your ${pos} example${pos === 1 ? '' : 's'}.`
         : `${caps.sam || 'SAM'} outlines every object about ${$('f-size').value} µm across (no examples: keeps all). The whole slide can take long without a GPU.`;
+    } else if (findMode === 'text') {
+      const words = $('f-prompt').value.split(/[.,;\n]+/).map((w) => w.trim()).filter(Boolean);
+      const g = tx.grounding || {};
+      const dl = model === 'sam3' ? (s3.downloaded ? '' : ' Downloads SAM 3 once (~1.3 GB).') : (g.downloaded ? '' : ` Downloads Grounding DINO once (~${g.size_mb || 230} MB).`);
+      if (model === 'sam3' && !s3.accepted) { msg = 'Accept the SAM License to use SAM 3, or pick Grounding DINO + SAM 2.1.'; ok = false; }
+      else if (!words.length) { msg = 'Type what to find, e.g. “nucleus”, or “gland. vessel” (one class per phrase).'; ok = false; }
+      else msg = `${model === 'sam3' ? 'SAM 3' : 'Grounding DINO + SAM 2.1'} finds every ${words.join(', ')} about ${$('f-size').value} µm across${pos ? `, keeping those like your ${pos} example${pos === 1 ? '' : 's'}` : ''}.${dl} Names of everyday things work best; the whole slide can take long without a GPU.`;
     } else {
       const k = classes.filter((c) => c.n > 0);
       msg = k.length >= 2 ? `Train on ${k.map((c) => `${c.name} (${c.n})`).join(', ')} in ${drawLayer} → map those areas.`
@@ -1470,7 +1515,7 @@ async function renderDraw() {
     }
     hint.textContent = msg;
     run.disabled = !ok;
-    run.textContent = findMode === 'areas' ? 'Find areas' : findMode === 'segment' ? 'Segment everything' : 'Find all like these';
+    run.textContent = findMode === 'areas' ? 'Find areas' : findMode === 'segment' ? 'Segment everything' : findMode === 'text' ? 'Find by text' : 'Find all like these';
   });
 }
 
@@ -1492,7 +1537,9 @@ $('f-run').onclick = async () => {
     mode: findMode, scope: findScope(), strictness: +$('f-strict').value,
     examples: { layer: drawLayer, classes: cls ? [cls] : null, picks: mine.map(({ layer, index, neg }) => ({ layer, index, neg })), name: cls || null, color: $('a-color').value },
     candidates: $('f-cand').value || null, object_um: +$('f-size').value, training: drawLayer, detail: $('f-detail').value,
+    prompt: $('f-prompt').value, model: $('f-model').value,
   };
+  if (findMode === 'text') findCaps = null;   // the model may download: show it as downloaded afterwards
   if (!(await layerExists(drawLayer))) body.examples.layer = null;
   try {
     const job = await api(`/slides/${enc(sid)}/find`, body);

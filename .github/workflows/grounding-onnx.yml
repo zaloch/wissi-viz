@@ -27,9 +27,22 @@ jobs:
           run uv pip install -e ".[analysis]"
       - name: Build and check
         run: |
-          fail() { echo "::error::$1"; exit 1; }
-          out=$(uv run --no-sync python scripts/build_grounding_onnx.py --out dist/grounding 2>&1) || { echo "$out" | tail -60; fail "$(echo "$out" | tail -c 3000 | tr '\n' ' ')"; }
-          echo "$out" | tail -40
+          step() {  # one stage; on failure, its exit status, peak memory and the end of its output as annotations
+            rc=0
+            /usr/bin/time -v -o /tmp/time.txt uv run --no-sync python scripts/build_grounding_onnx.py --out dist/grounding --step "$1" > /tmp/out.txt 2>&1 || rc=$?
+            tail -40 /tmp/out.txt
+            mem=$(grep -E "Maximum resident" /tmp/time.txt | awk '{print $NF}')
+            echo "::notice::$1: exit $rc, peak $((mem / 1024)) MB"
+            if [ $rc -ne 0 ]; then
+              grep -v -E "unauthenticated|pci_bus_id|pre-processing before quantization" /tmp/out.txt | tail -c 2800 | tr '\n' ' ' | sed 's/^/::error::/'; echo
+              sudo dmesg 2>/dev/null | grep -i -E "killed process|out of memory" | tail -3 | sed 's/^/::error::/'
+              exit 1
+            fi
+          }
+          step fetch
+          echo "::notice::$(grep -E '^(inputs|outputs|opset)' /tmp/out.txt | tr '\n' ' ' | tail -c 3000)"
+          step quantize
+          step check
           echo "::notice::$(uv run --no-sync python -c "import json;r=json.load(open('dist/grounding/check.json'));print(json.dumps({**r['summary'],**r['sizes_mb']}))")"
           curl -fsSL -o dist/grounding/LICENSE-Apache-2.0.txt https://www.apache.org/licenses/LICENSE-2.0.txt
           cd dist/grounding && sha256sum LICENSE-Apache-2.0.txt >> SHA256SUMS && ls -la

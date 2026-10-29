@@ -115,11 +115,47 @@ def export(out: Path, revision: str | None) -> dict:
             )  # fmt: skip
     finally:
         M.generate_masks_with_special_tokens_and_transfer_map = orig
+    fix_grid_sample(out / 'grounding-dino-tiny-fp32.onnx')
     if not given.get('used'):
         raise SystemExit('transformers no longer builds the text masks with generate_masks_…: check the export')
     import transformers
 
     return {'model': TORCH_REPO, 'revision': rev, 'transformers': transformers.__version__, 'torch': torch.__version__}
+
+
+def fix_grid_sample(path: Path) -> None:
+    """ONNX Runtime's CPU GridSample takes float32 only: run any GridSample traced with another type in float32
+    (casts around it)."""
+    import onnx
+    from onnx import TensorProto, helper
+
+    m = onnx.load(str(path))
+    inf = onnx.shape_inference.infer_shapes(m)
+    types = {v.name: v.type.tensor_type.elem_type for v in [*inf.graph.value_info, *inf.graph.input, *inf.graph.output]}
+    for t in inf.graph.initializer:
+        types[t.name] = t.data_type
+    nodes, fixed = [], {}
+    for n in m.graph.node:
+        if n.op_type == 'GridSample':
+            dt = [types.get(i, 0) for i in n.input]
+            fixed[n.name] = dt
+            if any(d not in (TensorProto.FLOAT, 0) for d in dt):
+                ins = []
+                for k, i in enumerate(n.input):
+                    c = f'{n.name}_in{k}_f32'
+                    nodes.append(helper.make_node('Cast', [i], [c], to=TensorProto.FLOAT, name=c))
+                    ins.append(c)
+                out_t = types.get(n.output[0], dt[0]) or dt[0]
+                o = f'{n.name}_out_f32'
+                g = helper.make_node('GridSample', ins, [o], name=n.name)
+                g.attribute.extend(n.attribute)
+                nodes += [g, helper.make_node('Cast', [o], [n.output[0]], to=out_t, name=f'{n.name}_back')]
+                continue
+        nodes.append(n)
+    print('GridSample input types:', sorted({str(v) for v in fixed.values()}), flush=True)
+    del m.graph.node[:]
+    m.graph.node.extend(nodes)
+    onnx.save(m, str(path))
 
 
 def describe(path: Path) -> None:

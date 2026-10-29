@@ -371,3 +371,24 @@ def test_serve_page_lists_slides_and_opens_32_panes(files):
     finally:
         srv.stop()
         reg.close()
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Windows taskbar properties')
+def test_windows_taskbar_name_and_icon_properties():
+    """The window's AppUserModel properties (name, icon, relaunch command, id) are accepted by the shell."""
+    import ctypes
+
+    ctypes.windll.ole32.CoInitialize(None)
+    user32 = ctypes.windll.user32
+    user32.CreateWindowExW.restype = ctypes.c_void_p
+    user32.CreateWindowExW.argtypes = [ctypes.c_ulong, ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_ulong,
+                                       ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                                       ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]  # fmt: skip
+    hwnd = user32.CreateWindowExW(0, 'STATIC', 'wissi-viz test', 0, 0, 0, 10, 10, None, None, None, None)
+    assert hwnd
+    try:
+        props = {D._AUMID['relaunch_command']: 'wissi-viz-app', D._AUMID['relaunch_icon']: f'{D.icon_path("ico")},0',
+                 D._AUMID['relaunch_name']: D.APP_NAME, D._AUMID['id']: D.BUNDLE_ID}  # fmt: skip
+        assert D._set_window_props(int(hwnd), props)
+    finally:
+        user32.DestroyWindow(ctypes.c_void_p(hwnd))

@@ -29,6 +29,7 @@ import sys
 import sysconfig
 import threading
 import time
+import uuid
 import webbrowser
 from pathlib import Path
 
@@ -239,6 +240,79 @@ def _macos_identity() -> None:
         pass
 
 
+# Windows: a window's AppUserModel properties (propkey.h); with them the taskbar button, its tooltip menu and a pinned
+# button show the app's name and icon instead of the process's (python.exe: "Python" and Python's icon)
+_AUMID_FMTID = '9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3'
+_AUMID = {'id': 5, 'relaunch_command': 2, 'relaunch_icon': 3, 'relaunch_name': 4}
+_IID_IPROPERTYSTORE = '886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99'
+
+
+def _set_window_props(hwnd: int, values: dict[int, str]) -> bool:
+    """Set string AppUserModel properties (pid → value) on a window through its IPropertyStore (Windows only)."""
+
+    class GUID(ctypes.Structure):
+        _fields_ = [('a', ctypes.c_ulong), ('b', ctypes.c_ushort), ('c', ctypes.c_ushort), ('d', ctypes.c_ubyte * 8)]
+
+    class PROPERTYKEY(ctypes.Structure):
+        _fields_ = [('fmtid', GUID), ('pid', ctypes.c_ulong)]
+
+    class PROPVARIANT(ctypes.Structure):  # vt + 3 reserved words, then the union (a pointer for VT_LPWSTR)
+        _fields_ = [('vt', ctypes.c_ushort), ('r1', ctypes.c_ushort), ('r2', ctypes.c_ushort), ('r3', ctypes.c_ushort),
+                    ('p', ctypes.c_void_p), ('p2', ctypes.c_void_p)]  # fmt: skip
+
+    def guid(s):
+        return GUID.from_buffer_copy(uuid.UUID(s).bytes_le)
+
+    shell32 = ctypes.windll.shell32
+    shell32.SHGetPropertyStoreForWindow.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(GUID),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    shell32.SHGetPropertyStoreForWindow.restype = ctypes.c_long
+    iid, store = guid(_IID_IPROPERTYSTORE), ctypes.c_void_p()
+    if shell32.SHGetPropertyStoreForWindow(ctypes.c_void_p(hwnd), ctypes.byref(iid), ctypes.byref(store)) != 0:
+        return False
+    vtbl = ctypes.cast(store, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p)))[0]
+    proto = ctypes.WINFUNCTYPE
+    set_value = proto(ctypes.c_long, ctypes.c_void_p, ctypes.POINTER(PROPERTYKEY), ctypes.POINTER(PROPVARIANT))(vtbl[6])
+    commit = proto(ctypes.c_long, ctypes.c_void_p)(vtbl[7])
+    release = proto(ctypes.c_ulong, ctypes.c_void_p)(vtbl[2])
+    ok = True
+    try:
+        for pid, value in values.items():
+            buf = ctypes.create_unicode_buffer(value)  # the store copies it
+            pv = PROPVARIANT(vt=31)  # VT_LPWSTR
+            pv.p = ctypes.cast(buf, ctypes.c_void_p)
+            ok &= set_value(store, ctypes.byref(PROPERTYKEY(guid(_AUMID_FMTID), pid)), ctypes.byref(pv)) == 0
+        ok &= commit(store) == 0
+    finally:
+        release(store)
+    return ok
+
+
+def _windows_taskbar(window) -> None:
+    """The taskbar button's name and icon (and a pinned button's: relaunching starts wissi-viz)."""
+    if sys.platform != 'win32':
+        return
+    try:
+        from System import Action  # pythonnet, installed with pywebview on Windows
+
+        form = getattr(window, 'native', None)
+        if form is None:
+            return
+        hwnd = int(form.Handle.ToInt64())
+        props = {
+            _AUMID['relaunch_command']: subprocess.list2cmdline(_launch_command()),
+            _AUMID['relaunch_icon']: f'{_stable_icon("ico")},0',
+            _AUMID['relaunch_name']: APP_NAME,
+            _AUMID['id']: BUNDLE_ID,
+        }
+        form.Invoke(Action(lambda: _set_window_props(hwnd, props)))
+    except Exception:  # noqa: BLE001  (cosmetic)
+        pass
+
+
 def _windows_app_id() -> None:
     """Group the window under its own taskbar button and icon instead of python.exe's."""
     if sys.platform == 'win32':
@@ -265,11 +339,11 @@ def run_native(url: str, session: Session, debug: bool = False, width: int = 144
         text_select=True,
     )
     bridge._window = window
-    window.events.shown += lambda: _native_icon(window)
+    window.events.shown += lambda: (_native_icon(window), _windows_taskbar(window))
     window.events.loaded += lambda: _enable_drop(window, session)
     kw = {
         'debug': debug,
-        'icon': str(icon_path('png')),
+        'icon': str(icon_path('ico' if sys.platform == 'win32' else 'png')),  # WinForms reads .ico files only
         'private_mode': False,
         'storage_path': str(session.cache_dir / 'webview'),
     }

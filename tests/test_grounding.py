@@ -47,10 +47,12 @@ def test_resize_like_the_processor(hw, out):
     assert G.resize_to(*hw) == out
 
 
-def test_pixels_normalised():
-    x = G.pixels(np.full((400, 600, 3), 255, np.uint8))
-    assert x.shape == (1, 3, 800, 1200) and x.dtype == np.float32
+def test_pixels_normalised_and_padded():
+    x, m = G.pixels(np.full((400, 600, 3), 255, np.uint8))
+    assert x.shape == (1, 3, 800, 1200) and x.dtype == np.float32 and m.all()
     assert np.allclose(x[0, :, 0, 0], (1 - G.MEAN) / G.STD, atol=1e-5)
+    x, m = G.pixels(np.full((400, 600, 3), 255, np.uint8), fixed=(800, 800))  # a graph that takes 800 × 800
+    assert x.shape == (1, 3, 800, 800) and m[0, :533].all() and not m[0, 534:].any() and not x[0, :, 600:].any()
 
 
 def test_grounding_postprocess():
@@ -69,7 +71,8 @@ class _FakeSession:
         self._in, self._out, self.fn = inputs, outputs, fn
 
     def get_inputs(self):
-        return [type('I', (), {'name': n, 'shape': [8, 1, 4], 'type': 'tensor(uint8)'})() for n in self._in]
+        shape = lambda n: [1, 3, 800, 800] if n == 'pixel_values' else [8, 1, 4]
+        return [type('I', (), {'name': n, 'shape': shape(n), 'type': 'tensor(uint8)'})() for n in self._in]
 
     def get_outputs(self):
         return [type('O', (), {'name': n})() for n in self._out]
@@ -94,9 +97,10 @@ def test_grounding_model_feeds_by_name(tmp_path, monkeypatch):
     names = ['input_ids', 'token_type_ids', 'attention_mask', 'pixel_values', 'pixel_mask']
     monkeypatch.setattr(weights, 'ort_session', lambda p, d=None: _FakeSession(names, ['logits', 'pred_boxes'], run))
     det = G.GroundingDino(tmp_path)
-    b, s, lab = det.detect(np.zeros((100, 100, 3), np.uint8), ['cell'])
+    b, s, lab = det.detect(np.zeros((100, 200, 3), np.uint8), ['cell'])
     assert seen['input_ids'].tolist() == [[2, 5, 4, 3]] and seen['pixel_values'].shape == (1, 3, 800, 800)
-    assert seen['pixel_mask'].shape == (1, 800, 800) and len(b) == 1 and np.allclose(b[0], [25, 25, 75, 75])
+    assert seen['pixel_mask'][0, :400].all() and not seen['pixel_mask'][0, 400:].any()
+    assert len(b) == 1 and np.allclose(b[0], [50, 25, 150, 75])  # relative to the picture, not the padding
 
 
 # ------------------------------------------------------------------------------------------------ SAM 3

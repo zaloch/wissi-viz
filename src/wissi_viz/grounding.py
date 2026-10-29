@@ -135,14 +135,28 @@ def resize_to(h: int, w: int, short: int = 800, long: int = 1333) -> tuple[int, 
     return (size, int((raw if raw is not None else size) * w / h))
 
 
-def pixels(rgb: np.ndarray, short: int = 800, long: int = 1333) -> np.ndarray:
+def pixels(
+    rgb: np.ndarray, short: int = 800, long: int = 1333, fixed: tuple[int, int] | None = None
+) -> tuple[np.ndarray, np.ndarray]:
+    """(pixel_values, pixel_mask). The processor's resizing; or, for a graph with a fixed input size (the published
+    export takes 800 × 800), the picture scaled to fit it and padded with zeros at the bottom / right, the mask marking
+    the picture (the model's boxes are relative to the picture, not the padding)."""
     h, w = rgb.shape[:2]
-    oh, ow = resize_to(h, w, short, long)
+    if fixed:
+        H, W = fixed
+        k = min(H / h, W / w)
+        oh, ow = max(1, min(H, int(round(h * k)))), max(1, min(W, int(round(w * k))))
+    else:
+        oh, ow = resize_to(h, w, short, long)
+        H, W = oh, ow
     im = Image.fromarray(np.ascontiguousarray(rgb[..., :3]))
     if (oh, ow) != (h, w):
         im = im.resize((ow, oh), Image.BILINEAR)
-    x = np.asarray(im, np.float32) / 255.0
-    return ((x - MEAN) / STD).transpose(2, 0, 1)[None].astype(np.float32)
+    x = np.zeros((1, 3, H, W), np.float32)
+    x[0, :, :oh, :ow] = ((np.asarray(im, np.float32) / 255.0 - MEAN) / STD).transpose(2, 0, 1)
+    mask = np.zeros((1, H, W), np.int64)
+    mask[0, :oh, :ow] = 1
+    return x, mask
 
 
 def _sigmoid(x: np.ndarray) -> np.ndarray:
@@ -184,6 +198,9 @@ class GroundingDino:
         self.folder = Path(folder)
         self.sess = weights.ort_session(self.folder / 'model.onnx', device)
         self.inputs = {i.name for i in self.sess.get_inputs()}
+        pv = next((i for i in self.sess.get_inputs() if i.name == 'pixel_values'), None)
+        hw = list(pv.shape[2:]) if pv is not None else []
+        self.fixed = tuple(hw) if len(hw) == 2 and all(isinstance(v, int) and v > 0 for v in hw) else None
         self.outputs = [o.name for o in self.sess.get_outputs()]
         self.tok = WordPiece(self.folder / 'vocab.txt')
         self.device = self.sess.get_providers()[0].replace('ExecutionProvider', '').lower()
@@ -194,13 +211,13 @@ class GroundingDino:
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Boxes (xyxy, px of ``rgb``), scores and phrase indices of everything in ``rgb`` matching ``names``."""
         ids, spans = encode_prompt(self.tok, names)
-        x = pixels(rgb, short)
+        x, mask = pixels(rgb, short, fixed=self.fixed)
         feed = {
             'input_ids': ids,
             'attention_mask': np.ones_like(ids),
             'token_type_ids': np.zeros_like(ids),
             'pixel_values': x,
-            'pixel_mask': np.ones((1, x.shape[2], x.shape[3]), np.int64),
+            'pixel_mask': mask,
         }
         with self._lock:
             out = dict(zip(self.outputs, self.sess.run(None, {k: v for k, v in feed.items() if k in self.inputs})))

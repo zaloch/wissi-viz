@@ -8,8 +8,9 @@
 2. Quantizes the weights of the matrix multiplications to int8 (ONNX Runtime dynamic quantization; convolutions stay
    float32, since int8 convolutions need ONNX Runtime ≥ 1.24 on CPU).
 3. Checks wissi-viz's own pipeline (:mod:`wissi_viz.grounding`: tokenizer, resizing, post-processing) with both
-   files against the original PyTorch model and processor in ``transformers`` on a few pictures and prompts:
-   the same tokens, the same pixels, the same boxes.
+   files against the original PyTorch model and processor in ``transformers`` on a few pictures and prompts: the
+   same tokens, pixels and boxes on square crops (the export takes 800 × 800, like wissi-viz's tiles), and close
+   boxes on whole pictures (scaled into 800 × 800 and padded, against transformers' own resizing).
 
 Writes ``grounding-dino-tiny-{fp32,int8}.onnx``, ``vocab.txt``, ``NOTICE.txt``, ``check.json`` and ``SHA256SUMS``;
 .github/workflows/grounding-onnx.yml publishes them as the GitHub release ``grounding-dino-tiny-onnx-v1``.
@@ -133,67 +134,71 @@ def check(out: Path) -> dict:
         'cases': [],
     }
     print(json.dumps(report, indent=1))
-    for pic, prompt in CASES:
-        rgb = getattr(data, pic)()
-        if rgb.ndim == 2:
-            rgb = np.stack([rgb] * 3, -1)
-        rgb = np.ascontiguousarray(rgb[..., :3]).astype(np.uint8)
-        names = G.phrases(prompt)
-        caption = ' '.join(f'{n}.' for n in names)
-        ref_in = proc(images=rgb, text=caption, return_tensors='pt')
-        ids, spans = G.encode_prompt(dets['fp32'].tok, names)
-        px = G.pixels(rgb)
-        case = {
-            'picture': pic,
-            'prompt': caption,
-            'same_tokens': ref_in['input_ids'][0].tolist() == ids[0].tolist(),
-            'same_size': list(ref_in['pixel_values'].shape) == list(px.shape),
-            'pixel_max_diff': float(np.abs(ref_in['pixel_values'].numpy() - px).max())
-            if list(ref_in['pixel_values'].shape) == list(px.shape) else None,
-        }  # fmt: skip
-        with torch.no_grad():
-            ref_out = model(**ref_in)
-        kw = {'input_ids': ref_in['input_ids'], 'text_threshold': 0.25, 'target_sizes': [rgb.shape[:2]]}
+
+    def ref_boxes(ref_in, ref_out, size):
+        kw = {'input_ids': ref_in['input_ids'], 'text_threshold': 0.25, 'target_sizes': [size]}
         try:
             r = proc.post_process_grounded_object_detection(ref_out, threshold=0.3, **kw)[0]
         except TypeError:
             r = proc.post_process_grounded_object_detection(ref_out, box_threshold=0.3, **kw)[0]
-        rb, rs = r['boxes'].numpy(), r['scores'].numpy()
-        case['reference'] = [[round(float(x), 1) for x in b] + [round(float(sc), 3)] for b, sc in zip(rb, rs)]
-        # the raw heads: ONNX float32 vs PyTorch on the same input
-        feed = {k: v.numpy() for k, v in ref_in.items() if k in dets['fp32'].inputs}
-        raw = dict(zip(dets['fp32'].outputs, dets['fp32'].sess.run(None, feed)))
-        if 'logits' in raw and 'pred_boxes' in raw:
-            case['raw_logit_max_diff'] = float(np.abs(raw['logits'] - ref_out.logits.numpy()).max())
-            case['raw_box_max_diff'] = float(np.abs(raw['pred_boxes'] - ref_out.pred_boxes.numpy()).max())
-        for v, det in dets.items():
-            t0 = time.perf_counter()
-            b, sc, lab = det.detect(rgb, names, min_score=0.3)
-            dt = time.perf_counter() - t0
-            if len(rb) and len(b):
-                M = _iou(rb, b)
-                best = M.max(1)
-                j = M.argmax(1)
-                recall = float((best >= (0.9 if v == 'fp32' else 0.75)).mean())
-                dscore = float(np.median(np.abs(rs - sc[j])))
-            else:
-                recall = 1.0 if len(rb) == len(b) else 0.0
-                dscore = 0.0
-            case[v] = {
-                'boxes': int(len(b)),
-                'recall_of_reference': round(recall, 3),
-                'median_score_diff': round(dscore, 4),
-                'seconds': round(dt, 2),
-                'labels': [names[i] for i in lab[:8]],
-            }
-        print(json.dumps(case))
-        report['cases'].append(case)
-    C = report['cases']
+        return r['boxes'].numpy(), r['scores'].numpy()
+
+    def compare(rb, rs, det, rgb, names, iou):
+        t0 = time.perf_counter()
+        b, sc, lab = det.detect(rgb, names, min_score=0.3)
+        dt = time.perf_counter() - t0
+        if len(rb) and len(b):
+            M = _iou(rb, b)
+            recall = float((M.max(1) >= iou).mean())
+            dscore = float(np.median(np.abs(rs - sc[M.argmax(1)])))
+        else:
+            recall, dscore = (1.0 if len(rb) == len(b) else 0.0), 0.0
+        return {'boxes': int(len(b)), 'recall_of_reference': round(recall, 3), 'median_score_diff': round(dscore, 4),
+                'seconds': round(dt, 2), 'labels': [names[i] for i in lab[:8]]}  # fmt: skip
+
+    for pic, prompt in CASES:
+        full = getattr(data, pic)()
+        if full.ndim == 2:
+            full = np.stack([full] * 3, -1)
+        full = np.ascontiguousarray(full[..., :3]).astype(np.uint8)
+        h, w = full.shape[:2]
+        k = min(h, w)
+        square = np.ascontiguousarray(full[(h - k) // 2 : (h - k) // 2 + k, (w - k) // 2 : (w - k) // 2 + k])
+        names = G.phrases(prompt)
+        caption = ' '.join(f'{n}.' for n in names)
+        ids, spans = G.encode_prompt(dets['fp32'].tok, names)
+        for variant, rgb in (('square', square), ('picture', full)):
+            ref_in = proc(images=rgb, text=caption, return_tensors='pt')
+            px, mask = G.pixels(rgb, fixed=dets['fp32'].fixed)
+            case = {'picture': pic, 'variant': variant, 'size': list(rgb.shape[:2]), 'prompt': caption,
+                    'same_tokens': ref_in['input_ids'][0].tolist() == ids[0].tolist()}  # fmt: skip
+            if list(ref_in['pixel_values'].shape) == list(px.shape):
+                case['pixel_max_diff'] = float(np.abs(ref_in['pixel_values'].numpy() - px).max())
+            with torch.no_grad():
+                ref_out = model(**ref_in)  # transformers end to end, its own resizing
+                ours_in = {**ref_in, 'pixel_values': torch.from_numpy(px), 'pixel_mask': torch.from_numpy(mask)}
+                torch_ours = model(**ours_in)  # PyTorch on exactly what the ONNX graph gets
+            raw = dict(zip(dets['fp32'].outputs, dets['fp32'].sess.run(
+                None, {k_: v.numpy() for k_, v in ours_in.items() if k_ in dets['fp32'].inputs})))  # fmt: skip
+            case['onnx_vs_torch_logit_max_diff'] = float(np.abs(raw['logits'] - torch_ours.logits.numpy()).max())
+            case['onnx_vs_torch_box_max_diff'] = float(np.abs(raw['pred_boxes'] - torch_ours.pred_boxes.numpy()).max())
+            rb, rs = ref_boxes(ref_in, ref_out, rgb.shape[:2])
+            case['reference'] = [[round(float(x), 1) for x in b] + [round(float(sc), 3)] for b, sc in zip(rb, rs)]
+            for v, det in dets.items():
+                case[v] = compare(rb, rs, det, rgb, names, 0.9 if (v == 'fp32' and variant == 'square') else 0.75)
+            print(json.dumps(case), flush=True)
+            report['cases'].append(case)
+    C = [c for c in report['cases'] if c['variant'] == 'square']
+    P = [c for c in report['cases'] if c['variant'] == 'picture']
+    mean = lambda cs, v: round(float(np.mean([c[v]['recall_of_reference'] for c in cs])), 3)
     report['summary'] = {
-        'tokens_match': all(c['same_tokens'] for c in C),
-        'pixels_max_diff': max((c['pixel_max_diff'] or 0) for c in C),
-        'fp32_recall': round(float(np.mean([c['fp32']['recall_of_reference'] for c in C])), 3),
-        'int8_recall': round(float(np.mean([c['int8']['recall_of_reference'] for c in C])), 3),
+        'tokens_match': all(c['same_tokens'] for c in report['cases']),
+        'pixels_max_diff': max(c.get('pixel_max_diff', 0) for c in C),
+        'onnx_vs_torch_logit_max_diff': max(c['onnx_vs_torch_logit_max_diff'] for c in report['cases']),
+        'fp32_recall': mean(C, 'fp32'),
+        'int8_recall': mean(C, 'int8'),
+        'fp32_recall_padded': mean(P, 'fp32'),
+        'int8_recall_padded': mean(P, 'int8'),
         'int8_median_score_diff': round(float(np.median([c['int8']['median_score_diff'] for c in C])), 4),
         'fp32_seconds': round(float(np.mean([c['fp32']['seconds'] for c in C])), 2),
         'int8_seconds': round(float(np.mean([c['int8']['seconds'] for c in C])), 2),

@@ -34,7 +34,7 @@ jobs:
             mem=$(grep -E "Maximum resident" /tmp/time.txt | awk '{print $NF}')
             echo "::notice::$1: exit $rc, peak $((mem / 1024)) MB"
             if [ $rc -ne 0 ]; then
-              grep -v -E "unauthenticated|pci_bus_id|pre-processing before quantization" /tmp/out.txt | tail -c 2800 | tr '\n' ' ' | sed 's/^/::error::/'; echo
+              grep -v -E "unauthenticated|pci_bus_id|pre-processing before quantization" /tmp/out.txt | tail -12 | cut -c1-900 | sed 's/^/::warning::/'
               sudo dmesg 2>/dev/null | grep -i -E "killed process|out of memory" | tail -3 | sed 's/^/::error::/'
               exit 1
             fi

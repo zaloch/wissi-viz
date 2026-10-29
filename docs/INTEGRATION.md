@@ -1,6 +1,6 @@
 # Integrating wissi-viz
 
-*Current as of wissi-viz 0.11.0.* This guide covers how to put wissi-viz into an app: NiceGUI (wissi), other Python web frameworks, JavaScript frameworks and notebooks. It also covers:
+*Current as of wissi-viz 0.12.0.* This guide covers how to put wissi-viz into an app: NiceGUI (wissi), other Python web frameworks, JavaScript frameworks and notebooks. It also covers:
 - how to show large cell and object tables;
 - how to keep the viewer smooth, including on clients without a GPU;
 - how to connect a vendor tile API such as PathCore or HALO Link;
@@ -31,6 +31,7 @@
 | 0.9.0 | **Inspector.** The app's Layers / Analyze / Measure / Draw inspector, object cards with percentiles, hover tips, a radial menu and keyboard shortcuts (§12). Spatial analyses from the app and `wissi_viz.analyses` (§16). Layer summaries, colour-by and removal over HTTP. NiceGUI: `WissiApp` / `mount_app` (the whole app in a page), `on_object_hover` / `on_context` / `on_layers`, `flash_layer`, `summary`, `run_analysis`, and `analyses.echarts_option` for `ui.echart` (§2). **Connect…** and `--connect` for tile APIs (§7); `serve --allow-open` with an in-page file picker and `--key` (§8). | The app page's logic moved to `static/app.js`. The per-pane ⚙ menu is off in the app (its controls are in the inspector); the element keeps it. New viewer events: `objecthover`, `panecontext` (opt-in: `grid.hoverEvents`, `grid.contextEvents`) and `layers`; new methods `hitAt()` and `flashLayer()`. NiceGUI handlers now run once per event (they also ran a second time without the event's data). |
 | 0.9.1 | `--system-certs` / `WISSI_VIZ_SYSTEM_CERTS=1`: downloads trust the operating system's certificates, for networks that inspect HTTPS (§13). | Nothing; use the flag where downloads fail with `CERTIFICATE_VERIFY_FAILED`. `truststore` (MIT) is a new core dependency. |
 | 0.10.0 | **Find all, image tools, projects.** Annotate tab: examples (SAM, drawing, picked objects) → find all like them: similar objects, segment everything (SAM / classic) or areas (pixel classifier), in the view, a region or the whole slide, as background jobs with progress, cancel and a live strictness slider (§12, `wissi_viz.findall`, §16). Image tab: histograms of the whole image, the view or a CZI scene, with draggable windows, auto, link, solo. View bar on the slide (zoom, 1:1, 2.5–40×, overview map, scale bar, snapshot, full screen) and an FPS readout. Layers: nested / by source / flat views and source badges (`origin`, saved with layers). Slide list: projects and folder groups. In-page file picker with places, a path bar, multi-select and Open this folder (also in a browser window). `--demo` asks quick or full. | `scikit-learn` (BSD-3) joins the `analysis` extra. Layers you draw are tagged drawn / sam. The scale bar now shows after a pane change (it stayed hidden). Channel auto-contrast reads a finer level (bright structures saturated before). In the in-page picker a click selects; double-click or Open opens. The Draw tab is now Annotate (same key, `D`). |
+| 0.12.0 | **Find by text.** Annotate → Find all → By text: name what to find and every match is outlined, by Grounding DINO + SAM 2.1 (Apache-2.0, downloaded once from this project's release) or SAM 3 (opt-in under Meta's SAM License, shown and accepted in the app before anything is downloaded) (§15, `findall.find_by_text`, `wissi_viz.grounding`, `wissi_viz.sam3`). Find-all results can hold several classes (one per phrase). | ONNX Runtime no longer picks CoreML on macOS (it compiled SAM's graphs for minutes; CPU is used instead). New endpoints `GET`/`POST {prefix}/models/sam3/license`. Model downloads are checked against the release's SHA-256 sums. |
 | 0.11.0 | **SAM 2.1 built in.** SAM 2.1 tiny (int8 ONNX, 33 MB) ships inside the package and ONNX Runtime is a core dependency: click / box annotation and *segment everything* use SAM without extras, downloads or a GPU (§15). | ONNX Runtime, SciPy and scikit-image are now core dependencies (all permissive; ~24 MB wheel). `WISSI_SAM_MODEL` defaults to the bundled tiny on onnx (`small` / `tiny-fp32` download float32 exports). Intel Macs on Python 3.14 have no ONNX Runtime wheel and keep the classic fill. On a GPU, replace onnxruntime with onnxruntime-gpu. |
 | 0.7.0 | **Desktop app and platform support.** `wissi-viz-app` opens the viewer in its own native window with its own icon (pywebview), as an option next to the embedded element. Windows, macOS and Linux are supported and CI-tested; packaging moved to uv (`uv.lock`, dependency groups). Python 3.10–3.11 work again (older czifile). | Nothing for embedded use. For the app: `uv tool install "wissi-viz[desktop]"` (§12). For development: `uv sync` (§13). |
 | 0.5.0 | **Object pyramid.** Millions of cells are shown as screen-sized aggregated dots, then as GPU-drawn outlines when zoomed in. There is a **server mode** (default) and a **client mode**. | Use `cached_object_layer` for big tables (§5). Choose `overlays: 'server'\|'client'\|'auto'`. |
@@ -779,11 +780,63 @@ In the app (desktop or `wissi-viz serve`), the SAM tool (key 8, or **Annotate �
 
 | Backend | Install | Runs on | Notes |
 |---|---|---|---|
-| `onnx` (default) | nothing: ONNX Runtime and the bundled tiny model come with wissi-viz (`onnxruntime-gpu` / `-directml` in its place for GPUs) | CUDA, DirectML (any Windows GPU), CoreML, CPU | the bundled SAM 2.1 tiny int8 (`models/sam2.1-tiny-int8`, built by `scripts/bundle_sam.py`); `WISSI_SAM_MODEL=small` or `tiny-fp32` downloads that float32 export once (exported by this project's CI, checked against PyTorch: mask IoU ≥ 0.9998; SHA-256 verified). ~1–3 s to encode a view and ~35 ms per click on a laptop CPU |
+| `onnx` (default) | nothing: ONNX Runtime and the bundled tiny model come with wissi-viz (`onnxruntime-gpu` / `-directml` in its place for GPUs) | CUDA, DirectML (any Windows GPU), CPU (CoreML is skipped: it compiles these graphs slowly) | the bundled SAM 2.1 tiny int8 (`models/sam2.1-tiny-int8`, built by `scripts/bundle_sam.py`); `WISSI_SAM_MODEL=small` or `tiny-fp32` downloads that float32 export once (exported by this project's CI, checked against PyTorch: mask IoU ≥ 0.9998; SHA-256 verified). ~1–3 s to encode a view and ~35 ms per click on a laptop CPU |
 | `torch` | `[sam]` (transformers + torch) | CUDA, Apple MPS, CPU | `facebook/sam2.1-hiera-*` from Hugging Face; preferred when installed; fastest on a GPU (`--benchmark` reports your click latency) |
 | `classic` | nothing | CPU | colour flood fill / Otsu in the box; the fallback, rougher masks |
 
 `WISSI_SAM_BACKEND` = auto (torch if installed, else onnx, else classic) | torch | onnx | classic, `WISSI_SAM_MODEL` = tiny | tiny-fp32 | small | base-plus | large (default: the bundled tiny on onnx, small on torch), `WISSI_SAM_DEVICE` = auto | cuda | mps | dml | cpu. All weights are Apache-2.0 (commercial use allowed). Endpoints: `GET {prefix}/sam/status`, `POST {prefix}/slides/{id}/sam` with `{rect, points, labels, box}` → polygons in level-0 px.
+
+### Find by text: Grounding DINO + SAM 2.1, or SAM 3 (opt-in)
+
+**Annotate → Find all → By text**: type what to find (`nucleus`, `gland. blood vessel`: one class per phrase) and
+every match in the view, a region or the whole slide is outlined into a new layer (`Text · …`, origin *found*), with
+a live strictness slider (the detection score). Picked or drawn examples, if any, also have to match. The slide is
+read in tiles at the scale where an object of the **Object size** is about 48 px across.
+
+| Model | Licence | How it works | Download (once) |
+|---|---|---|---|
+| **Grounding DINO + SAM 2.1** (default) | Apache-2.0 | Grounding DINO tiny (IDEA Research) turns the prompt into boxes; the bundled SAM 2.1 outlines each box | ~GD_INT8 MB (int8) from this project's GitHub release `grounding-dino-tiny-onnx-v1`; `WISSI_GROUNDING_MODEL=fp32` for the float32 file (GD_FP32 MB) |
+| **SAM 3** (opt-in) | SAM License (Meta) | finds and outlines every instance of the named concept in one model | ~1.3 GB (int8) from release `sam3-onnx-v1`, **only after you accept the SAM License** in the app |
+
+Both run on ONNX Runtime (no PyTorch). Grounding DINO was trained on natural images: on slides it knows cells,
+nuclei, glands, vessels, fat and folds better than pathology terms, so a few picked examples help it. SAM 3 understands
+open-vocabulary concepts much better, but it is large (~848M parameters; several seconds per tile on a CPU).
+
+**Where the files come from.** Grounding DINO: the ONNX export published by onnx-community on Hugging Face, mirrored
+by `.github/workflows/grounding-onnx.yml` (`scripts/build_grounding_onnx.py`), which quantizes the matrix
+multiplications to int8 and checks wissi-viz's own tokenizer, resizing and post-processing against the original
+PyTorch model in `transformers` (the release's `check.json`: GD_CHECK). SAM 3: exported from Meta's official gated
+checkpoint by `.github/workflows/sam3-onnx.yml` (`scripts/export_sam3_onnx.py`, with samexporter, MIT), quantized to
+int8 and checked against Meta's `Sam3Processor`. That workflow needs a repository secret `HF_TOKEN` from a Hugging
+Face account granted access to [facebook/sam3](https://huggingface.co/facebook/sam3); you can also run the script
+yourself and set `WISSI_SAM3_DIR`.
+
+**SAM 3's licence.** The SAM License lets you use, change and share SAM 3 (commercially too), but anything shared
+must carry a copy of the licence, publications must acknowledge SAM 3, and it may not be used for military, warfare,
+nuclear, espionage or weapons purposes or against trade controls. wissi-viz therefore never ships SAM 3: the app
+shows the licence (`models/SAM-License.txt`) and records your acceptance in the user config folder
+(`licenses.json`); `WISSI_SAM3_ACCEPT_LICENSE=1` does the same for servers and scripts.
+
+```python
+from wissi_viz import findall, sam3
+
+findall.find_by_text(registry, 'case1', prompt='nucleus. gland', scope={'kind': 'view', 'rect': [0, 0, 4000, 4000]},
+                     object_um=8, strictness=0.5)       # Grounding DINO + SAM 2.1
+sam3.accept()                                            # you agree to the SAM License
+findall.find_by_text(registry, 'case1', prompt='blood vessel', model='sam3', object_um=30)
+```
+
+| Environment | |
+|---|---|
+| `WISSI_GROUNDING_MODEL` | `int8` (default) · `fp32` |
+| `WISSI_GROUNDING_DIR` · `WISSI_SAM3_DIR` | files you already have (offline machines): `model.onnx` + `vocab.txt`; the three `sam3_*.onnx` + `bpe_simple_vocab_16e6.txt.gz` |
+| `WISSI_GROUNDING_DEVICE` · `WISSI_SAM3_DEVICE` | auto · cuda · dml · cpu |
+| `WISSI_SAM3_ACCEPT_LICENSE` | `1`: accept the SAM License without the app |
+
+Endpoints: `POST …/slides/{id}/find` with `{mode: 'text', prompt, model: 'grounding' | 'sam3', object_um, scope,
+strictness, examples}`; `GET {prefix}/models/sam3/license` (text, accepted, downloaded) and `POST` `{accept: true |
+false}` (an edit: off with `allow_edit=False`). Model downloads go to GitHub, which most corporate networks allow;
+behind HTTPS inspection use `--system-certs` (§13).
 
 ## 16. Measuring regions and objects
 
@@ -823,10 +876,10 @@ Add your own with the `@analysis(key, name, group, description, params)` decorat
 | `GET …/annotations/feature/{i}?layer=…&pct=1` | one object, plus each measurement's percentile within its layer |
 | `POST …/annotations/style` `{layer, color_by, cmap}` | colour a layer by a numeric column (`null`: back to classes) |
 | `DELETE …/annotations?layer=…` | remove a layer from the slide |
-| `POST …/slides/{id}/find` `{mode, examples, candidates, training, scope, strictness, object_um, detail}` | find all like the examples (§12), in the background → the job; `mode`: `objects` · `segment` · `areas`; `examples`: `{layer, classes, picks: [{layer, index, neg}]}`; `scope`: `{kind: view, rect}` · `{kind: region, layer}` · `{kind: slide}` |
+| `POST …/slides/{id}/find` `{mode, examples, candidates, training, scope, strictness, object_um, detail, prompt, model}` | find all like the examples or by name (§12, §15), in the background → the job; `mode`: `objects` · `segment` · `areas` · `text`; `examples`: `{layer, classes, picks: [{layer, index, neg}]}`; `scope`: `{kind: view, rect}` · `{kind: region, layer}` · `{kind: slide}` |
 | `GET {prefix}/jobs/{job}` · `POST …/jobs/{job}/cancel` · `GET …/slides/{id}/jobs` | a background job: state, progress, message, error, result |
 | `POST …/slides/{id}/find/threshold` `{result, strictness}` | re-filter a finished result without measuring again |
-| `GET {prefix}/find/capabilities` | the SAM backend, and whether areas (scikit-learn) are available |
+| `GET {prefix}/find/capabilities` | the SAM backend, whether areas (scikit-learn) are available, and the text models (downloaded, SAM 3 licence accepted) |
 | `GET …/slides/{id}/histogram?rect=x0,y0,x1,y1` | per-channel (or R, G, B) histograms and 0.1 / 1 / 50 / 99 / 99.9 % percentiles; zero (unscanned) pixels counted apart |
 
 Styling, removing, adding annotations, running analyses and finding are edits: `create_router(..., allow_edit=False)`

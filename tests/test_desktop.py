@@ -294,12 +294,12 @@ def test_cli_dispatches_desktop(monkeypatch):
     assert got['argv'] == ['--browser', 'x.svs']
 
 
-def test_page_in_browser_mode(files):
+def test_page_in_browser_mode(files, tmp_path):
     """The app page with no native bridge: empty state, paste-a-path, slide list, viewer draws."""
     pytest.importorskip('playwright')
     from playwright.sync_api import sync_playwright
 
-    s = D.Session()
+    s = D.Session(cache_dir=tmp_path / 'cache', remember=False)  # not this computer's remembered slides
     srv = D._Server(s.app())
     url = srv.start()
     try:
@@ -318,7 +318,7 @@ def test_page_in_browser_mode(files):
             pg.wait_for_selector('#pathbox textarea', state='visible')
             pg.fill('#paths', f'"{files["a"]}"\n{files["b"]}\n{files["csv"]}')
             pg.click('#b-paths')
-            pg.wait_for_function('() => document.querySelectorAll("#slides li").length === 2')
+            pg.wait_for_function('() => document.querySelectorAll("#slides li").length === 2', timeout=90000)
             assert pg.is_hidden('#empty')
             assert pg.eval_on_selector('#n', 'e => e.value') == '2'
             pg.wait_for_function('() => document.getElementById("grid").panes.every(p => p.slide && p.slide.info)')

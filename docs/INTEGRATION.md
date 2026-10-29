@@ -825,9 +825,15 @@ shows the licence (`models/SAM-License.txt`) and records your acceptance in the 
 ```python
 from wissi_viz import findall, sam3
 
-findall.find_by_text(registry, 'case1', prompt='nucleus. gland', scope={'kind': 'view', 'rect': [0, 0, 4000, 4000]},
-                     object_um=8, strictness=0.5)       # Grounding DINO + SAM 2.1
-sam3.accept()                                            # you agree to the SAM License
+findall.find_by_text(
+    registry,
+    'case1',
+    prompt='nucleus. gland',
+    scope={'kind': 'view', 'rect': [0, 0, 4000, 4000]},
+    object_um=8,
+    strictness=0.5,
+)  # Grounding DINO + SAM 2.1
+sam3.accept()  # you agree to the SAM License
 findall.find_by_text(registry, 'case1', prompt='blood vessel', model='sam3', object_um=30)
 ```
 

@@ -180,7 +180,12 @@ class Session:
                 errors.append(f'{p.name}: open a slide first, then add cells / annotations to it')
                 continue
             try:
-                layers.append({'slide': target, 'layer': self.add_layer(target, p)})
+                name = self.add_layer(target, p)
+                layers.append({'slide': target, 'layer': name})
+                n = getattr(self.registry.layer(target, name), 'skipped', 0)
+                if n:
+                    errors.append(f'{p.name}: {n} invalid shape{"s" if n > 1 else ""} left out (missing or NaN '
+                                  'coordinates, or too few points); the rest is shown')  # fmt: skip
             except Exception as e:  # noqa: BLE001  (reported to the user per file)
                 errors.append(f'{p.name}: {e}')
         self._remember([self._paths[s] for s in opened] + [str(p) for p in extras])

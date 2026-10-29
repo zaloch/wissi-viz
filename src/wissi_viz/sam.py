@@ -368,7 +368,7 @@ class SamService:
         x0, y0 = max(0.0, x0), max(0.0, y0)
         x1, y1 = min(float(info.width), x1), min(float(info.height), y1)
         if x1 - x0 < 2 or y1 - y0 < 2:
-            raise ValueError('empty region')
+            raise ValueError('nothing to segment here: the view is outside the slide, or the slide is too small')
         want = max(x1 - x0, y1 - y0) / self.size
         lv = 0
         for i, L in enumerate(info.levels):

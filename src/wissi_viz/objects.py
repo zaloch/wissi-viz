@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -41,6 +42,8 @@ from .annotations import (
     _norm_col,
     _ring,
 )
+
+log = logging.getLogger(__name__)
 
 _UM = re.compile(r'(µm|μm|\bum\b|micron)', re.I)
 
@@ -255,6 +258,24 @@ def _norm_labels(values) -> np.ndarray:
         )
 
 
+def _numeric(v) -> np.ndarray:
+    """A column as float64: numbers as they are; text parsed, with blanks and non-numbers as NaN."""
+    a = np.asarray(v)
+    if a.dtype.kind in 'biuf':
+        return a.astype(np.float64)
+    try:
+        return a.astype(np.float64)  # text that is all numbers ('nan' included)
+    except (TypeError, ValueError):
+        pass
+    out = np.full(len(a), np.nan)
+    for i, x in enumerate(a.tolist()):
+        try:
+            out[i] = float(x)
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
 # ============================================================================= readers
 def from_table(
     table: Any,
@@ -330,11 +351,20 @@ def from_table(
     ox, oy = offset
     bbox = None
     if has_box:
-        bbox = np.stack([np.asarray(cols[k], np.float64) for k in (bx0, by0, bx1, by1)], 1) * s + [ox, oy, ox, oy]
+        bbox = np.stack([_numeric(cols[k]) for k in (bx0, by0, bx1, by1)], 1) * s + [ox, oy, ox, oy]
     if cx is not None:
-        X, Y = np.asarray(cols[cx], np.float64) * s + ox, np.asarray(cols[cy], np.float64) * s + oy
+        X, Y = _numeric(cols[cx]) * s + ox, _numeric(cols[cy]) * s + oy
     else:
         X, Y = (bbox[:, 0] + bbox[:, 2]) / 2, (bbox[:, 1] + bbox[:, 3]) / 2
+    ok = np.isfinite(X) & np.isfinite(Y)  # rows without a position (blank, text, NaN) are left out
+    if bbox is not None:
+        ok &= np.isfinite(bbox).all(1)
+    if not ok.all():
+        keep = np.nonzero(ok)[0]
+        X, Y = X[keep], Y[keep]
+        bbox = bbox[keep] if bbox is not None else None
+        cols = {k: np.asarray(v)[keep] for k, v in cols.items()}
+        log.warning('%s: %d row(s) without a valid position left out', name, int((~ok).sum()))
     ccol = pick(
         class_column,
         'Classification',

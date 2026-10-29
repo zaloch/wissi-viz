@@ -21,6 +21,7 @@ import tempfile
 import threading
 from collections import OrderedDict
 from pathlib import Path
+from urllib.parse import quote
 
 import anyio
 import numpy as np
@@ -422,7 +423,7 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
             return Response(
                 df.to_csv(index=False),
                 media_type='text/csv',
-                headers=hdrs('no-cache', {'Content-Disposition': f'attachment; filename="{filename}.csv"'}),
+                headers=hdrs('no-cache', {'Content-Disposition': _attachment(f'{filename}.csv')}),
             )
         if fmt == 'parquet':
             buf = io.BytesIO()
@@ -430,7 +431,7 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
             return Response(
                 buf.getvalue(),
                 media_type='application/vnd.apache.parquet',
-                headers=hdrs('no-cache', {'Content-Disposition': f'attachment; filename="{filename}.parquet"'}),
+                headers=hdrs('no-cache', {'Content-Disposition': _attachment(f'{filename}.parquet')}),
             )
         rows = [
             [None if isinstance(v, float) and not math.isfinite(v) else _jsonable(v) for v in r]
@@ -647,6 +648,13 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
         return JSONResponse([j.to_dict() for j in jobs.list(sid)], headers=hdrs('no-cache'))
 
     return r
+
+
+def _attachment(name: str) -> str:
+    """Content-Disposition for a download named ``name``: an ASCII fallback plus the UTF-8 name (RFC 6266), so
+    slides called 'Präparat 1' download as such (a raw non-ASCII header breaks the response)."""
+    ascii_name = name.encode('ascii', 'replace').decode().replace('?', '_').replace('"', '')
+    return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(name)}'
 
 
 def _findall():

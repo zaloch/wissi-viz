@@ -105,6 +105,8 @@ class AnnotationLayer:
     mpp: float | None = None
 
     def __post_init__(self) -> None:
+        #: shapes left out while importing because they were invalid (NaN coordinates, < 3 points, …)
+        self.skipped = 0
         self._lock = threading.RLock()
         self._kinds: list[int] = []
         self._cls: list[int] = []
@@ -131,7 +133,7 @@ class AnnotationLayer:
 
     # ------------------------------------------------------------- building
     def _class_id(self, cls: str | None, color: str | None = None) -> int:
-        cls = cls or (color or 'default')
+        cls = str(cls) if cls not in (None, '') else (color or 'default')  # numbers as names: '7'
         if cls not in self._class_index:
             self._class_index[cls] = len(self._class_index)
             if cls not in self.classes:
@@ -149,6 +151,7 @@ class AnnotationLayer:
         props: dict | None,
         radius: float = 0.0,
     ) -> int:
+        _check_rings(kind, rings)
         with self._lock:
             self._materialize()
             if color and not cls:
@@ -210,6 +213,15 @@ class AnnotationLayer:
     def _bulk_shapes(self, kind: Any, bb: Any, classes: Sequence[str | None] | None) -> None:
         """Bulk points / ellipses / rects given by bounding boxes (n, 4) = x0, y0, x1, y1, stored columnar."""
         bb = np.ascontiguousarray(np.asarray(bb, np.float32).reshape(-1, 4))
+        fin = np.isfinite(bb).all(1)
+        if not fin.all():  # objects without a valid position are left out
+            self.skipped += int((~fin).sum())
+            keep = np.nonzero(fin)[0]
+            bb = bb[keep]
+            if classes is not None:
+                classes = [classes[i] for i in keep]
+            if not np.isscalar(kind) and np.ndim(kind):
+                kind = np.asarray(kind)[keep]
         n = len(bb)
         with self._lock:
             if (
@@ -501,6 +513,21 @@ class AnnotationLayer:
         return cls.from_geojson(data, name=name, **kw)
 
     def _bulk(self, kind, rings, classes, radius, props) -> None:
+        ok = []
+        for i, r in enumerate(rings):
+            try:
+                if not np.isfinite(r).all():
+                    raise ValueError
+                _check_rings(kind, [r])
+                ok.append(i)
+            except ValueError:
+                pass
+        if len(ok) < len(rings):  # invalid shapes (NaN, too few points) are left out, not fatal
+            self.skipped += len(rings) - len(ok)
+            rings = [rings[i] for i in ok]
+            classes = [classes[i] for i in ok]
+            radius = None if radius is None else np.asarray(radius)[ok]
+            props = None if props is None else [props[i] for i in ok]
         with self._lock:
             n = len(rings)
             uniq: dict[str, int] = {}
@@ -539,7 +566,11 @@ class AnnotationLayer:
                 continue
             props = f.get('properties') or {}
             cname, color = _class_from_props(props)
-            _add_geometry(layer, geom, cname, color, props or None)
+            try:
+                _add_geometry(layer, geom, cname, color, props or None)
+            except (ValueError, TypeError, IndexError, KeyError):  # one malformed feature: leave it out
+                layer.skipped += 1
+        _report_skipped(layer)
         return layer
 
     @classmethod
@@ -1024,6 +1055,8 @@ class _Compiled:
         self._lock = threading.Lock()
         if n == 0:
             self.bb = np.zeros((0, 4), np.float32)
+            self.size = self.cx = self.cy = np.zeros(0, np.float32)
+            self.nverts = np.zeros(0, np.int64)
             self.order = np.zeros(0, np.int64)
             self.buckets = []
             self.bbox = [0, 0, 0, 0]
@@ -1072,7 +1105,7 @@ class _Compiled:
                     depth=0,
                     out=groups,
                 )
-        self.order = np.concatenate(groups)
+        self.order = np.concatenate(groups) if groups else np.zeros(0, np.int64)
         self.buckets = []
         start = 0
         for g in groups:
@@ -1526,21 +1559,28 @@ def _add_regions(layer: AnnotationLayer, regions: list, aname: str, color) -> No
                 continue
         rest.append(i)
     for i in rest:
-        kind, v, props, neg = regions[i]
-        cname = aname + (' (negative)' if neg else '')
-        (x0, y0), (x1, y1) = v.min(0), v.max(0)
-        if kind == 'ellipse':
-            layer.add_ellipse(
-                (x0 + x1) / 2, (y0 + y1) / 2, (x1 - x0) / 2, (y1 - y0) / 2, cls=cname, color=color, props=props
-            )
-        elif kind == 'rect':
-            layer.add_rect(x0, y0, x1 - x0, y1 - y0, cls=cname, color=color, props=props)
-        elif kind == 'line':
-            layer.add_polyline(v, cls=cname, color=color, props=props)
-        elif kind == 'point':
-            layer.add_point(*v[0], cls=cname, color=color, props=props)
-        else:
-            layer.add_polygon(v, holes=holes.get(i, ()), cls=cname, color=color, props=props)
+        try:
+            _add_region(layer, regions, holes, i, aname, color)
+        except (ValueError, TypeError, IndexError):  # one malformed region: leave it out
+            layer.skipped += 1
+
+
+def _add_region(layer: AnnotationLayer, regions: list, holes: dict, i: int, aname: str, color) -> None:
+    kind, v, props, neg = regions[i]
+    cname = aname + (' (negative)' if neg else '')
+    (x0, y0), (x1, y1) = v.min(0), v.max(0)
+    if kind == 'ellipse':
+        layer.add_ellipse(
+            (x0 + x1) / 2, (y0 + y1) / 2, (x1 - x0) / 2, (y1 - y0) / 2, cls=cname, color=color, props=props
+        )
+    elif kind == 'rect':
+        layer.add_rect(x0, y0, x1 - x0, y1 - y0, cls=cname, color=color, props=props)
+    elif kind == 'line':
+        layer.add_polyline(v, cls=cname, color=color, props=props)
+    elif kind == 'point':
+        layer.add_point(*v[0], cls=cname, color=color, props=props)
+    else:
+        layer.add_polygon(v, holes=holes.get(i, ()), cls=cname, color=color, props=props)
 
 
 def _point_in_ring(pt, ring) -> bool:
@@ -1570,12 +1610,27 @@ def _pack(meta: dict, arrays: list[np.ndarray]) -> bytes:
 
 # ---------------------------------------------------------------- helpers
 def _ring(coords: Any, closed: bool) -> np.ndarray:
-    a = np.asarray(coords, np.float32).reshape(-1, 2)
+    try:
+        a = np.asarray(coords, np.float32).reshape(-1, 2)
+    except (TypeError, ValueError) as e:
+        raise ValueError(f'malformed coordinates ({e})') from e
     if len(a) == 0:
         raise ValueError('empty geometry')
+    if not np.isfinite(a).all():
+        raise ValueError('non-finite coordinates (NaN or infinity)')
     if closed and len(a) > 2 and np.array_equal(a[0], a[-1]):
         a = a[:-1]
     return a
+
+
+def _check_rings(kind: int, rings: Sequence[np.ndarray]) -> None:
+    """A polygon needs 3 distinct corners (holes too), a line 2 points; raises ValueError otherwise."""
+    if kind == POLYGON:
+        for r in rings:
+            if len(r) < 3 or len(np.unique(r, axis=0)) < 3:
+                raise ValueError('a polygon needs at least 3 distinct points')
+    elif kind == POLYLINE and len(rings[0]) < 2:
+        raise ValueError('a line needs at least 2 points')
 
 
 def _broadcast(v, n):
@@ -1632,8 +1687,18 @@ def _add_geometry(layer: AnnotationLayer, g: dict, cname, color, props) -> None:
             _add_geometry(layer, sub, cname, color, props)
 
 
+def _report_skipped(layer: AnnotationLayer) -> None:
+    if layer.skipped:
+        logging.getLogger('wissi_viz').warning('%s: %d invalid shape(s) left out', layer.name, layer.skipped)
+
+
 def _load_json(p: Path):
-    return json.loads(p.read_bytes())
+    try:
+        return json.loads(p.read_bytes())
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f'not valid JSON ({e.msg} at line {e.lineno}, column {e.colno}): a truncated or damaged file?'
+        ) from e
 
 
 def discover_sidecars(slide_path: Path) -> list[AnnotationLayer]:

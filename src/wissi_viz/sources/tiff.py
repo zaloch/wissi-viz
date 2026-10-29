@@ -6,6 +6,7 @@ thread gets its own file handle so tile decoding runs in parallel across cores.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import threading
@@ -35,8 +36,14 @@ class TiffSource(SlideSource):
         st = self.path.stat()
         self.version = f'{int(st.st_mtime)}-{st.st_size}'
 
-        with tifffile.TiffFile(self.path) as tf:
+        with _tiff_warnings() as said, tifffile.TiffFile(self.path) as tf:
             s = tf.series[series]
+            if any('invalid page offset' in m or 'truncated' in m for m in said):  # the chain of images stops early
+                raise DamagedFile(
+                    f'{self.path.name} is truncated or damaged: its list of images stops early (an interrupted copy or '
+                    'download?)'
+                )
+            _check_complete(tf, s, st.st_size, self.path.name)
             level_shapes = [lv.shape for lv in s.levels]
             axes = s.axes
             mpp = _mpp_from_tiff(tf)
@@ -173,29 +180,53 @@ class TiffSource(SlideSource):
             try:
                 out = self._read_fast(page, x, y, w, h)
                 if self._rgb:
-                    return out[..., :3].astype(np.uint8, copy=False)
-                out = out[..., 0]
-                return out if out.dtype in (np.uint8, np.uint16) else np.clip(out, 0, 65535).astype(np.uint16)
+                    return _rgb8(out[..., :3])
+                return self._u16(out[..., 0])
             except Exception:  # noqa: BLE001
                 self._fast = False  # anything unexpected → the general zarr path from now on
         return self._read_zarr(level, x, y, w, h, channel)
 
-    def _read_zarr(self, level, x, y, w, h, channel=None):
+    def _read_zarr(self, level, x, y, w, h, channel=None, step: int = 1, raw: bool = False):
         a = self._arrays()[level]
         sl = [slice(None)] * a.ndim
-        sl[self._yi] = slice(y, y + h)
-        sl[self._xi] = slice(x, x + w)
+        sl[self._yi] = slice(y, y + h, step)
+        sl[self._xi] = slice(x, x + w, step)
         for i, ax in enumerate(self._axes):
             if ax not in 'YXC':
                 sl[i] = 0  # first Z/T plane
         if not self._rgb and self._ci is not None:
             sl[self._ci] = channel or 0
         out = np.asarray(a[tuple(sl)])
+        if raw:
+            return out
         if self._rgb:
-            return out[..., :3].astype(np.uint8, copy=False)
-        if out.dtype not in (np.uint8, np.uint16):
-            out = np.clip(out, 0, 65535).astype(np.uint16)
-        return out
+            return _rgb8(out[..., :3])
+        return self._u16(out)
+
+    def _u16(self, out: np.ndarray) -> np.ndarray:
+        """Channel data as the viewer takes it (8 / 16 bit). Other types (float, 32-bit) are mapped linearly from
+        the slide's value range (zero stays zero for non-negative data) onto 0…65535; NaN becomes 0."""
+        if out.dtype in (np.uint8, np.uint16):
+            return out
+        lo, hi = self._value_range()
+        f = (np.nan_to_num(out.astype(np.float64), nan=lo, posinf=hi, neginf=lo) - lo) * (65535.0 / max(hi - lo, 1e-12))
+        return np.clip(f, 0, 65535).astype(np.uint16)
+
+    def _value_range(self) -> tuple[float, float]:
+        if getattr(self, '_vrange', None) is None:
+            lv = len(self.info.levels) - 1
+            L = self.info.levels[lv]
+            step = max(1, int(np.sqrt(L.width * L.height / 1e6)))  # ≤ ~1 Mpx per channel
+            vals = []
+            for c in range(max(1, len(self.info.channels))):
+                a = self._read_zarr(lv, 0, 0, L.width, L.height, c, step=step, raw=True).astype(np.float64)
+                vals.append(a[np.isfinite(a)])
+            v = np.concatenate(vals) if vals else np.zeros(1)
+            lo, hi = (float(v.min()), float(v.max())) if v.size else (0.0, 1.0)
+            if lo >= 0:
+                lo = 0.0
+            self._vrange = (lo, hi if hi > lo else lo + 1.0)
+        return self._vrange
 
     def read_tile(self, level, tx, ty, channel=None):
         # thread-local handles: no global lock needed
@@ -210,6 +241,53 @@ class TiffSource(SlideSource):
             for tf in self._handles:
                 tf.close()
             self._handles.clear()
+
+
+class DamagedFile(ValueError):
+    """The file is a slide format, but broken (truncated, corrupt): no other reader should be tried."""
+
+
+class _tiff_warnings:
+    """Collect what tifffile logs while a file is opened (it logs, rather than raises, for a broken page chain)."""
+
+    def __enter__(self) -> list[str]:
+        self.msgs: list[str] = []
+        self.handler = logging.Handler()
+        self.handler.emit = lambda rec: self.msgs.append(rec.getMessage())
+        self.log = logging.getLogger('tifffile')
+        self.log.addHandler(self.handler)
+        return self.msgs
+
+    def __exit__(self, *exc) -> bool:
+        self.log.removeHandler(self.handler)
+        return False
+
+
+def _rgb8(a: np.ndarray) -> np.ndarray:
+    """RGB as 8 bit: 16-bit scaled (not wrapped), floats taken as 0…1."""
+    if a.dtype == np.uint8:
+        return a
+    if a.dtype == np.uint16:
+        return (a >> 8).astype(np.uint8)
+    if a.dtype.kind == 'f':
+        return (np.clip(np.nan_to_num(a), 0, 1) * 255 + 0.5).astype(np.uint8)
+    return np.clip(a, 0, 255).astype(np.uint8)
+
+
+def _check_complete(tf, s, size: int, name: str) -> None:
+    """Refuse a truncated file (an interrupted copy or download) at once, rather than as broken tiles later: the
+    image data of every level must lie inside the file."""
+    end = 0
+    for lv in s.levels:
+        for page in lv.pages[:1] or ():
+            offs, counts = getattr(page, 'dataoffsets', ()), getattr(page, 'databytecounts', ())
+            if len(offs) and len(counts):
+                end = max(end, max(int(o) + int(c) for o, c in zip(offs, counts) if c))
+    if end > size:
+        raise DamagedFile(
+            f'{name} is truncated: {size / 2**20:,.1f} MB of at least {end / 2**20:,.1f} MB are there (an interrupted '
+            'copy or download?)'
+        )
 
 
 def _mpp_from_tiff(tf) -> tuple[float, float] | None:

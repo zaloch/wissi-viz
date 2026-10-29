@@ -802,10 +802,12 @@ Both run on ONNX Runtime (no PyTorch). Grounding DINO was trained on natural ima
 nuclei, glands, vessels, fat and folds better than pathology terms, so a few picked examples help it. SAM 3 understands
 open-vocabulary concepts much better, but it is large (~848M parameters; several seconds per tile on a CPU).
 
-**Where the files come from.** Grounding DINO: the ONNX export published by onnx-community on Hugging Face, mirrored
-by `.github/workflows/grounding-onnx.yml` (`scripts/build_grounding_onnx.py`), which quantizes the matrix
-multiplications to int8 and checks wissi-viz's own tokenizer, resizing and post-processing against the original
-PyTorch model in `transformers` (the release's `check.json`: GD_CHECK). SAM 3: exported from Meta's official gated
+**Where the files come from.** Grounding DINO: exported from IDEA Research's weights in `transformers` by
+`.github/workflows/grounding-onnx.yml` (`scripts/build_grounding_onnx.py`), which quantizes the matrix
+multiplications to int8 and checks wissi-viz's own tokenizer, text masks, resizing and post-processing against the
+PyTorch model (the release's `check.json`: GD_CHECK). The graph takes 800 × 800 pixels (tiles are read at that
+size); the caption's per-phrase attention mask is computed by wissi-viz and passed in, since traced into the graph
+it would be frozen to one caption. SAM 3: exported from Meta's official gated
 checkpoint by `.github/workflows/sam3-onnx.yml` (`scripts/export_sam3_onnx.py`, with samexporter, MIT), quantized to
 int8 and checked against Meta's `Sam3Processor`. That workflow needs a repository secret `HF_TOKEN` from a Hugging
 Face account granted access to [facebook/sam3](https://huggingface.co/facebook/sam3); you can also run the script

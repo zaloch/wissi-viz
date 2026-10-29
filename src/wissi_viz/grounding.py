@@ -4,11 +4,12 @@ into boxes; :mod:`wissi_viz.findall` then outlines each box with SAM 2.1.
     det = detector()                                   # downloads the model once (~230 MB, int8)
     boxes, scores, labels = det.detect(rgb, ['nucleus', 'gland'])
 
-Runs on ONNX Runtime (a core dependency): no PyTorch. The model is Grounding DINO tiny (Swin-T + BERT) exported to
-ONNX by the onnx-community project on Hugging Face, mirrored by this project's ``grounding-onnx`` workflow, which
-quantizes the weights to int8 and checks the results against the original PyTorch model in ``transformers``
-(release ``grounding-dino-tiny-onnx-v1``, ``check.json``). ``WISSI_GROUNDING_MODEL=fp32`` uses the float32 file
-(720 MB); ``WISSI_GROUNDING_DIR`` points at files you already have (``model.onnx``, ``vocab.txt``).
+Runs on ONNX Runtime (a core dependency): no PyTorch. The model is Grounding DINO tiny (Swin-T + BERT,
+``IDEA-Research/grounding-dino-tiny``) exported to ONNX from ``transformers`` by this project's ``grounding-onnx``
+workflow, which also quantizes the weights to int8 and checks the results against the PyTorch model (release
+``grounding-dino-tiny-onnx-v1``, ``check.json``). The graph takes 800 × 800 pixels and the caption's text masks.
+``WISSI_GROUNDING_MODEL=fp32`` uses the float32 file; ``WISSI_GROUNDING_DIR`` points at files you already have
+(``model.onnx``, ``vocab.txt``).
 
 The model was trained on natural images: on slides it knows coarse things (cells, nuclei, glands, vessels, fat,
 tissue folds) better than pathology terms. Pick a few examples as well to keep only those like them.
@@ -104,6 +105,27 @@ class WordPiece:
 
     def encode(self, text: str) -> list[int]:
         return [i for w in self.basic(text) for i in self.word(w)]
+
+
+def text_masks(tok: WordPiece, ids: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Grounding DINO's per-phrase text attention and position ids (``[CLS] a b . c . [SEP]``: each phrase attends
+    only to itself, positions restart at each phrase), as ``generate_masks_with_special_tokens_and_transfer_map`` in
+    transformers. Computed here, not in the graph: traced into ONNX it would be frozen to the export's own caption."""
+    special = {tok.cls, tok.sep, tok.ids.get('.', -1), tok.ids.get('?', -1)}
+    row = ids[0]
+    n = len(row)
+    att = np.eye(n, dtype=bool)
+    pos = np.zeros(n, np.int64)
+    prev = 0
+    for col in [i for i, t in enumerate(row) if int(t) in special]:
+        if col == 0 or col == n - 1:
+            att[col, col] = True
+            pos[col] = 0
+        else:
+            att[prev + 1 : col + 1, prev + 1 : col + 1] = True
+            pos[prev + 1 : col + 1] = np.arange(0, col - prev)
+        prev = col
+    return att[None], pos[None]
 
 
 def encode_prompt(tok: WordPiece, names: list[str]) -> tuple[np.ndarray, list[tuple[int, int]]]:
@@ -219,6 +241,8 @@ class GroundingDino:
             'pixel_values': x,
             'pixel_mask': mask,
         }
+        if 'text_self_attention_masks' in self.inputs or 'position_ids' in self.inputs:
+            feed['text_self_attention_masks'], feed['position_ids'] = text_masks(self.tok, ids)
         with self._lock:
             out = dict(zip(self.outputs, self.sess.run(None, {k: v for k, v in feed.items() if k in self.inputs})))
         logits = out.get('logits', next(iter(out.values())))

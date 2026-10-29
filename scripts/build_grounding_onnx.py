@@ -1,16 +1,15 @@
-"""Mirror Grounding DINO tiny (IDEA Research, Apache-2.0) as ONNX for wissi-viz's "find by text", and check it.
+"""Export Grounding DINO tiny (IDEA Research, Apache-2.0) to ONNX for wissi-viz's "find by text", and check it.
 
     pip install torch transformers huggingface_hub onnx onnxruntime scikit-image
     python scripts/build_grounding_onnx.py --out dist/grounding
 
-1. Downloads the ONNX export of ``IDEA-Research/grounding-dino-tiny`` published by onnx-community on Hugging Face
-   (``onnx/model.onnx``, float32), at a recorded revision, and its tokenizer vocabulary.
+1. Exports ``IDEA-Research/grounding-dino-tiny`` from ``transformers`` (float32; 800 × 800 pixels, any caption).
 2. Quantizes the weights of the matrix multiplications to int8 (ONNX Runtime dynamic quantization; convolutions stay
    float32, since int8 convolutions need ONNX Runtime ≥ 1.24 on CPU).
-3. Checks wissi-viz's own pipeline (:mod:`wissi_viz.grounding`: tokenizer, resizing, post-processing) with both
-   files against the original PyTorch model and processor in ``transformers`` on a few pictures and prompts: the
-   same tokens, pixels and boxes on square crops (the export takes 800 × 800, like wissi-viz's tiles), and close
-   boxes on whole pictures (scaled into 800 × 800 and padded, against transformers' own resizing).
+3. Checks wissi-viz's own pipeline (:mod:`wissi_viz.grounding`: tokenizer, text masks, resizing, post-processing)
+   with both files against the PyTorch model and processor in ``transformers`` on a few pictures and prompts: the
+   same tokens, pixels and boxes on square crops (as wissi-viz's tiles), and close boxes on whole pictures (scaled
+   into 800 × 800 and padded, against transformers' own resizing).
 
 Writes ``grounding-dino-tiny-{fp32,int8}.onnx``, ``vocab.txt``, ``NOTICE.txt``, ``check.json`` and ``SHA256SUMS``;
 .github/workflows/grounding-onnx.yml publishes them as the GitHub release ``grounding-dino-tiny-onnx-v1``.
@@ -31,7 +30,6 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 
-ONNX_REPO = 'onnx-community/grounding-dino-tiny-ONNX'
 TORCH_REPO = 'IDEA-Research/grounding-dino-tiny'
 CASES = [  # (scikit-image picture, prompt)
     ('chelsea', 'cat'),
@@ -61,25 +59,67 @@ def _iou(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return inter / np.maximum(area(a)[:, None] + area(b)[None, :] - inter, 1e-9)
 
 
-def fetch(out: Path, revision: str | None) -> dict:
-    from huggingface_hub import HfApi, hf_hub_download
+def export(out: Path, revision: str | None) -> dict:
+    """``IDEA-Research/grounding-dino-tiny`` from transformers → ONNX (float32), 800 × 800 pixels, any caption length.
 
-    info = HfApi().model_info(ONNX_REPO, revision=revision)
-    rev = info.sha
-    onnx_path = hf_hub_download(ONNX_REPO, 'onnx/model.onnx', revision=rev)
-    shutil.copy(onnx_path, out / 'grounding-dino-tiny-fp32.onnx')
-    tj = json.loads(Path(hf_hub_download(ONNX_REPO, 'tokenizer.json', revision=rev)).read_text(encoding='utf-8'))
-    vocab = tj['model']['vocab']
+    transformers builds the caption's per-phrase attention mask and position ids in a Python loop over its special
+    tokens; traced, that loop would freeze them to the export's own caption. So the graph takes them as inputs
+    (``text_self_attention_masks``, ``position_ids``) and wissi-viz computes them (:func:`grounding.text_masks`)."""
+    import torch
+    import transformers.models.grounding_dino.modeling_grounding_dino as M
+    from huggingface_hub import HfApi
+    from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
+
+    rev = HfApi().model_info(TORCH_REPO, revision=revision).sha
+    proc = AutoProcessor.from_pretrained(TORCH_REPO, revision=rev)
+    model = AutoModelForZeroShotObjectDetection.from_pretrained(TORCH_REPO, revision=rev).eval()
+    vocab = proc.tokenizer.get_vocab()
     words = [''] * len(vocab)
     for w, i in vocab.items():
         words[i] = w
     (out / 'vocab.txt').write_text('\n'.join(words) + '\n', encoding='utf-8')
-    for n in ('config.json', 'preprocessor_config.json'):
-        try:
-            shutil.copy(hf_hub_download(ONNX_REPO, n, revision=rev), out / n)
-        except Exception:  # noqa: BLE001
-            pass
-    return {'onnx_repo': ONNX_REPO, 'onnx_revision': rev}
+    orig = M.generate_masks_with_special_tokens_and_transfer_map
+    given: dict = {}
+
+    def from_inputs(input_ids):
+        given['used'] = True
+        return given['att'], given['pos']
+
+    class Wrap(torch.nn.Module):
+        def __init__(self, m):
+            super().__init__()
+            self.m = m
+
+        def forward(self, pixel_values, input_ids, token_type_ids, attention_mask, pixel_mask, text_self_attention_masks,
+                    position_ids):  # fmt: skip
+            given['att'], given['pos'] = text_self_attention_masks, position_ids
+            o = self.m(pixel_values=pixel_values, input_ids=input_ids, token_type_ids=token_type_ids,
+                       attention_mask=attention_mask, pixel_mask=pixel_mask)  # fmt: skip
+            return o.logits, o.pred_boxes
+
+    enc = proc(images=np.zeros((800, 800, 3), np.uint8), text='a cat. a remote control. tree.', return_tensors='pt')
+    att, pos = orig(enc['input_ids'])
+    names = ['pixel_values', 'input_ids', 'token_type_ids', 'attention_mask', 'pixel_mask',
+             'text_self_attention_masks', 'position_ids']  # fmt: skip
+    args = (enc['pixel_values'], enc['input_ids'], enc['token_type_ids'], enc['attention_mask'], enc['pixel_mask'],
+            att, pos)  # fmt: skip
+    seq = {1: 'sequence_length'}
+    M.generate_masks_with_special_tokens_and_transfer_map = from_inputs
+    try:
+        with torch.no_grad():
+            torch.onnx.export(
+                Wrap(model), args, str(out / 'grounding-dino-tiny-fp32.onnx'), input_names=names,
+                output_names=['logits', 'pred_boxes'], opset_version=17, do_constant_folding=True, dynamo=False,
+                dynamic_axes={'input_ids': seq, 'token_type_ids': seq, 'attention_mask': seq, 'position_ids': seq,
+                              'text_self_attention_masks': {1: 'sequence_length', 2: 'sequence_length_2'}},
+            )  # fmt: skip
+    finally:
+        M.generate_masks_with_special_tokens_and_transfer_map = orig
+    if not given.get('used'):
+        raise SystemExit('transformers no longer builds the text masks with generate_masks_…: check the export')
+    import transformers
+
+    return {'model': TORCH_REPO, 'revision': rev, 'transformers': transformers.__version__, 'torch': torch.__version__}
 
 
 def describe(path: Path) -> None:
@@ -112,6 +152,7 @@ def quantize(out: Path) -> None:
 
 def check(out: Path) -> dict:
     import torch
+    import transformers.models.grounding_dino.modeling_grounding_dino as M
     from skimage import data
     from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
 
@@ -178,9 +219,16 @@ def check(out: Path) -> dict:
                 ref_out = model(**ref_in)  # transformers end to end, its own resizing
                 ours_in = {**ref_in, 'pixel_values': torch.from_numpy(px), 'pixel_mask': torch.from_numpy(mask)}
                 torch_ours = model(**ours_in)  # PyTorch on exactly what the ONNX graph gets
-            raw = dict(zip(dets['fp32'].outputs, dets['fp32'].sess.run(
-                None, {k_: v.numpy() for k_, v in ours_in.items() if k_ in dets['fp32'].inputs})))  # fmt: skip
-            case['onnx_vs_torch_logit_max_diff'] = float(np.abs(raw['logits'] - torch_ours.logits.numpy()).max())
+            att, pos = G.text_masks(dets['fp32'].tok, ids)
+            ra, rp = M.generate_masks_with_special_tokens_and_transfer_map(torch.from_numpy(ids))
+            case['same_text_masks'] = bool((ra.numpy() == att).all() and (rp.numpy() == pos).all())
+            feed = {k_: v.numpy() for k_, v in ours_in.items() if k_ in dets['fp32'].inputs}
+            feed.update(text_self_attention_masks=att, position_ids=pos)
+            raw = dict(zip(dets['fp32'].outputs, dets['fp32'].sess.run(None, feed)))
+            sig = lambda x: 1 / (1 + np.exp(-np.clip(np.nan_to_num(x, nan=-80, neginf=-80, posinf=80), -80, 80)))
+            case['onnx_vs_torch_prob_max_diff'] = float(
+                np.abs(sig(raw['logits']) - sig(torch_ours.logits.numpy())).max()
+            )
             case['onnx_vs_torch_box_max_diff'] = float(np.abs(raw['pred_boxes'] - torch_ours.pred_boxes.numpy()).max())
             rb, rs = ref_boxes(ref_in, ref_out, rgb.shape[:2])
             case['reference'] = [[round(float(x), 1) for x in b] + [round(float(sc), 3)] for b, sc in zip(rb, rs)]
@@ -194,7 +242,8 @@ def check(out: Path) -> dict:
     report['summary'] = {
         'tokens_match': all(c['same_tokens'] for c in report['cases']),
         'pixels_max_diff': max(c.get('pixel_max_diff', 0) for c in C),
-        'onnx_vs_torch_logit_max_diff': max(c['onnx_vs_torch_logit_max_diff'] for c in report['cases']),
+        'text_masks_match': all(c['same_text_masks'] for c in report['cases']),
+        'onnx_vs_torch_prob_max_diff': max(c['onnx_vs_torch_prob_max_diff'] for c in report['cases']),
         'fp32_recall': mean(C, 'fp32'),
         'int8_recall': mean(C, 'int8'),
         'fp32_recall_padded': mean(P, 'fp32'),
@@ -211,13 +260,13 @@ def check(out: Path) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--out', default='dist/grounding')
-    ap.add_argument('--revision', default=None, help='onnx-community revision (default: the latest)')
-    ap.add_argument('--step', choices=('fetch', 'quantize', 'check', 'all'), default='all')
+    ap.add_argument('--revision', default=None, help='model revision on Hugging Face (default: the latest)')
+    ap.add_argument('--step', choices=('export', 'quantize', 'check', 'all'), default='all')
     a = ap.parse_args()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    if a.step in ('fetch', 'all'):
-        src = fetch(out, a.revision)
+    if a.step in ('export', 'all'):
+        src = export(out, a.revision)
         (out / 'source.json').write_text(json.dumps(src), encoding='utf-8')
         describe(out / 'grounding-dino-tiny-fp32.onnx')
     if a.step in ('quantize', 'all'):
@@ -233,16 +282,16 @@ def main() -> None:
         'Grounding DINO tiny\n'
         'Copyright (c) 2023 IDEA Research. Licensed under the Apache License, Version 2.0 (LICENSE-Apache-2.0.txt).\n'
         f'Weights: https://huggingface.co/{TORCH_REPO}\n'
-        f'ONNX export: https://huggingface.co/{ONNX_REPO} (revision {src["onnx_revision"]}).\n'
-        'Modified by wissi-viz: grounding-dino-tiny-int8.onnx has the weights of its matrix multiplications quantized '
-        'to 8-bit integers (scripts/build_grounding_onnx.py).\n',
+        f'Revision {src["revision"]}, exported to ONNX by wissi-viz with transformers {src["transformers"]} '
+        '(scripts/build_grounding_onnx.py); grounding-dino-tiny-int8.onnx also has the weights of its matrix '
+        'multiplications quantized to 8-bit integers.\n',
         encoding='utf-8',
     )
     names = sorted(p.name for p in out.iterdir() if p.is_file() and p.name != 'SHA256SUMS')
     (out / 'SHA256SUMS').write_text(''.join(f'{_sha(out / n)}  {n}\n' for n in names), encoding='utf-8')
     print(json.dumps(rep['summary'], indent=1), json.dumps(rep['sizes_mb']))
     s = rep['summary']
-    if not s['tokens_match'] or s['fp32_recall'] < 0.9:
+    if not s['tokens_match'] or not s['text_masks_match'] or s['fp32_recall'] < 0.9:
         raise SystemExit('wissi-viz pipeline does not match transformers: see check.json')
 
 

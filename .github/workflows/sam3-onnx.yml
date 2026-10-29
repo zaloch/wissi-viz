@@ -53,10 +53,12 @@ jobs:
           run uv pip install -e .
       - name: Export, quantize and check
         run: |
-          set -o pipefail
           MIRROR=$([ -n "$HF_TOKEN" ] || echo --mirror)
           uv run --no-sync python scripts/export_sam3_onnx.py --samexporter /mnt/w/samexporter --out /mnt/w/dist \
-            --work /mnt/w/work $MIRROR 2>&1 | tail -80
+            --work /mnt/w/work $MIRROR > /mnt/w/export.log 2>&1 \
+            || { echo "::error::export failed :: $(tail -c 3500 /mnt/w/export.log | tr '\n' ' ')"; exit 1; }
+          tail -80 /mnt/w/export.log
+          echo "::notice::$(grep -E '^ +sam3|MB$|instances' /mnt/w/export.log | head -30 | tr '\n' ' ')"
           echo "::notice::$(uv run --no-sync python -c "import json;r=json.load(open('/mnt/w/dist/check.json'));print(json.dumps({'summary':r.get('summary'),'sizes':r['sizes_mb']}))")"
       - name: Publish release
         env:

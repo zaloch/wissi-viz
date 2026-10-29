@@ -37,7 +37,7 @@ def test_text_masks_per_phrase():
     tok = G.WordPiece(['[PAD]', '[UNK]', '[CLS]', '[SEP]', '.', 'a', 'b', 'c'])
     ids = np.array([[2, 5, 6, 4, 7, 4, 3]])  # [CLS] a b . c . [SEP]
     att, pos = G.text_masks(tok, ids)
-    assert pos.tolist() == [[0, 0, 1, 2, 0, 1, 0]]
+    assert pos.tolist() == [[0, 0, 1, 0, 0, 0, 0]]  # as transformers: words count from 0, full stops are 0
     want = np.eye(7, dtype=bool)
     want[1:4, 1:4] = want[4:6, 4:6] = True
     assert att.shape == (1, 7, 7) and (att[0] == want).all()
@@ -111,7 +111,7 @@ def test_grounding_model_feeds_by_name(tmp_path, monkeypatch):
     b, s, lab = det.detect(np.zeros((100, 200, 3), np.uint8), ['cell'])
     assert seen['input_ids'].tolist() == [[2, 5, 4, 3]] and seen['pixel_values'].shape == (1, 3, 800, 800)
     assert seen['pixel_mask'][0, :400].all() and not seen['pixel_mask'][0, 400:].any()
-    assert seen['position_ids'].tolist() == [[0, 0, 1, 0]] and seen['text_self_attention_masks'].shape == (1, 4, 4)
+    assert seen['position_ids'].tolist() == [[0, 0, 0, 0]] and seen['text_self_attention_masks'].shape == (1, 4, 4)
     assert len(b) == 1 and np.allclose(b[0], [50, 25, 150, 75])  # relative to the picture, not the padding
 
 

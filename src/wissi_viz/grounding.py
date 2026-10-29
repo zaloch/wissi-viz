@@ -109,8 +109,8 @@ class WordPiece:
 
 def text_masks(tok: WordPiece, ids: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Grounding DINO's per-phrase text attention and position ids (``[CLS] a b . c . [SEP]``: each phrase attends
-    only to itself, positions restart at each phrase), as ``generate_masks_with_special_tokens_and_transfer_map`` in
-    transformers. Computed here, not in the graph: traced into ONNX it would be frozen to the export's own caption."""
+    only to itself (with its full stop), word positions restart at each phrase), as transformers'
+    ``generate_masks_with_special_tokens_and_transfer_map``. Computed here, not in the graph: traced into ONNX it would be frozen to the export's own caption."""
     special = {tok.cls, tok.sep, tok.ids.get('.', -1), tok.ids.get('?', -1)}
     row = ids[0]
     n = len(row)
@@ -123,7 +123,7 @@ def text_masks(tok: WordPiece, ids: np.ndarray) -> tuple[np.ndarray, np.ndarray]
             pos[col] = 0
         else:
             att[prev + 1 : col + 1, prev + 1 : col + 1] = True
-            pos[prev + 1 : col + 1] = np.arange(0, col - prev)
+            pos[prev + 1 : col] = np.arange(0, col - prev - 1)  # the phrase's words; its '.' stays at 0
         prev = col
     return att[None], pos[None]
 

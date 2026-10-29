@@ -57,7 +57,9 @@ def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     render(512).save(OUT / 'icon.png', optimize=True)
     big = render()
-    big.save(OUT / 'icon.ico', sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+    # bitmaps, not PNG: Windows' taskbar and shell read PNG-compressed icon entries only at 256 px (blank otherwise)
+    big.save(OUT / 'icon.ico', sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)],
+             bitmap_format='bmp')  # fmt: skip
     big.save(OUT / 'icon.icns')
     (OUT / 'icon.svg').write_text(svg(), encoding='utf-8')
     for path in sorted(OUT.glob('icon.*')):

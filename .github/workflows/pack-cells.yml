@@ -31,9 +31,11 @@ jobs:
           uv venv -p 3.12 -q
           uv pip install -q -e ".[demo]"
       - name: Download, prepare, segment (shard ${{ matrix.shard }} of 4)
+        shell: bash
         run: |
-          uv run --no-sync python - <<'PY'
-          import time
+          rc=0
+          uv run --no-sync python - > /tmp/log.txt 2>&1 <<'PY' || rc=$?
+          import time, traceback
           from wissi_viz import pack
           sel = pack.items('full')[${{ matrix.shard }}::4]
           d = pack.pack_dir('/mnt/pack')
@@ -41,9 +43,20 @@ jobs:
           t0 = time.time()
           pack.download(sel, d)
           pack.prepare(sel, d)
-          pack.segment(sel, d, model='auto')
-          print(f'::notice::shard ${{ matrix.shard }}: {len(sel)} images in {(time.time() - t0) / 60:.0f} min', flush=True)
+          failed = []
+          for x in sel:  # one at a time: a slide that fails is reported, the others still get their cells
+              try:
+                  pack.segment([x], d, model='auto')
+              except BaseException as e:
+                  failed.append(x['id'])
+                  print(f'::error::{x["id"]}: {type(e).__name__}: {str(e)[:500]} :: '
+                        + ' | '.join(traceback.format_exc().strip().splitlines()[-4:])[:1500], flush=True)
+          print(f'::notice::shard ${{ matrix.shard }}: {len(sel) - len(failed)} of {len(sel)} images in '
+                f'{(time.time() - t0) / 60:.0f} min', flush=True)
           PY
+          grep -v '^::' /tmp/log.txt | tail -30
+          grep '^::' /tmp/log.txt || true
+          if [ $rc -ne 0 ]; then echo "::error::$(grep -v '^::' /tmp/log.txt | tail -6 | tr '\n' ' ' | cut -c1-2500)"; exit 1; fi
           ls -la /mnt/pack/layers
       - uses: actions/upload-artifact@v4
         with:

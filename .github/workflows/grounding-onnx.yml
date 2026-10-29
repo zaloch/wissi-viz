@@ -35,7 +35,7 @@ jobs:
             echo "::notice::$1: exit $rc, peak $((mem / 1024)) MB"
             if [ $rc -ne 0 ]; then
               grep -v -E "unauthenticated|pci_bus_id|pre-processing before quantization" /tmp/out.txt > /tmp/err.txt || true
-              grep -E '^(SUMMARY|CASE)' /tmp/err.txt | tail -9 | cut -c1-1500 | sed 's/^/::notice::/' || true
+              grep -E '^(SUMMARY|CASE|MASKS)' /tmp/err.txt | tail -9 | cut -c1-1500 | sed 's/^/::notice::/' || true
               echo "::error::$(tail -3 /tmp/err.txt | tr '\n' ' ' | cut -c1-3000)"
               grep -E "^  File|Error|error" /tmp/err.txt | tail -9 | cut -c1-600 | sed 's/^/::warning::/'
               sudo dmesg 2>/dev/null | grep -i -E "killed process|out of memory" | tail -3 | sed 's/^/::error::/'

@@ -257,7 +257,14 @@ def check(out: Path) -> dict:
                 torch_ours = model(**ours_in)  # PyTorch on exactly what the ONNX graph gets
             att, pos = G.text_masks(dets['fp32'].tok, ids)
             ra, rp = M.generate_masks_with_special_tokens_and_transfer_map(torch.from_numpy(ids))
-            case['same_text_masks'] = bool((ra.numpy() == att).all() and (rp.numpy() == pos).all())
+            case['same_text_masks'] = bool(
+                ra.shape == att.shape and (ra.numpy() == att).all() and (rp.numpy() == pos).all()
+            )
+            if not case['same_text_masks']:
+                ran = ra.numpy()
+                print(f'MASKS {pic}: ids {ids[0].tolist()} · torch {ran.dtype} {list(ran.shape)} pos {rp.numpy().tolist()} '
+                      f'· ours pos {pos.tolist()} · torch rows {[np.nonzero(r)[0].tolist() for r in ran.reshape(-1, ran.shape[-1])[:8]]} '
+                      f'· ours rows {[np.nonzero(r)[0].tolist() for r in att[0][:8]]}', flush=True)  # fmt: skip
             feed = {k_: v.numpy() for k_, v in ours_in.items() if k_ in dets['fp32'].inputs}
             feed.update(text_self_attention_masks=att, position_ids=pos)
             raw = dict(zip(dets['fp32'].outputs, dets['fp32'].sess.run(None, feed)))

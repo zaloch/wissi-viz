@@ -176,7 +176,10 @@ def _sigmoid(x):
 def postprocess(raw: dict, size: tuple[int, int], min_score: float, max_n: int = 300):
     """Decoder heads → (boxes xyxy px, scores, masks (n, h, w) bool) above ``min_score``, best first. The score is
     the query's probability times the presence probability (as Meta's ``Sam3Processor``); masks are resized only for
-    the queries kept."""
+    the queries kept. Older exports (the decoder graph holds ``Sam3Processor``'s post-processing, outputs
+    ``boxes, scores, masks``, already filtered at 0.5) are read as they are."""
+    if 'pred_logits' not in raw and 'scores' in raw:
+        return _processed(raw, size, min_score, max_n)
     logits = np.asarray(raw['pred_logits'], np.float32).reshape(-1)
     presence = float(_sigmoid(np.asarray(raw['presence_logit_dec'], np.float32).reshape(-1)[0]))
     scores = _sigmoid(logits) * presence
@@ -192,6 +195,24 @@ def postprocess(raw: dict, size: tuple[int, int], min_score: float, max_n: int =
     for i, m in enumerate(pm):
         masks[i] = np.asarray(Image.fromarray(m).resize((w, h), Image.BILINEAR)) > 0  # sigmoid > 0.5
     return boxes.astype(np.float32), scores[keep].astype(np.float32), masks
+
+
+def _processed(raw: dict, size: tuple[int, int], min_score: float, max_n: int):
+    """Outputs of a decoder with the processor inside: boxes xyxy px, scores, masks (n, 1, h, w) at the input size."""
+    h, w = size
+    scores = np.asarray(raw['scores'], np.float32).reshape(-1)
+    boxes = np.asarray(raw['boxes'], np.float32).reshape(-1, 4)
+    pm = np.asarray(raw['masks'])
+    pm = pm.reshape(-1, *pm.shape[-2:]) if pm.size else np.zeros((0, h, w), bool)
+    keep = np.nonzero(scores > min_score)[0]
+    keep = keep[np.argsort(-scores[keep], kind='stable')][:max_n]
+    masks = np.zeros((len(keep), h, w), bool)
+    for i, k in enumerate(keep):
+        m = pm[k] if pm.dtype == np.bool_ else pm[k] > 0.5
+        if m.shape != (h, w):
+            m = np.asarray(Image.fromarray(m.astype(np.uint8) * 255).resize((w, h), Image.BILINEAR)) > 127
+        masks[i] = m
+    return boxes[keep], scores[keep], masks
 
 
 # ================================================================================================ model

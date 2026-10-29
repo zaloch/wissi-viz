@@ -820,8 +820,8 @@ size); the caption's per-phrase attention mask is computed by wissi-viz and pass
 it would be frozen to one caption. SAM 3: built by `.github/workflows/sam3-onnx.yml` (`scripts/export_sam3_onnx.py`). With a repository secret
 `HF_TOKEN` from a Hugging Face account granted access to [facebook/sam3](https://huggingface.co/facebook/sam3), it is
 exported from Meta's official gated checkpoint with samexporter (MIT), quantized to int8 and checked against Meta's
-`Sam3Processor`. Without it (`--mirror`), it starts from the public float32 export made with the same samexporter and
-SAM 3 revisions ([nrl-ai/anylearning-sam3-onnx](https://huggingface.co/nrl-ai/anylearning-sam3-onnx), checked by
+`Sam3Processor`. Without it (`--mirror`), it starts from the public float32 export made with samexporter
+([nrl-ai/anylearning-sam3-onnx](https://huggingface.co/nrl-ai/anylearning-sam3-onnx), checked by
 SHA-256), quantizes it the same way and checks the int8 graphs against the float32 ones; `NOTICE.txt` in the release
 says which. You can also run the script yourself and set `WISSI_SAM3_DIR`. `GET {prefix}/find/capabilities` reports
 `text.sam3.published`: false while this version's download is not on GitHub (the app then says so).

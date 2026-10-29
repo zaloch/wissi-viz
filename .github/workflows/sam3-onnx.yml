@@ -3,8 +3,8 @@
 #
 # With the repository secret HF_TOKEN (a Hugging Face token of an account granted access to
 # https://huggingface.co/facebook/sam3): exported from Meta's official checkpoint with samexporter and checked against
-# Meta's PyTorch Sam3Processor. Without it: from the public float32 ONNX export made with the same samexporter and SAM 3
-# revisions (nrl-ai/anylearning-sam3-onnx, checked by SHA-256), quantized the same way and checked against itself.
+# Meta's PyTorch Sam3Processor. Without it: from the public float32 ONNX export made with samexporter
+# (nrl-ai/anylearning-sam3-onnx, checked by SHA-256), quantized the same way and checked against itself.
 name: sam3-onnx
 on:
   workflow_dispatch:
@@ -56,7 +56,7 @@ jobs:
           MIRROR=$([ -n "$HF_TOKEN" ] || echo --mirror)
           uv run --no-sync python scripts/export_sam3_onnx.py --samexporter /mnt/w/samexporter --out /mnt/w/dist \
             --work /mnt/w/work $MIRROR > /mnt/w/export.log 2>&1 \
-            || { echo "::error::export failed :: $(tail -c 3500 /mnt/w/export.log | tr '\n' ' ')"; exit 1; }
+            || { echo "::notice::$(grep '^IO ' /mnt/w/export.log | tr '\n' ' ' | head -c 4000)"; echo "::error::export failed :: $(tail -c 3000 /mnt/w/export.log | tr '\n' ' ')"; exit 1; }
           tail -80 /mnt/w/export.log
           echo "::notice::$(grep -E '^ +sam3|MB$|instances' /mnt/w/export.log | head -30 | tr '\n' ' ')"
           echo "::notice::$(uv run --no-sync python -c "import json;r=json.load(open('/mnt/w/dist/check.json'));print(json.dumps({'summary':r.get('summary'),'sizes':r['sizes_mb']}))")"
@@ -69,7 +69,7 @@ jobs:
             FROM="exported to ONNX from the official checkpoint (facebook/sam3) with samexporter (MIT)"
             CHECK="Checked against Meta's PyTorch Sam3Processor"
           else
-            FROM="from the public float32 ONNX export made with samexporter (MIT) at the same revisions (huggingface.co/nrl-ai/anylearning-sam3-onnx, checked by SHA-256)"
+            FROM="from the public float32 ONNX export made with samexporter (MIT) (huggingface.co/nrl-ai/anylearning-sam3-onnx, checked by SHA-256)"
             CHECK="int8 checked against the float32 graphs"
           fi
           gh release view sam3-onnx-v1 >/dev/null 2>&1 || gh release create sam3-onnx-v1 --title "SAM 3 ONNX (SAM License)" \

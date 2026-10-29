@@ -141,3 +141,18 @@ def test_published_check(monkeypatch):
     assert len(calls) == 3  # a yes is remembered; a no for ten minutes
     weights.published('missing-v1')
     assert len(calls) == 3
+
+
+def test_sam3_reads_exports_with_the_processor_inside():
+    """Older SAM 3 exports return boxes, scores and masks already post-processed: read them as they are."""
+    from wissi_viz import sam3
+
+    m = np.zeros((3, 1, 40, 50), bool)
+    m[0, 0, 5:10, 5:10] = m[2, 0, 20:30, 20:40] = True
+    raw = {'boxes': np.array([[5, 5, 10, 10], [0, 0, 1, 1], [20, 20, 40, 30]], np.float32),
+           'scores': np.array([0.7, 0.3, 0.9], np.float32), 'masks': m}  # fmt: skip
+    b, s, k = sam3.postprocess(raw, (40, 50), 0.5)
+    assert s.tolist() == pytest.approx([0.9, 0.7]) and b[0].tolist() == [20, 20, 40, 30] and k.shape == (2, 40, 50)
+    assert k[0, 25, 30] and not k[0, 7, 7] and k[1, 7, 7]
+    small = {**raw, 'masks': m[:, :, ::2, ::2].astype(np.float32)}  # another size, as probabilities
+    assert sam3.postprocess(small, (40, 50), 0.5)[2].shape == (2, 40, 50)

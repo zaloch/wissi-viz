@@ -12,7 +12,7 @@ SAM 3's weights are gated on Hugging Face: request access at https://huggingface
    pictures and prompts: the same instances, the same masks.
 
 Without access to the gated checkpoint, ``--mirror`` starts from the public float32 ONNX export of SAM 3 made with
-the same samexporter and SAM 3 revisions (https://huggingface.co/nrl-ai/anylearning-sam3-onnx, ``sam3_vit_h.zip``,
+samexporter (https://huggingface.co/nrl-ai/anylearning-sam3-onnx, ``sam3_vit_h.zip``,
 checked against its SHA-256), quantizes it the same way and checks the int8 graphs against the float32 ones through
 :mod:`wissi_viz.sam3` (no PyTorch needed):
 
@@ -43,7 +43,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 
-#: the public float32 export (same samexporter and SAM 3 revisions as SAMEXPORTER_REV in the workflow)
+#: the public float32 export, made with an earlier samexporter (its decoder graph holds Sam3Processor's post-processing)
 MIRROR = ('nrl-ai/anylearning-sam3-onnx', 'sam3_vit_h.zip',
           '1617436f9db7eb9dd69029c2c465d54b316c36c21143f0fde0d1be513f15b7d5')  # fmt: skip
 PARTS = {'image_encoder': 'image-encoder', 'language_encoder': 'language-encoder', 'decoder': 'decoder'}
@@ -118,6 +118,7 @@ def from_mirror(work: Path) -> str:
 
     repo, name, sha = MIRROR
     if all((work / f'sam3_{p}.onnx').exists() for p in PARTS):
+        _describe(work)
         return f'https://huggingface.co/{repo} ({name}, sha256 {sha})'
     z = Path(hf_hub_download(repo, name, cache_dir=str(work / 'hf')))
     got = _sha(z)
@@ -135,10 +136,26 @@ def from_mirror(work: Path) -> str:
             print('  ', base, f'{(work / base).stat().st_size / 2**20:.0f} MB', flush=True)
     shutil.rmtree(work / 'hf', ignore_errors=True)
     missing = [p for p in PARTS if not (work / f'sam3_{p}.onnx').exists()]
+    _describe(work)
     if missing:
         have = sorted(p.name for p in work.iterdir() if p.is_file())
         raise SystemExit(f'{name} has no sam3_{"/".join(missing)}.onnx (it has {have})')
     return f'https://huggingface.co/{repo} ({name}, sha256 {sha})'
+
+
+def _describe(work: Path) -> None:
+    """Print each graph's inputs and outputs (``IO`` lines: the workflow shows them)."""
+    import onnx
+
+    for g in sorted(work.glob('*.onnx')):
+        m = onnx.load(str(g), load_external_data=False)
+
+        def dims(v):
+            return [d.dim_param or d.dim_value for d in v.type.tensor_type.shape.dim]
+
+        ins = [f'{v.name}{dims(v)}' for v in m.graph.input if v.name not in {i.name for i in m.graph.initializer}]
+        outs = [f'{v.name}{dims(v)}' for v in m.graph.output]
+        print(f'IO {g.name}: in {", ".join(ins)} | out {", ".join(outs)}', flush=True)
 
 
 def _graph_bytes(graph: Path) -> int:
@@ -281,8 +298,8 @@ def main() -> None:
         + (
             f'Exported to ONNX with samexporter (MIT, https://github.com/vietanhdev/samexporter, {rev}).\n'
             if source is None
-            else f'Exported to ONNX with samexporter (MIT, https://github.com/vietanhdev/samexporter, {rev}); the '
-            f'float32 export used is the public one at {source}.\n'
+            else 'Exported to ONNX with samexporter (MIT, https://github.com/vietanhdev/samexporter): the public '
+            f'float32 export at {source}, made with an earlier samexporter revision.\n'
         )
         + 'Modified by wissi-viz: the weights of the matrix multiplications were quantized to 8-bit integers '
         '(scripts/export_sam3_onnx.py).\n'

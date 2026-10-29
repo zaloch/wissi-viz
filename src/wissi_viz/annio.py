@@ -299,6 +299,34 @@ def to_layer(F: Features, name: str | None = None) -> AnnotationLayer:
     return layer
 
 
+def _ranges(starts: np.ndarray, lens: np.ndarray) -> np.ndarray:
+    lens = np.asarray(lens, np.int64)
+    if not len(lens) or lens.sum() == 0:
+        return np.zeros(0, np.int64)
+    offs = np.concatenate([[0], np.cumsum(lens)[:-1]])
+    return np.repeat(np.asarray(starts, np.int64) - offs, lens) + np.arange(int(lens.sum()))
+
+
+def subset(F: Features, idx: np.ndarray) -> Features:
+    """The features ``idx`` of F (geometry, classes, properties), vectorised."""
+    idx = np.asarray(idx, np.int64)
+    fr0, nr = F.feat_ring_off[idx], F.feat_ring_off[idx + 1] - F.feat_ring_off[idx]
+    rings = _ranges(fr0, nr)
+    v0 = F.ring_off[rings]
+    nv = F.ring_off[rings + 1] - v0
+    G = Features(
+        F.kind[idx],
+        F.coords[_ranges(v0, nv)],
+        np.concatenate([[0], np.cumsum(nv)]).astype(np.int64),
+        np.concatenate([[0], np.cumsum(nr)]).astype(np.int64),
+        F.cls[idx],
+        list(F.class_names),
+    )
+    G.class_colors = dict(F.class_colors)
+    G.props = {k: np.asarray(v)[idx] for k, v in F.props.items()}
+    return G
+
+
 def _take_props(F: Features, idx: np.ndarray) -> Features:
     G = copy.copy(F)
     G.props = {k: np.asarray(v)[idx] for k, v in F.props.items()}

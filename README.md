@@ -44,6 +44,8 @@
   - nearest neighbours, proximity, invasive margins, ROI composition, density and hotspots;
   - Ripley's K/L/g, co-location, cellular neighbourhoods, contact graphs, Moran's I, IHC H-score.
   - Each analysis produces a table, a slide overlay and a chart, from Python or from the app's **Analyze** tab.
+  - Chain them: find areas or merge found objects into regions, then analyse only the cells inside; run the same
+    analysis on every open image or a whole project for one table with a row per image.
 - **An app with an inspector.** The desktop app, `wissi-viz serve` and NiceGUI's `WissiApp` share one interface: a
   slide list grouped into projects and folders, a tool bar, a view bar on the slide (zoom, magnifications, overview
   map, scale bar, snapshot), and an inspector that follows the active pane (Layers, Image, Annotate, Analyze,

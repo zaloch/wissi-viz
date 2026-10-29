@@ -398,6 +398,28 @@ def _brightfield(w, data, s):
     )
     w.cover('.menu button:has-text("Remove from slide")')  # checked on a found layer below
     pg.click('#t-layers')
+    # chain steps: cells → regions (merged), cells → only those inside a region layer
+    cells_menu = lambda: pg.click('.lcard[data-layer="cells"] .lhead button[aria-label^="More"]')
+    cells_menu()
+    w.check('.menu button:has-text("Make regions")', '() => document.getElementById("lo").open')
+    w.check('#lo-cancel', '() => !document.getElementById("lo").open')
+    cells_menu()
+    pg.click('.menu button:has-text("Make regions")')
+    w.check('#lo-run', f'() => !document.getElementById("lo").open && ({G})().panes[0].slide.layers.has("Regions · cells")',
+            timeout=30000)  # fmt: skip
+    pg.click('#t-layers')
+    cells_menu()
+    w.check('.menu button:has-text("Keep only inside")', '() => document.getElementById("lo").open')
+    pg.select_option('#lo-body select >> nth=0', 'regions')
+    pg.click('#lo-run')
+    pg.wait_for_function(f'() => ({G})().panes[0].slide.layers.has("cells in regions")', timeout=30000)
+    pg.click('#t-layers')
+    w.check(  # the made regions are listed with found layers
+        '#l-chips .fchip[data-src=found]',
+        '() => document.querySelector("#l-chips [data-src=found]").getAttribute("aria-pressed") === "true" '
+        '&& document.querySelector(\'.lcard[data-layer="Regions · cells"]\')',
+    )
+    pg.click('#l-chips .fchip[data-src=all]')
     w.audit('layers tab')
     # ---- object card and radial menu
     L = s.registry.layer(next(x['id'] for x in s.slides() if x['name'] == 'he.svs'), 'cells')
@@ -458,6 +480,15 @@ def _brightfield(w, data, s):
     w.check('.an-card:has-text("Density")', '() => document.getElementById("an-run")')
     w.check('#an-run', '() => document.querySelector("#an-results .result .chart svg")', timeout=90000)
     w.audit('analysis result')
+    # the same analysis on the cells inside a region only
+    pg.select_option('#an-within', 'regions')
+    pg.wait_for_selector('.an-card:has-text("Density")')
+    pg.click('.an-card:has-text("Density")') if not pg.is_visible('#an-run') else None
+    pg.click('#an-run')
+    pg.wait_for_function(
+        '() => /in regions/.test(document.querySelector("#an-results .result b").textContent)', timeout=90000
+    )
+    pg.select_option('#an-within', '')
     w.check(
         '#an-results .result button:has-text("Table")',
         '() => document.querySelector("#an-results .tablebox:not([hidden]) table")',

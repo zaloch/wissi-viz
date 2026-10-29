@@ -514,6 +514,9 @@
 
   <section id="p-analyze" class="pane-body" role="tabpanel" aria-labelledby="t-analyze">
     <div class="f2">Cells <select id="an-objects" aria-label="Cell layer to analyse"></select></div>
+    <div class="f2" title="Analyse only the cells inside these regions (find areas, Make regions…, drawn ROIs)">Only inside <span class="row">
+      <select id="an-within" aria-label="Analyse only inside" style="flex: 1"><option value="">the whole slide</option></select>
+      <select id="an-within-cls" aria-label="Region class" hidden></select></span></div>
     <div id="an-catalog" style="display: flex; flex-direction: column; gap: 10px"></div>
     <div id="an-form" hidden></div>
     <div class="row"><span class="lbl">Results</span><span class="grow"></span><span class="dim" id="an-count" style="font-size: 12px"></span></div>
@@ -616,6 +619,17 @@
     <div class="row"><span id="c-msg"></span>
       <button class="btn" value="cancel" formnovalidate>Cancel</button><button id="c-go" class="btn primary" value="connect">Connect</button></div>
   </form>
+</dialog>
+
+<dialog id="lo" aria-labelledby="lo-h">
+  <h2 id="lo-h">Make regions</h2>
+  <p id="lo-p"></p>
+  <div id="lo-body" style="display: flex; flex-direction: column; gap: 8px"></div>
+  <p id="lo-msg" class="mono" style="color: var(--bad)"></p>
+  <div class="row" style="justify-content: flex-end; gap: 8px">
+    <button id="lo-cancel" class="btn">Cancel</button>
+    <button id="lo-run" class="btn primary">Make</button>
+  </div>
 </dialog>
 
 <dialog id="sam3-lic" aria-labelledby="lic-h">

@@ -993,6 +993,8 @@ function layerMenu(ev, sid, L) {
     item('Summary', 'M', () => { setTab('measure'); $('ms-layer').value = L.name; renderMeasure(); }),
     item('Measure its regions', '', () => { setTab('measure'); $('m-regions').value = L.name; }),
     item('Analyse these cells', 'A', () => { setTab('analyze'); $('an-objects').value = L.name; renderAnalyze(); }),
+    item('Make regions…', '', () => chainDialog('regions', sid, L)),
+    item('Keep only inside…', '', () => chainDialog('inside', sid, L)),
     h('hr'),
     item('Remove from slide', 'Del', (b) => {
       if (!b.dataset.sure) { b.dataset.sure = '1'; b.firstChild.textContent = 'Click again to remove'; return false; }
@@ -1006,6 +1008,57 @@ function layerMenu(ev, sid, L) {
   menuEl.style.left = `${Math.max(8, Math.min(window.innerWidth - menuEl.offsetWidth - 8, r.right - menuEl.offsetWidth))}px`;
   menuEl.style.top = `${Math.min(window.innerHeight - menuEl.offsetHeight - 8, r.bottom + 4)}px`;
 }
+
+// ---- chain steps: objects → regions; cells → only those inside regions (each makes a layer)
+function chainDialog(mode, sid, L) {
+  const d = $('lo'), body = $('lo-body');
+  const p = curPane();
+  const classes = (L.meta.classes || []).map((c) => c.name);
+  const field = (label, el) => h('label', { class: 'field', style: 'grid-template-columns: 110px 1fr auto' }, label, el);
+  const clsSel = (names) => h('select', { 'aria-label': 'Classes' }, h('option', { value: '' }, 'all classes'), ...names.map((c) => h('option', {}, c)));
+  $('lo-msg').textContent = '';
+  let collect;
+  if (mode === 'regions') {
+    $('lo-h').textContent = `Make regions from ${L.name}`;
+    $('lo-p').textContent = 'Objects closer than the joining distance merge into one region (gaps and small holes close); regions smaller than the minimum are dropped. The result is a region layer: analyse or measure the cells inside it.';
+    const cs = clsSel(classes);
+    const join = h('input', { type: 'range', min: 0, max: 200, step: 5, value: 20, 'aria-label': 'Join objects closer than' });
+    const jo = h('output', { class: 'mono' }, '20 µm');
+    join.oninput = () => { jo.textContent = `${join.value} µm`; };
+    const minA = h('input', { type: 'number', min: 0, step: 100, value: 1000, style: 'width: 110px', 'aria-label': 'Minimum region area' });
+    body.replaceChildren(field('Objects', cs), field('Join closer than', h('span', { class: 'row' }, join, jo)), field('Smallest region', h('span', { class: 'row' }, minA, h('span', { class: 'dim' }, 'µm²'))));
+    $('lo-run').textContent = 'Make regions';
+    collect = () => ['/layers/regions', { layer: L.name, classes: cs.value ? [cs.value] : null, join_um: +join.value, min_area_um2: +minA.value }];
+  } else {
+    $('lo-h').textContent = `Keep only the ${L.name} inside…`;
+    $('lo-p').textContent = 'A new layer with the objects whose centre lies inside the regions you pick (measurements kept): run analyses, find all or exports on just those.';
+    const regs = regionLayers(p, L.name).filter((R) => (R.meta.count ?? 0) > 0);
+    const rs = h('select', { 'aria-label': 'Regions' }, ...regs.map((R) => h('option', {}, R.name)));
+    const rc = h('select', { 'aria-label': 'Region class' });
+    const fill = () => { const R = p.slide.layers.get(rs.value); rc.replaceChildren(h('option', { value: '' }, 'all classes'), ...((R?.meta.classes || []).map((c) => h('option', {}, c.name)))); };
+    rs.onchange = fill;
+    fill();
+    body.replaceChildren(field('Regions', rs), field('Only class', rc));
+    if (!regs.length) $('lo-msg').textContent = 'No region layer on this slide: find areas, make regions, or draw some first.';
+    $('lo-run').textContent = 'Keep inside';
+    collect = () => ['/layers/inside', { objects: L.name, regions: rs.value, classes: rc.value ? [rc.value] : null }];
+  }
+  $('lo-run').onclick = async () => {
+    const [path, b] = collect();
+    $('lo-run').disabled = true;
+    try {
+      const r = await api(`/slides/${enc(sid)}${path}`, b);
+      d.close();
+      grid.refreshAnnotations(sid);
+      toast({ kind: 'analysis', title: `Added ${r.layer}`, action: { label: 'Show', fn: () => showFound(r.layer, sid) }, ms: 7000 });
+      log(`${r.layer}: made from ${L.name}`);
+      setTimeout(() => { showFound(r.layer, sid, false); if (tab === 'analyze') renderAnalyze(); }, 400);
+    } catch (e) { $('lo-msg').textContent = e.message; }
+    $('lo-run').disabled = false;
+  };
+  d.showModal();
+}
+$('lo-cancel').onclick = () => $('lo').close();
 
 // ------------------------------------------------------------------------------------------------ Analyze tab
 let catalog = null, catalogError = '';
@@ -1028,6 +1081,15 @@ async function renderAnalyze() {
   objSel.replaceChildren(...cells.map((L) => h('option', { value: L.name }, `${L.name} · ${(L.meta.count ?? 0).toLocaleString('en-US')}`)));
   if (cells.some((L) => L.name === keep)) objSel.value = keep;
   else if (cells.length) objSel.value = [...cells].sort((a, b) => (b.meta.count ?? 0) - (a.meta.count ?? 0))[0].name;
+  const ws = $('an-within'), keepW = ws.value;
+  const regs = regionLayers(p, objSel.value).filter((R) => (R.meta.count ?? 0) > 0);
+  ws.replaceChildren(h('option', { value: '' }, 'the whole slide'), ...regs.map((R) => h('option', { value: R.name }, R.name)));
+  ws.value = regs.some((R) => R.name === keepW) ? keepW : '';
+  const wc = $('an-within-cls'), keepC = wc.value, RL = ws.value ? p.slide.layers.get(ws.value) : null;
+  const rcls = (RL?.meta.classes || []).map((c) => c.name);
+  wc.hidden = rcls.length < 2;
+  wc.replaceChildren(h('option', { value: '' }, 'all classes'), ...rcls.map((c) => h('option', {}, c)));
+  wc.value = rcls.includes(keepC) ? keepC : '';
   const box = $('an-catalog');
   box.replaceChildren();
   if (catalogError) { box.append(h('div', { class: 'panel-note' }, catalogError)); return; }
@@ -1079,17 +1141,29 @@ function analysisForm(p, a) {
     values[prm.key] = () => input.value;
     form.append(h('label', { class: 'field', style: 'grid-template-columns: 84px 1fr' }, prm.label, input));
   }
+  // on which images: this one, every image in the slide list, or a project's
+  const targets = [['this', 'this image', null]];
+  if (slides.length > 1) targets.push(['all', `all ${slides.length} images in the list`, slides.map((x) => x.id)]);
+  for (const pr of projects) {
+    const ids = slides.filter((x) => pr.slides.includes(slidePath(x))).map((x) => x.id);
+    if (ids.length) targets.push([`p:${pr.name}`, `project ${pr.name} (${ids.length})`, ids]);
+  }
+  const on = h('select', { id: 'an-on', 'aria-label': 'Run on' }, ...targets.map(([v, t]) => h('option', { value: v }, t)));
+  if (targets.length > 1) form.append(h('label', { class: 'field', style: 'grid-template-columns: 84px 1fr' }, 'Run on', on));
   const run = h('button', { class: 'run', id: 'an-run' }, `Run ${a.name}`);
   run.onclick = async () => {
     if (run.classList.contains('busy')) return;
     const params = Object.fromEntries(Object.entries(values).map(([k, f]) => [k, f()]));
     const sid = activeSlide();
+    const many = targets.find(([v]) => v === on.value)?.[2];
+    if (many) { runBatch(a, many, objName, params, run); return; }
     run.classList.add('busy');
     const t0 = performance.now();
     const tick = setInterval(() => { run.textContent = `Running… ${((performance.now() - t0) / 1000).toFixed(1)} s`; }, 200);
     log(`${a.name}: running on ${objName}…`);
     try {
-      const res = await api(`/slides/${enc(sid)}/analyses`, { analysis: a.id, objects: objName, params });
+      const within = $('an-within').value ? { layer: $('an-within').value, classes: $('an-within-cls').value ? [$('an-within-cls').value] : null } : null;
+      const res = await api(`/slides/${enc(sid)}/analyses`, { analysis: a.id, objects: objName, params, within });
       res.slide = sid;
       // one result on the slide at a time: earlier analysis layers are hidden (still in Layers / Results)
       const earlier = res.layers.length ? results.filter((x) => x.slide === sid).flatMap((x) => x.layers).filter((n) => !res.layers.includes(n)) : [];
@@ -1113,6 +1187,32 @@ function analysisForm(p, a) {
   };
   form.append(run);
   return form;
+}
+
+async function runBatch(a, ids, objName, params, run) {
+  const within = $('an-within').value ? { layer: $('an-within').value, classes: $('an-within-cls').value ? [$('an-within-cls').value] : null } : null;
+  run.classList.add('busy');
+  log(`${a.name}: running on ${ids.length} images…`);
+  try {
+    let j = await api('/analyses/batch', { analysis: a.id, slides: ids, objects: objName, params, within });
+    while (j.state === 'queued' || j.state === 'running') {
+      run.textContent = `${j.message || 'Running…'} · ${Math.round((j.progress || 0) * 100)}%`;
+      await new Promise((r) => setTimeout(r, 500));
+      j = await api(`/jobs/${enc(j.id)}`);
+    }
+    if (j.state !== 'done') throw new Error(j.error || j.state);
+    const res = { ...j.result, slide: activeSlide() };
+    results.unshift(res);
+    renderResults(true);
+    for (const id of ids) grid.refreshAnnotations(id);
+    toast({ kind: 'analysis', title: res.title, sub: res.note.split('.')[0], ms: 7000 });
+    log(`${res.title}: done in ${res.seconds} s`);
+  } catch (e) {
+    toast({ kind: 'bad', title: `${a.name} failed`, sub: e.message, ms: 9000 });
+    log(`${a.name}: ${e.message}`, true);
+  }
+  run.classList.remove('busy');
+  run.textContent = `Run ${a.name}`;
 }
 
 function showResultLayers(res) {
@@ -1827,6 +1927,7 @@ function wire() {
   grid.addEventListener('views', () => { drawMap(); showMag(); });
   $('ms-layer').onchange = () => renderMeasure();
   $('an-objects').onchange = () => renderAnalyze();
+  $('an-within').onchange = () => renderAnalyze();
   const acts = { open: openSlides, folder: openFolder, connect: openConnect };
   document.querySelectorAll('[data-act]').forEach((b) => (b.onclick = acts[b.dataset.act]));
   $('c-form').onsubmit = async (e) => {

@@ -18,7 +18,7 @@ from typing import Any
 
 import numpy as np
 
-from . import spatial
+from . import layerops, spatial
 from .annotations import AnnotationLayer
 from .metrics import objects_from_layer
 
@@ -80,6 +80,8 @@ class Context:
     objects: Any  # spatial.ObjectTable
     layer: str
     mpp: float | None
+    roi: Any = None  # analyses limited to a region: its geometry (level-0 px), e.g. the study area for Ripley
+    roi_name: str = ''
 
 
 CATALOG: OrderedDict[str, Spec] = OrderedDict()
@@ -180,8 +182,13 @@ _cache_lock = threading.Lock()
 _objects: OrderedDict = OrderedDict()  # (slide, layer, version) → ObjectTable
 
 
-def run(registry, slide: str, analysis_id: str, objects: str, params: dict | None = None) -> dict:
-    """Run one analysis on the cell layer ``objects`` of ``slide``; result layers are added to the slide."""
+def run(
+    registry, slide: str, analysis_id: str, objects: str, params: dict | None = None, within: dict | None = None
+) -> dict:
+    """Run one analysis on the cell layer ``objects`` of ``slide``; result layers are added to the slide.
+
+    ``within``: ``{'layer': region layer, 'classes': [...] | None}`` — only the cells inside those regions take part
+    (a chain: find areas / make regions → analyse the cells in them); area-based statistics use the regions' area."""
     spec = CATALOG.get(analysis_id)
     if spec is None:
         raise ValueError(f'unknown analysis {analysis_id!r}')
@@ -189,10 +196,28 @@ def run(registry, slide: str, analysis_id: str, objects: str, params: dict | Non
     if layer is None:
         raise ValueError(f'no layer {objects!r} on this slide')
     mpp = (registry.info(slide).get('mpp') or [None])[0]
-    ctx = Context(registry, slide, _object_table(slide, layer, mpp), objects, mpp)
+    objs = _object_table(slide, layer, mpp)
+    roi, roi_name = None, ''
+    if within and within.get('layer'):
+        roi_name = str(within['layer'])
+        if within.get('classes'):
+            roi_name += f' ({", ".join(within["classes"])})'
+        roi = layerops.geometry(registry, slide, within['layer'], within.get('classes'))
+        if roi is None:
+            raise ValueError(f'{roi_name} has no regions (polygons) to analyse inside')
+        objs = layerops.select_inside(objs, roi)
+        if len(objs) < 2:
+            raise ValueError(f'{len(objs)} cell{"s" if len(objs) != 1 else ""} of {objects} inside {roi_name}')
+    ctx = Context(registry, slide, objs, objects, mpp or objs.mpp, roi, roi_name)
     kw = _coerce(spec, params or {}, ctx)
     t0 = time.perf_counter()
     res = spec.fn(ctx, **kw)
+    if roi is not None:  # say where, keep the result layers apart from a whole-slide run
+        res.title = f'{res.title} · in {roi_name}'
+        a = layerops.area_mm2(roi, mpp or objs.mpp or 0.5)
+        res.kpis = [*res.kpis, ('cells in ROI', f'{len(objs):,}'), ('ROI area', f'{a:.3g} mm²')]
+        for L in res.layers:
+            L.name = f'{L.name} · in {roi_name}'
     names = []
     for L in res.layers:
         L.origin = 'analysis'
@@ -208,6 +233,96 @@ def run(registry, slide: str, analysis_id: str, objects: str, params: dict | Non
         'table': _table(res.table),
         'seconds': round(time.perf_counter() - t0, 2),
     }
+
+
+def run_batch(
+    registry,
+    slides: list[str],
+    analysis_id: str,
+    objects: str,
+    params: dict | None = None,
+    within: dict | None = None,
+    job=None,
+) -> dict:
+    """The same analysis on several images (all open ones, a project): one row of headline numbers per image, in
+    one table. Each image uses its cell layer called ``objects`` (or, if it has none, its largest cell layer) and,
+    with ``within``, its region layer of that name; images without one are listed as skipped, with the reason.
+    Result layers are added to each image as for :func:`run`."""
+    spec = CATALOG.get(analysis_id)
+    if spec is None:
+        raise ValueError(f'unknown analysis {analysis_id!r}')
+    if not slides:
+        raise ValueError('no images to analyse')
+    upd = job.update if job else (lambda *a, **k: None)
+    rows, skipped, chart_vals = [], [], []
+    keys: list[str] = []
+    t0 = time.perf_counter()
+    for i, sid in enumerate(slides):
+        name = registry.info(sid).get('name') or sid
+        upd(i / len(slides), f'{spec.name}: {name} ({i + 1} of {len(slides)})')
+        layer = _cell_layer(registry, sid, objects)
+        if layer is None:
+            skipped.append([name, 'no cell layer'])
+            continue
+        try:
+            r = run(registry, sid, analysis_id, layer, params, within)
+        except ValueError as e:  # a missing class / region on this image: skip it, say why
+            skipped.append([name, str(e)])
+            continue
+        kp = {k['label']: k['value'] for k in r['kpis']}
+        for k in kp:
+            if k not in keys:
+                keys.append(k)
+        rows.append([name, layer, kp])
+        first = r['kpis'][0]['value'] if r['kpis'] else None
+        chart_vals.append((name, _number(first)))
+    upd(1.0, 'done')
+    if not rows:
+        raise ValueError('no image could be analysed: ' + '; '.join(f'{n}: {why}' for n, why in skipped))
+    table = {'image': [r[0] for r in rows], 'cell layer': [r[1] for r in rows]}
+    for k in keys:
+        table[k] = [r[2].get(k, '') for r in rows]
+    first_key = keys[0] if keys else ''
+    chart = None
+    if first_key and all(v is not None for _, v in chart_vals):
+        chart = {'kind': 'bars', 'x': [n[:18] for n, _ in chart_vals], 'series': [{'name': first_key,
+                 'values': [v for _, v in chart_vals]}], 'xlabel': 'image', 'ylabel': first_key}  # fmt: skip
+    where = f' · in {within["layer"]}' if within and within.get('layer') else ''
+    note = f'{len(rows)} image{"s" if len(rows) != 1 else ""} analysed; result layers are on each image.'
+    if skipped:
+        note += ' Skipped: ' + '; '.join(f'{n} ({why})' for n, why in skipped[:8]) + ('…' if len(skipped) > 8 else '')
+    return {
+        'analysis': spec.id,
+        'title': f'{spec.name} · {len(rows)} images{where}',
+        'kpis': [{'label': 'images', 'value': str(len(rows))}, {'label': 'skipped', 'value': str(len(skipped))}],
+        'note': note,
+        'layers': [],
+        'chart': chart,
+        'table': _table(table),
+        'seconds': round(time.perf_counter() - t0, 2),
+        'batch': True,
+    }
+
+
+def _cell_layer(registry, sid: str, name: str) -> str | None:
+    """The image's cell layer: the one called ``name``, else its largest layer that is not an analysis result."""
+    have = registry.layers(sid)
+    if name in have:
+        return name
+    best, n = None, 2
+    for k, L in have.items():
+        if getattr(L, 'origin', '') == 'analysis':
+            continue
+        if len(L) > n:
+            best, n = k, len(L)
+    return best
+
+
+def _number(v) -> float | None:
+    try:
+        return float(str(v).replace(',', '').split()[0].rstrip('%'))
+    except (ValueError, IndexError):
+        return None
 
 
 # ----------------------------------------------------------------------------------------------- helpers
@@ -491,7 +606,7 @@ def _composition(ctx: Context, regions):
     '~2–5 s',
 )
 def _ripley(ctx: Context, a, b):
-    r = spatial.ripley(ctx.objects, a, b)
+    r = spatial.ripley(ctx.objects, a, b, area=ctx.roi)
     rr, L = np.asarray(r.r_um, float), np.asarray(r.L, float)
     above = rr[L > np.asarray(r.L_hi, float)]
     return Result(

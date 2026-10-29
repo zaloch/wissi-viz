@@ -572,7 +572,14 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
             entry(sid)
             try:
                 out = await anyio.to_thread.run_sync(
-                    lambda: analyses.run(registry, sid, body.get('analysis'), body.get('objects'), body.get('params'))
+                    lambda: analyses.run(
+                        registry,
+                        sid,
+                        body.get('analysis'),
+                        body.get('objects'),
+                        body.get('params'),
+                        within=body.get('within'),
+                    )  # fmt: skip
                 )
             except ValueError as ex:
                 raise HTTPException(400, str(ex)) from ex
@@ -580,6 +587,55 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
                 logging.getLogger('wissi_viz').exception('analysis failed')
                 raise HTTPException(500, f'{type(ex).__name__}: {ex}') from ex
             return JSONResponse(_jsonable(out), headers=hdrs('no-cache'))
+
+        @r.post('/analyses/batch')
+        async def analyses_batch(request: Request):
+            """The same analysis on several images, in the background: {analysis, slides: [id…], objects, params,
+            within} → the job; its result: one row of headline numbers per image (``analyses.run_batch``)."""
+            try:
+                from . import analyses
+            except ImportError as ex:
+                raise HTTPException(
+                    501, f'spatial analyses need: pip install "wissi-viz[analysis]" ({ex.name})'
+                ) from ex
+            b = await request.json()
+            slides = [s_ for s_ in (b.get('slides') or []) if s_ in registry.ids()]
+            job = jobs.submit(
+                'analysis', lambda job: _jsonable(analyses.run_batch(registry, slides, b.get('analysis'),
+                                                                     b.get('objects'), b.get('params'),
+                                                                     b.get('within'), job)),
+                title=f'{b.get("analysis")} on {len(slides)} images',
+            )  # fmt: skip
+            return JSONResponse(job.to_dict(), headers=hdrs('no-cache'))
+
+        @r.post('/slides/{sid}/layers/regions')
+        async def layer_regions(sid: str, request: Request):
+            """Merge a layer's objects into regions: {layer, classes, join_um, min_area_um2, name} → {layer}."""
+            lo = _layerops()
+            b = await request.json()
+            entry(sid)
+            try:
+                name = await anyio.to_thread.run_sync(lambda: lo.to_regions(
+                    registry, sid, b.get('layer'), classes=b.get('classes') or None,
+                    join_um=float(b.get('join_um', 20)), min_area_um2=float(b.get('min_area_um2', 0)),
+                    name=b.get('name')))  # fmt: skip
+            except ValueError as ex:
+                raise HTTPException(400, str(ex)) from ex
+            return JSONResponse({'layer': name}, headers=hdrs('no-cache'))
+
+        @r.post('/slides/{sid}/layers/inside')
+        async def layer_inside(sid: str, request: Request):
+            """The objects of a layer inside a region layer, as a new layer: {objects, regions, classes, name}."""
+            lo = _layerops()
+            b = await request.json()
+            entry(sid)
+            try:
+                name = await anyio.to_thread.run_sync(lambda: lo.inside(
+                    registry, sid, b.get('objects'), b.get('regions'), classes=b.get('classes') or None,
+                    name=b.get('name')))  # fmt: skip
+            except ValueError as ex:
+                raise HTTPException(400, str(ex)) from ex
+            return JSONResponse({'layer': name}, headers=hdrs('no-cache'))
 
         @r.post('/slides/{sid}/find')
         async def find_start(sid: str, request: Request):
@@ -655,6 +711,14 @@ def _attachment(name: str) -> str:
     slides called 'Präparat 1' download as such (a raw non-ASCII header breaks the response)."""
     ascii_name = name.encode('ascii', 'replace').decode().replace('?', '_').replace('"', '')
     return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(name)}'
+
+
+def _layerops():
+    try:
+        from . import layerops
+    except ImportError as ex:
+        raise HTTPException(501, f'layer operations need: pip install "wissi-viz[analysis]" ({ex.name})') from ex
+    return layerops
 
 
 def _findall():

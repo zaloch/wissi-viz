@@ -118,5 +118,5 @@ def _not_a_slide(head: bytes) -> str | None:
 
 def _tidy(e: object) -> str:
     """A reader's error without its build paths (``/__w/…/tifftools.cpp:352:``) and with a sane length."""
-    t = re.sub(r'\S*/[\w./-]+\.(?:cpp|cc|c|h|hpp):\d+:\s*', '', str(e)).strip()
+    t = re.sub(r'\S*[/\\][\w./\\:-]+\.(?:cpp|cc|c|h|hpp):\d+:\s*', '', str(e)).strip()  # / and \ paths
     return t[:240] + ('…' if len(t) > 240 else '')

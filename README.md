@@ -191,7 +191,7 @@ hover / right-click / layer events and `analyses.echarts_option(...)` for `ui.ec
 
 ```bash
 git clone https://github.com/zaloch/wissi-viz && cd wissi-viz
-uv sync --extra analysis --extra io --extra polars --extra server --extra remote --extra bench --extra desktop
+uv sync --extra all                         # every permissive extra (PyTorch included); not --all-extras: that adds LGPL
 uv run playwright install chromium
 uv run pytest -q
 uv build

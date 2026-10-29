@@ -54,7 +54,7 @@
 ```bash
 uv add "wissi-viz[nicegui,polars]"            # in a uv project (or: pip install …); same extras below
 pip install "wissi-viz[nicegui,polars]"       # path A/B; add [server] for C/D, [remote] for vendor APIs, [analysis] for spatial stats
-pip install "wissi-viz[all]"                  # everything permissive (BSD/MIT/Apache); LGPL readers are opt-in: [lgpl]
+pip install "wissi-viz[all]"                  # everything permissive (BSD/MIT/Apache), PyTorch and the desktop window included; LGPL readers are opt-in: [lgpl]
 ```
 
 ## 2. NiceGUI (path A)
@@ -695,7 +695,7 @@ uvx --from "wissi-viz[desktop]" wissi-viz-app   # try it without installing
 uv add "wissi-viz[nicegui,server]"           # in your uv project
 uv tool install "wissi-viz[desktop]"         # the desktop app, isolated
 # develop it
-uv sync --extra analysis --extra io --extra polars --extra server --extra remote --extra bench --extra desktop
+uv sync --extra all                         # every permissive extra (PyTorch included); not --all-extras: that adds LGPL
 uv run playwright install chromium           # browser tests
 uv run pytest -q
 uv build                                     # sdist + wheel in dist/

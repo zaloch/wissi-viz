@@ -30,7 +30,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from PIL import Image
 from starlette.background import BackgroundTask
 
-from . import annio, summary
+from . import annio, sam3, summary
 from ._version import __version__
 from .annotations import AnnotationLayer, _add_geometry, _class_from_props
 from .jobs import JobRunner
@@ -582,13 +582,15 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
 
         @r.post('/slides/{sid}/find')
         async def find_start(sid: str, request: Request):
-            """Find all like the examples, in the background: {mode: objects | segment | areas, examples: {layer,
-            classes, picks}, candidates, training, classes, scope: {kind: view | region | slide, rect, layer},
-            strictness, object_um, detail, name} → the job (poll ``GET /jobs/{id}``)."""
+            """Find all like the examples, or by name, in the background: {mode: objects | segment | areas | text,
+            examples: {layer, classes, picks}, candidates, training, classes, scope: {kind: view | region | slide,
+            rect, layer}, strictness, object_um, detail, prompt, model: grounding | sam3, name} → the job (poll
+            ``GET /jobs/{id}``)."""
             findall = _findall()
             body = await request.json()
             entry(sid)
-            titles = {'objects': 'Find similar objects', 'segment': 'Segment everything', 'areas': 'Find areas'}
+            titles = {'objects': 'Find similar objects', 'segment': 'Segment everything', 'areas': 'Find areas',
+                      'text': 'Find by text'}  # fmt: skip
             job = jobs.submit(
                 'find', lambda job: _jsonable(findall.run(registry, sid, body, job)), slide=sid,
                 title=titles.get(body.get('mode'), 'Find all'),
@@ -608,6 +610,12 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
                 raise HTTPException(400, str(ex)) from ex
             return JSONResponse(out, headers=hdrs('no-cache'))
 
+        @r.post('/models/sam3/license')
+        async def sam3_license_accept(request: Request):
+            """Accept ({accept: true}) or withdraw ({accept: false}) the SAM License for SAM 3 on this computer."""
+            body = await request.json()
+            return JSONResponse(sam3.accept(bool(body.get('accept'))), headers=hdrs('no-cache'))
+
         @r.post('/jobs/{jid}/cancel')
         def job_cancel(jid: str):
             job = jobs.get(jid)
@@ -620,6 +628,12 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
     def find_caps():
         """What finding can use here: the SAM backend, whether area classification (scikit-learn) is installed."""
         return JSONResponse({**_findall().capabilities(), 'edit': allow_edit}, headers=hdrs('no-cache'))
+
+    @r.get('/models/sam3/license')
+    def sam3_license():
+        """SAM 3's licence (shown before it is downloaded) and whether it was accepted here."""
+        return JSONResponse({'name': sam3.LICENSE_NAME, 'url': sam3.LICENSE_URL, 'text': sam3.license_text(),
+                             **sam3.status()}, headers=hdrs('no-cache'))  # fmt: skip
 
     @r.get('/jobs/{jid}')
     def job_status(jid: str):

@@ -1,0 +1,77 @@
+# Exports SAM 3 (Meta, SAM License) to ONNX from Meta's official gated checkpoint, quantizes it to int8, checks
+# wissi-viz's pipeline against Meta's PyTorch Sam3Processor, and publishes the files (with the licence) as the GitHub
+# release `sam3-onnx-v1`, which wissi-viz downloads only after a user accepts the SAM License in the app.
+#
+# Needs the repository secret HF_TOKEN: a Hugging Face token of an account that was granted access to
+# https://huggingface.co/facebook/sam3 (request access there first). Without it, this workflow does nothing.
+name: sam3-onnx
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [scripts/export_sam3_onnx.py, .github/workflows/sam3-onnx.yml]
+
+permissions:
+  contents: write
+
+env:
+  SAMEXPORTER_REV: 35133ce8670e0d190ac10cc08efba9b9a443fb51
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - name: Needs HF_TOKEN
+        if: env.HF_TOKEN == ''
+        run: echo "::notice::No HF_TOKEN secret: request access to facebook/sam3 on Hugging Face and add a token as the repository secret HF_TOKEN to export SAM 3."
+      - uses: actions/checkout@v5
+        if: env.HF_TOKEN != ''
+      - uses: astral-sh/setup-uv@v7
+        if: env.HF_TOKEN != ''
+      - name: Room (disk, swap)
+        if: env.HF_TOKEN != ''
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          sudo swapoff -a || true
+          sudo fallocate -l 16G /mnt/swapfile && sudo chmod 600 /mnt/swapfile && sudo mkswap /mnt/swapfile && sudo swapon /mnt/swapfile
+          sudo mkdir -p /mnt/w && sudo chown "$USER" /mnt/w
+          df -h / /mnt; free -g
+      - name: Install
+        if: env.HF_TOKEN != ''
+        run: |
+          run() { out=$("$@" 2>&1) || { echo "::error::$* :: $(echo "$out" | tail -c 2500 | tr '\n' ' ')"; exit 1; }; echo "$out" | tail -3; }
+          git clone -q https://github.com/vietanhdev/samexporter.git /mnt/w/samexporter
+          git -C /mnt/w/samexporter checkout -q "$SAMEXPORTER_REV"
+          git -C /mnt/w/samexporter submodule update --init sam3
+          run uv venv -p 3.12
+          run uv pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cpu
+          run uv pip install -e /mnt/w/samexporter/sam3
+          run uv pip install -e /mnt/w/samexporter
+          run uv pip install onnxruntime pooch einops pycocotools psutil
+          run uv pip install -e .
+      - name: Export, quantize and check
+        if: env.HF_TOKEN != ''
+        run: |
+          set -o pipefail
+          uv run --no-sync python scripts/export_sam3_onnx.py --samexporter /mnt/w/samexporter --out /mnt/w/dist \
+            --work /mnt/w/work 2>&1 | tail -80
+          echo "::notice::$(uv run --no-sync python -c "import json;r=json.load(open('/mnt/w/dist/check.json'));print(json.dumps({'summary':r.get('summary'),'sizes':r['sizes_mb']}))")"
+      - name: Publish release
+        if: env.HF_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          S=$(uv run --no-sync python -c "import json;print(json.dumps(json.load(open('/mnt/w/dist/check.json')).get('summary')))")
+          gh release view sam3-onnx-v1 >/dev/null 2>&1 || gh release create sam3-onnx-v1 --title "SAM 3 ONNX (SAM License)" \
+            --notes "SAM 3 by Meta, exported to ONNX from the official checkpoint (facebook/sam3) with samexporter (MIT) and quantized to int8, for wissi-viz's opt-in find by text. These files are under the SAM License (LICENSE-SAM.txt): by downloading or using them you agree to it. wissi-viz downloads them only after you accept it in the app. Checked against Meta's PyTorch Sam3Processor: $S"
+          gh release upload sam3-onnx-v1 /mnt/w/dist/* --clobber
+      - name: The published files work through wissi-viz
+        if: env.HF_TOKEN != ''
+        env:
+          WISSI_TEST_SAM3: '1'
+        run: |
+          uv pip install pytest pytest-github-actions-annotate-failures
+          uv run --no-sync pytest -q -rfE tests/test_grounding.py -k real_sam3

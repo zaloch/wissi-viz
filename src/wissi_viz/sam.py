@@ -47,6 +47,7 @@ from skimage.segmentation import flood
 
 from . import certs
 from ._compat import otsu, user_dir
+from .weights import ort_session
 
 MODELS = {
     'tiny': 'facebook/sam2.1-hiera-tiny',
@@ -166,21 +167,10 @@ class _Onnx:
     name = 'onnx'
 
     def __init__(self, model: str, device: str) -> None:
-        import onnxruntime as ort
-
         d = _onnx_files(model)
         self.files = d
-        avail = ort.get_available_providers()
-        want = {'cuda': ['CUDAExecutionProvider'], 'dml': ['DmlExecutionProvider'], 'cpu': []}.get(device)
-        if want is None:  # auto: best available
-            want = [
-                p for p in ('CUDAExecutionProvider', 'DmlExecutionProvider', 'CoreMLExecutionProvider') if p in avail
-            ]
-        providers = [p for p in want if p in avail] + ['CPUExecutionProvider']
-        so = ort.SessionOptions()
-        so.log_severity_level = 3  # errors only (the int8 graph logs harmless shape-merge warnings)
-        self.enc = ort.InferenceSession(str(d / 'encoder.onnx'), so, providers=providers)
-        self.dec = ort.InferenceSession(str(d / 'decoder.onnx'), so, providers=providers)
+        self.enc = ort_session(d / 'encoder.onnx', device)  # CUDA / DirectML when there, else CPU (not CoreML)
+        self.dec = ort_session(d / 'decoder.onnx', device)
         self.device = self.enc.get_providers()[0].replace('ExecutionProvider', '').lower()
 
     def embed(self, rgb: np.ndarray):

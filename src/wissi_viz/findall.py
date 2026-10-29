@@ -1,11 +1,14 @@
-"""Find all: point at a few examples and get every similar object or area — in the view, a region or the whole slide.
+"""Find all: point at a few examples, or name what to find, and get every such object or area — in the view, a region or
+the whole slide.
 
-Three ways, each adding a layer to the slide (``origin='found'``, so the app lists it under *Found*):
+Four ways, each adding a layer to the slide (``origin='found'``, so the app lists it under *Found*):
 
 * **similar objects** — every object of a layer (detected cells, an imported cell table) is measured (shape, stain or
   channel intensity) and scored against the examples; those that look alike are kept.
 * **segment everything** — SAM (or, without a model, the classic colour fill) outlines every object in the region from
   a grid of clicks, skipping what is already outlined; with examples, only those like them are kept.
+* **by text** — name it ("nucleus", "gland. vessel"): Grounding DINO finds the boxes and SAM 2.1 outlines them, or
+  SAM 3 (opt-in) does both; with examples, only those like them are kept.
 * **areas** — a pixel classifier (random forest on multi-scale colour, edge and texture features) is trained on a few
   shapes or strokes per class (tumour, stroma, necrosis…) and maps those areas.
 
@@ -35,7 +38,7 @@ from skimage import measure
 from skimage.color import rgb2lab
 from skimage.feature import multiscale_basic_features, peak_local_max
 
-from . import annio
+from . import annio, grounding, sam3
 from .annotations import AnnotationLayer
 from .jobs import Job
 from .metrics import object_metrics
@@ -372,19 +375,29 @@ def _publish(
     cls: str,
     color: str,
     extra: dict | None = None,
+    classes: list[tuple[str, str]] | None = None,
+    labels: np.ndarray | None = None,
 ) -> tuple[str, int]:
+    """Add the objects scoring ``sim ≥ threshold(strictness)`` as the layer ``name`` (one class ``cls``, or one per
+    entry of ``classes`` with ``labels`` the index of each object's)."""
     keep = np.arange(len(F)) if sim is None else np.nonzero(sim >= threshold(strictness))[0]
     G = _subset(F, keep)
-    G.cls = np.zeros(len(G), np.int32)
-    G.class_names = [cls]
-    G.class_colors = {cls: color}
+    if classes and labels is not None:
+        G.cls = np.asarray(labels, np.int32)[keep]
+        G.class_names = [c for c, _ in classes]
+        G.class_colors = dict(classes)
+    else:
+        classes = [(cls, color)]
+        G.cls = np.zeros(len(G), np.int32)
+        G.class_names = [cls]
+        G.class_colors = {cls: color}
     G.props = {}
     if sim is not None:
         G.props['similarity'] = np.round(sim[keep], 3)
     for k, v in (extra or {}).items():
         G.props[k] = np.asarray(v)[keep]
     L = annio.to_layer(G, name=name)
-    L.classes = {cls: color}
+    L.classes = dict(classes)
     L.origin = ORIGIN
     L.fill_opacity = 0.25
     L.line_width = 2.0
@@ -416,7 +429,8 @@ def rethreshold(registry, rid: str, strictness: float) -> dict:
     r = _RESULTS.get(rid)
     if r is None:
         raise ValueError('that result is gone (the server restarted or it is too old): run it again')
-    name, n = _publish(registry, r['slide'], r['F'], r['sim'], strictness, r['name'], r['cls'], r['color'], r['extra'])
+    name, n = _publish(registry, r['slide'], r['F'], r['sim'], strictness, r['name'], r['cls'], r['color'], r['extra'],
+                       r.get('classes'), r.get('labels'))  # fmt: skip
     r['strictness'] = strictness
     return {'layer': name, 'count': n, 'strictness': strictness, 'of': int(len(r['F']))}
 
@@ -612,7 +626,7 @@ def _tile_objects(svc, impl, rgb, x, y, ds, d_img, amin, amax, O, edges, geom, j
     R = int(max(8, 3 * d_img))
     with svc._lock:
         emb = impl.embed(rgb)
-        for k, (px, py) in enumerate(pts):
+        for px, py in pts:
             if job is not None and job.cancelled:  # every click: a SAM click can take a while on a slow CPU
                 job.update()
             xi, yi = int(px), int(py)
@@ -656,6 +670,219 @@ def _tile_objects(svc, impl, rgb, x, y, ds, d_img, amin, amax, O, edges, geom, j
                 continue
             out.append(q)
     return out
+
+
+# ================================================================================================ by text
+PHRASE_COLORS = ('#ffb454', '#59c2ff', '#aad94c', '#f07178', '#d2a6ff', '#95e6cb', '#e6b673', '#ff8f40')
+TEXT_FLOOR = 0.1  # the lowest detection score kept (strictness 0)
+
+
+def text_threshold(strictness: float) -> float:
+    """Strictness 0 … 1 → the detection score a match needs (0.35 at 0.5: the models' usual cut-off)."""
+    return TEXT_FLOOR + 0.5 * float(np.clip(strictness, 0, 1))
+
+
+def _text_sim(score: np.ndarray) -> np.ndarray:
+    """Detection scores on the similarity scale, so that ``sim ≥ threshold(s)`` ⇔ ``score ≥ text_threshold(s)``."""
+    return 0.12 + 0.76 * (np.asarray(score, float) - TEXT_FLOOR) / 0.5
+
+
+def text_detector(model: str = 'grounding', progress=None):
+    """The model that finds things by name: ``grounding`` (Grounding DINO + SAM 2.1, Apache-2.0) or ``sam3``
+    (SAM 3, opt-in under Meta's SAM License)."""
+    if model == 'sam3':
+        return sam3.detector(progress)
+    return grounding.detector(progress)
+
+
+def _box_nms(boxes: np.ndarray, scores: np.ndarray, iou: float = 0.5) -> np.ndarray:
+    """Indices kept by non-maximum suppression (xyxy boxes), best first; uses a spatial index (many boxes)."""
+    order = np.argsort(-scores, kind='stable')
+    tree = shapely.STRtree(shapely.box(*boxes.T))
+    area = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+    dead = np.zeros(len(boxes), bool)
+    keep = []
+    for i in order:
+        if dead[i]:
+            continue
+        keep.append(i)
+        j = tree.query(shapely.box(*boxes[i]))
+        j = j[(j != i) & ~dead[j]]
+        if not len(j):
+            continue
+        b = boxes[j]
+        w = np.clip(np.minimum(b[:, 2], boxes[i, 2]) - np.maximum(b[:, 0], boxes[i, 0]), 0, None)
+        h = np.clip(np.minimum(b[:, 3], boxes[i, 3]) - np.maximum(b[:, 1], boxes[i, 1]), 0, None)
+        inter = w * h
+        dead[j[inter / np.maximum(area[i] + area[j] - inter, 1e-9) > iou]] = True
+    return np.asarray(keep, np.int64)
+
+
+def find_by_text(
+    registry,
+    sid: str,
+    *,
+    prompt: str,
+    model: str = 'grounding',
+    examples: dict | None = None,
+    scope: dict | None = None,
+    strictness: float = 0.5,
+    object_um: float | None = None,
+    name: str | None = None,
+    job: Job | None = None,
+    max_tiles: int = 2000,
+    detector=None,
+) -> dict:
+    """Outline everything in the scope that matches the text ``prompt`` (one class per phrase: "nucleus. gland").
+
+    ``grounding``: Grounding DINO finds boxes, SAM 2.1 outlines each; ``sam3``: SAM 3 finds and outlines in one go.
+    The slide is read in tiles at the scale where an object of ``object_um`` (or the examples' size) is ~48 px
+    across. With examples, only matches like them are kept too."""
+    t0 = time.perf_counter()
+    upd = job.update if job else (lambda *a, **k: None)
+    names = grounding.phrases(prompt)
+    if not names:
+        raise ValueError('type what to find, e.g. "nucleus" or "gland. vessel" (one class per phrase)')
+    src = _source(registry, sid)
+    info = src.info
+    ex = Examples(registry, sid, examples) if examples else None
+    ex = ex if ex else None
+    mpp = _mpp(src)
+    d0 = ex.diameter() if ex else float(object_um or 10.0) / mpp  # object diameter, level-0 px
+    geom, where = scope_geometry(registry, sid, scope, tissue=True)
+    if detector is None:
+        upd(0.0, 'loading the model…')
+        detector = text_detector(model, lambda f, m: upd(0.0, m))
+    T = int(getattr(detector, 'tile', 800))
+    f = max(0.5, d0 / 48.0)  # level-0 px per model px (≥ 0.5: at most 2× enlarged)
+    lv = 0
+    for i, Lv in enumerate(info.levels):
+        if Lv.downsample <= f * 1.0001:
+            lv = i
+    ds = info.levels[lv].downsample
+    S0 = T * f  # a tile's side, level-0 px
+    O0 = min(S0 / 4, max(32 * f, 2.5 * d0))  # overlap: objects cut by one tile are whole in the next
+    step = S0 - O0
+    gx0, gy0, gx1, gy1 = geom.bounds if geom is not None else (0, 0, info.width, info.height)
+    tiles = []
+    for ty in range(int(gy0 // step), int(math.ceil(gy1 / step)) + 1):
+        for tx in range(int(gx0 // step), int(math.ceil(gx1 / step)) + 1):
+            x0, y0 = tx * step, ty * step
+            x1, y1 = min(info.width, x0 + S0), min(info.height, y0 + S0)
+            if x1 - x0 < 8 * f or y1 - y0 < 8 * f:
+                continue
+            if geom is None or geom.intersects(shapely.box(x0, y0, x1, y1)):
+                tiles.append((x0, y0, x1, y1))
+    if not tiles:
+        raise ValueError(f'nothing to search in {where}')
+    if len(tiles) > max_tiles:
+        raise ValueError(
+            f'{len(tiles):,} tiles at this object size: pick a region or the view, or a larger object size'
+        )
+    if geom is not None:
+        shapely.prepare(geom)
+    svc = impl = None
+    if not getattr(detector, 'masks', False):  # boxes only: SAM 2.1 outlines them
+        svc = sam_service()
+        impl = svc._load()
+    polys, boxes, scores, labels = [], [], [], []
+    name = _unique(registry, sid, name or f'Text · {", ".join(names)}'[:60])
+    prov = f'{name} (searching…)'
+    last_pub = time.perf_counter()
+    floor = TEXT_FLOOR
+    label = getattr(detector, 'label', getattr(detector, 'name', 'model'))
+    for ti, (x0, y0, x1, y1) in enumerate(tiles):
+        el = time.perf_counter() - t0
+        eta = f' · ~{el / ti * (len(tiles) - ti) / 60:.0f} min left' if ti >= 2 and el > 20 else ''
+        upd(ti / len(tiles), f'{label}: tile {ti + 1} of {len(tiles)} · {len(polys):,} found{eta}')
+        lx, ly = int(x0 / ds), int(y0 / ds)
+        lw, lh = max(1, int(round((x1 - x0) / ds))), max(1, int(round((y1 - y0) / ds)))
+        lw, lh = min(lw, info.levels[lv].width - lx), min(lh, info.levels[lv].height - ly)
+        rgb = _rgb(src, lv, lx, ly, lw, lh)
+        tw, th = max(1, int(round((x1 - x0) / f))), max(1, int(round((y1 - y0) / f)))
+        if (tw, th) != (rgb.shape[1], rgb.shape[0]):
+            rgb = np.asarray(Image.fromarray(rgb).resize((tw, th), Image.BILINEAR))
+        out = detector.detect(rgb, names, min_score=floor)
+        b, sc, lab = out[:3]
+        masks = out[3] if len(out) > 3 else None
+        if not len(b):
+            continue
+        big = ((b[:, 2] - b[:, 0]) > 0.8 * T) & ((b[:, 3] - b[:, 1]) > 0.8 * T)  # "the whole picture"
+        cx, cy = (b[:, 0] + b[:, 2]) / 2, (b[:, 1] + b[:, 3]) / 2
+        core = O0 / 2 / f
+        ok = ~big
+        ok &= (cx >= core) | (x0 <= 0)
+        ok &= (cy >= core) | (y0 <= 0)
+        ok &= (cx < tw - core) | (x1 >= info.width)
+        ok &= (cy < th - core) | (y1 >= info.height)
+        if geom is not None:
+            ok &= shapely.contains_xy(geom, x0 + cx * f, y0 + cy * f)
+        idx = np.nonzero(ok)[0]
+        if not len(idx):
+            continue
+        emb = None
+        for k in idx:
+            if job is not None and job.cancelled:
+                job.update()
+            bx = b[k]
+            if masks is not None:
+                m = np.asarray(masks[k], bool)
+            else:
+                with svc._lock:
+                    if emb is None:
+                        emb = impl.embed(rgb)
+                    m, _ = impl.predict(emb, [], [], [float(v) for v in bx])
+                pad = 0.15 * max(bx[2] - bx[0], bx[3] - bx[1]) + 2  # SAM may spill out of the box: not far
+                yy0, xx0 = max(0, int(bx[1] - pad)), max(0, int(bx[0] - pad))
+                yy1, xx1 = min(th, int(bx[3] + pad) + 1), min(tw, int(bx[2] + pad) + 1)
+                clip = np.zeros_like(m)
+                clip[yy0:yy1, xx0:xx1] = True
+                m = m & clip
+            ps = _polygons(m, 4.0)
+            if ps:
+                p = ps[0]
+                q = np.stack([x0 + p[:, 0] * f, y0 + p[:, 1] * f], 1)
+            else:  # no mask (tiny object): its box
+                q = np.array([[bx[0], bx[1]], [bx[2], bx[1]], [bx[2], bx[3]], [bx[0], bx[3]]]) * f + [x0, y0]
+            polys.append(q)
+            boxes.append([x0 + bx[0] * f, y0 + bx[1] * f, x0 + bx[2] * f, y0 + bx[3] * f])
+            scores.append(float(sc[k]))
+            labels.append(int(lab[k]))
+        if time.perf_counter() - last_pub > 4 and polys:
+            _publish(registry, sid, _polys_features(polys, 'candidate'), None, 0, prov, 'candidate', '#9aa3ad')
+            last_pub = time.perf_counter()
+    if prov in registry.layers(sid):
+        registry.remove_annotations(sid, prov)
+    if not polys:
+        raise ValueError(f'nothing matching "{", ".join(names)}" in {where} (try other words or a larger object size)')
+    upd(0.95, f'{len(polys):,} matches: removing duplicates…')
+    keep = _box_nms(np.asarray(boxes, float), np.asarray(scores, float))
+    polys = [polys[i] for i in keep]
+    score = np.asarray(scores, float)[keep]
+    lab = np.asarray(labels, np.int64)[keep]
+    classes = [(n, PHRASE_COLORS[i % len(PHRASE_COLORS)]) for i, n in enumerate(names)]
+    F = _polys_features(polys, names[0])
+    sim = _text_sim(score)
+    note = f'{label} at {f:.2g} level-0 px per model px'
+    if ex:
+        upd(0.97, f'comparing {len(polys):,} matches with the examples…')
+        lvm = _level_for(src, d0)
+        if svc is None:
+            svc = sam_service()
+        ex.outline_points(svc, src)
+        P, N = ex.measures(src, lvm)
+        sim_ex, keys = similarity(_measure(F, src, lvm), P, N)
+        sim = np.minimum(sim, sim_ex)
+        note += f'; also like the examples ({", ".join(keys)})'
+    extra = {'score': np.round(score, 3)}
+    lname, n = _publish(registry, sid, F, sim, strictness, name, names[0], classes[0][1], extra, classes, lab)
+    rid = uuid.uuid4().hex[:10]
+    _remember(rid, slide=sid, F=F, sim=sim, name=lname, cls=names[0], color=classes[0][1], extra=extra,
+              strictness=strictness, classes=classes, labels=lab)  # fmt: skip
+    return _summary(
+        rid, lname, n, len(polys), strictness, where, t0, 'text', note=note,
+        kpis=[['found', f'{n:,}'], ['matches', f'{len(polys):,}'], ['tiles', str(len(tiles))]],
+    )  # fmt: skip
 
 
 # ================================================================================================ areas
@@ -864,12 +1091,13 @@ def capabilities() -> dict:
         'areas': areas,
         'sam': st.get('backend') or (st.get('available') or ['classic'])[0],
         'details': list(DETAIL_UM),
+        'text': {'grounding': grounding.status(), 'sam3': sam3.status()},
     }
 
 
 def run(registry, sid: str, body: dict, job: Job | None = None) -> dict:
-    """The app's ``POST /slides/{sid}/find``: {mode: objects | segment | areas, examples, candidates, scope,
-    strictness, object_um, training, classes, detail, name}."""
+    """The app's ``POST /slides/{sid}/find``: {mode: objects | segment | areas | text, examples, candidates, scope,
+    strictness, object_um, training, classes, detail, prompt, model, name}."""
     mode = body.get('mode') or 'objects'
     if mode == 'objects':
         if not body.get('candidates'):
@@ -890,4 +1118,11 @@ def run(registry, sid: str, body: dict, job: Job | None = None) -> dict:
         return find_areas(registry, sid, training=body['training'], classes=body.get('classes'),
                           scope=body.get('scope'), detail=body.get('detail') or 'medium', name=body.get('name'),
                           job=job)  # fmt: skip
-    raise ValueError(f'unknown mode {mode!r} (objects | segment | areas)')
+    if mode == 'text':
+        ex = body.get('examples') or None
+        if ex and not (ex.get('layer') or ex.get('picks')):
+            ex = None
+        return find_by_text(registry, sid, prompt=body.get('prompt') or '', model=body.get('model') or 'grounding',
+                            examples=ex, scope=body.get('scope'), strictness=float(body.get('strictness', 0.5)),
+                            object_um=float(body.get('object_um') or 10), name=body.get('name'), job=job)  # fmt: skip
+    raise ValueError(f'unknown mode {mode!r} (objects | segment | areas | text)')

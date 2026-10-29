@@ -93,7 +93,8 @@ class JobRunner:
                 job.progress = 1.0 if job.state == 'done' else job.progress
             except Cancelled:
                 job.state = 'cancelled'
-            except ValueError as e:  # a message for the user (no examples, nothing found…), not a bug
+            except (ValueError, PermissionError, FileNotFoundError) as e:  # for the user (no examples, nothing
+                # found, a licence to accept, a model not published), not a bug
                 job.state = 'error'
                 job.error = str(e)
             except Exception as e:  # reported to the page through the job, and logged

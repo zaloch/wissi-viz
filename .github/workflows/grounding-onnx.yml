@@ -1,0 +1,51 @@
+# Mirrors Grounding DINO tiny (Apache-2.0) as ONNX (float32 + int8), checks wissi-viz's pipeline against the original
+# PyTorch model in transformers, and publishes the files as the GitHub release `grounding-dino-tiny-onnx-v1`, from
+# which wissi-viz's "find by text" downloads them on first use.
+name: grounding-onnx
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [scripts/build_grounding_onnx.py, .github/workflows/grounding-onnx.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - name: Install
+        run: |
+          run() { out=$("$@" 2>&1) || { echo "::error::$* :: $(echo "$out" | tail -c 2500 | tr '\n' ' ')"; exit 1; }; echo "$out" | tail -3; }
+          run uv venv -p 3.12
+          run uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          run uv pip install transformers huggingface_hub onnx onnxruntime pooch timm
+          run uv pip install -e ".[analysis]"
+      - name: Build and check
+        run: |
+          fail() { echo "::error::$1"; exit 1; }
+          out=$(uv run --no-sync python scripts/build_grounding_onnx.py --out dist/grounding 2>&1) || { echo "$out" | tail -60; fail "$(echo "$out" | tail -c 3000 | tr '\n' ' ')"; }
+          echo "$out" | tail -40
+          echo "::notice::$(uv run --no-sync python -c "import json;r=json.load(open('dist/grounding/check.json'));print(json.dumps({**r['summary'],**r['sizes_mb']}))")"
+          curl -fsSL -o dist/grounding/LICENSE-Apache-2.0.txt https://www.apache.org/licenses/LICENSE-2.0.txt
+          cd dist/grounding && sha256sum LICENSE-Apache-2.0.txt >> SHA256SUMS && ls -la
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          S=$(uv run --no-sync python -c "import json;print(json.dumps(json.load(open('dist/grounding/check.json'))['summary']))")
+          gh release view grounding-dino-tiny-onnx-v1 >/dev/null 2>&1 || gh release create grounding-dino-tiny-onnx-v1 \
+            --title "Grounding DINO tiny ONNX (Apache-2.0)" \
+            --notes "Grounding DINO tiny (IDEA Research, Apache-2.0) as ONNX for wissi-viz's find by text: the onnx-community export, plus an int8 copy. Checked against PyTorch (transformers): $S"
+          gh release upload grounding-dino-tiny-onnx-v1 dist/grounding/*.onnx dist/grounding/vocab.txt \
+            dist/grounding/SHA256SUMS dist/grounding/NOTICE.txt dist/grounding/LICENSE-Apache-2.0.txt dist/grounding/check.json --clobber
+      - name: The published files work through wissi-viz
+        env:
+          WISSI_TEST_GROUNDING: '1'
+        run: |
+          uv pip install pytest pytest-github-actions-annotate-failures
+          uv run --no-sync pytest -q -rfE tests/test_grounding.py -k real

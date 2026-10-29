@@ -207,6 +207,7 @@ def from_layer(layer: AnnotationLayer, ellipse_vertices: int = _ELLIPSE_VERTS) -
         for k in ('line_width', 'fill_opacity', 'point_size', 'visible', 'detail_min_px', 'z', 'origin')
     }
     F.props = _layer_props(layer, len(F))
+    F.mpp = F.mpp or layer.mpp
     return F
 
 
@@ -257,6 +258,7 @@ def to_layer(F: Features, name: str | None = None) -> AnnotationLayer:
     for k, v in (F.style or {}).items():
         if hasattr(layer, k) and v is not None:
             setattr(layer, k, v)
+    layer.mpp = float(F.mpp) if F.mpp else None
     names = F.class_of()
     cls = [None if c == '' else c for c in names.tolist()]
     n = len(F)

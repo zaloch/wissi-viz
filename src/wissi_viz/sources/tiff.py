@@ -227,6 +227,9 @@ def _mpp_from_tiff(tf) -> tuple[float, float] | None:
                 f = {'nm': 1e-3, 'mm': 1e3, 'm': 1e6}.get(unit, 1.0)
                 return (float(px.get('PhysicalSizeX')) * f, float(px.get('PhysicalSizeY', px.get('PhysicalSizeX'))) * f)
         p = tf.pages[0]
+        philips = _mpp_philips(p.description or '')
+        if philips:
+            return philips
         tags = p.tags
         if 'XResolution' in tags and 'ResolutionUnit' in tags:
             num, den = tags['XResolution'].value
@@ -239,6 +242,22 @@ def _mpp_from_tiff(tf) -> tuple[float, float] | None:
     except Exception:  # noqa: BLE001  (malformed resolution tags: no calibration)
         pass
     return None
+
+
+def _mpp_philips(desc: str) -> tuple[float, float] | None:
+    """Philips TIFF (e.g. CAMELYON16): an XML description whose ``DICOM_PIXEL_SPACING`` attributes give each
+    level's pixel size in mm, as "row" "column" (y, x); the finest is the full-resolution level."""
+    if 'DICOM_PIXEL_SPACING' not in desc:
+        return None
+    best = None
+    for text in re.findall(r'Name="DICOM_PIXEL_SPACING"[^>]*>([^<]*)<', desc):
+        v = [float(n) for n in re.findall(r'[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?', text)]
+        if len(v) >= 2 and v[0] > 0 and v[1] > 0 and (best is None or v[0] < best[0]):
+            best = (v[0], v[1])
+    if best is None:
+        return None
+    y_um, x_um = best[0] * 1000, best[1] * 1000
+    return (x_um, y_um) if 0.01 < x_um < 100 else None
 
 
 def _ome_channels(tf) -> list[tuple[str, str | None]]:

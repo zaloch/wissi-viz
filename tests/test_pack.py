@@ -153,3 +153,67 @@ def test_cli_entry_points_parse(monkeypatch):
     cli.main(['--demo', 'full', '--yes', '--no-open'])
     cli.main(['--benchmark', '--panes', '1,32', '--yes'])
     assert got['demo'][0] == 'full' and got['bench'][0] == 'quick' and got['bench'][3] == '1,32'
+
+
+# ------------------------------------------------------------------------------------------------ resolution
+PHILIPS_XML = (
+    '<?xml version="1.0" encoding="UTF-8" ?><DataObject ObjectType="DPUfsImport">'
+    '<Attribute Name="DICOM_MANUFACTURER" Group="0x0008" Element="0x0070" PMSVR="IString">PHILIPS</Attribute>'
+    '<Attribute Name="PIIM_PIXEL_DATA_REPRESENTATION_SEQUENCE" Group="0x1001" Element="0x8b01" '
+    'PMSVR="IDataObjectArray"><Array>'
+    '<DataObject ObjectType="PixelDataRepresentation"><Attribute Name="DICOM_PIXEL_SPACING" Group="0x0028" '
+    'Element="0x0030" PMSVR="IDoubleArray">&quot;0.000487804&quot; &quot;0.000487804&quot;</Attribute></DataObject>'
+    '<DataObject ObjectType="PixelDataRepresentation"><Attribute Name="DICOM_PIXEL_SPACING" Group="0x0028" '
+    'Element="0x0030" PMSVR="IDoubleArray">&quot;0.000243902&quot; &quot;0.000243902&quot;</Attribute></DataObject>'
+    '</Array></Attribute></DataObject>'
+)
+
+
+def test_philips_tiff_resolution(tmp_path):
+    """CAMELYON16 slides are Philips TIFFs: the resolution is in the XML description, not in TIFF tags."""
+    import tifffile
+
+    from wissi_viz.sources import open_slide
+
+    p = tmp_path / 'philips.tif'
+    img = np.full((512, 512, 3), 200, np.uint8)
+    tifffile.imwrite(p, img, description=PHILIPS_XML, tile=(256, 256), photometric='rgb', metadata=None)
+    mpp = open_slide(p).info.mpp
+    assert mpp is not None and abs(mpp[0] - 0.243902) < 1e-4 and abs(mpp[1] - 0.243902) < 1e-4  # the finest level
+
+
+def test_layers_keep_their_resolution(tmp_path):
+    """A cells file states the µm/px it was segmented at; loading it (GeoParquet, the cache format) keeps it, so
+    measurements of a slide without resolution metadata still come out in µm."""
+    from wissi_viz import annio
+    from wissi_viz.annotations import AnnotationLayer
+    from wissi_viz.metrics import objects_from_layer
+
+    L = AnnotationLayer(name='cells')
+    for i in range(5):
+        L.add_polygon([[i * 30, 0], [i * 30 + 10, 0], [i * 30 + 10, 10], [i * 30, 10]], cls='cell')
+    F = annio.from_layer(L)
+    F.mpp = 0.5
+    annio.write_geoparquet(F, tmp_path / 'c.parquet')
+    back = annio.load(tmp_path / 'c.parquet')
+    assert back.mpp == 0.5 and annio.from_layer(back).mpp == 0.5
+    assert objects_from_layer(back).mpp == 0.5
+    pts = annio.Features(np.full(5, annio.GEO_POINT, np.uint8), np.array([[i * 30.0, 5.0] for i in range(5)]),
+                         np.arange(6), np.arange(6), np.zeros(5, np.int32), ['cell'])  # fmt: skip
+    pts.mpp = 0.5
+    P = annio.to_layer(pts)  # a bulk (cell table) layer: the kind the cache format stores
+    assert P.mpp == 0.5
+    P.save(tmp_path / 'cache')
+    assert AnnotationLayer.open(tmp_path / 'cache').mpp == 0.5
+
+
+def test_measuring_without_resolution_says_so():
+    from types import SimpleNamespace
+
+    from wissi_viz import pack
+
+    said = []
+    src = SimpleNamespace(info=SimpleNamespace(mpp=None))
+    assert pack._mpp_of(src, SimpleNamespace(mpp=0.25), 'a', said.append) == 0.25 and not said  # from its cells
+    assert pack._mpp_of(src, None, 'b', said.append) == 0.5 and 'assumed 0.5' in said[0]
+    assert pack._mpp_of(SimpleNamespace(info=SimpleNamespace(mpp=(0.24, 0.24))), None, 'c', said.append) == 0.24

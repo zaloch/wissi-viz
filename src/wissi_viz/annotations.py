@@ -100,6 +100,9 @@ class AnnotationLayer:
     #: (find all), 'detected' (segmentation, tissue detection), 'analysis' (a result), 'imported' (a file or table);
     #: '' = unknown (treated as imported). Saved with the layer (GeoParquet metadata, the cache format).
     origin: str = ''
+    #: µm per level-0 pixel the coordinates were made at (segmentation output, imported files that state it); None
+    #: = take the slide's. Saved with the layer, so measurements of a re-loaded layer stay in µm.
+    mpp: float | None = None
 
     def __post_init__(self) -> None:
         self._lock = threading.RLock()
@@ -920,6 +923,7 @@ class AnnotationLayer:
                     'overview',
                     'pyramid',
                     'origin',
+                    'mpp',
                 )
             },
             'median_size': c.median_size,

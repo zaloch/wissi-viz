@@ -350,6 +350,15 @@ def _cells(x: dict, d: Path) -> Path | None:
     return None
 
 
+def _mpp_of(src, cells, name: str, log) -> float:
+    """µm/px for measuring a slide: its own; else what its cells were segmented at; else 0.5 µm/px, the
+    segmenter's assumption for slides without resolution metadata (said in the log: the µm are then approximate)."""
+    mpp = (src.info.mpp or (None,))[0] or getattr(cells, 'mpp', None)
+    if not mpp:
+        log(f'{name}: no resolution in the file; measuring at an assumed 0.5 µm/px (sizes and densities approximate)')
+    return float(mpp or 0.5)
+
+
 def analyze(sel: list[dict], d: Path, log=print) -> None:
     """Per image: tissue outline, cell density + Getis-Ord hotspots, and region metrics (tissue and expert ROIs, with
     cells) → layers/*.parquet and metrics/<id>.csv."""
@@ -364,15 +373,15 @@ def analyze(sel: list[dict], d: Path, log=print) -> None:
             continue
         t0 = time.time()
         src = open_slide(_slide(x, d))
-        mpp = (src.info.mpp or (None,))[0]
+        cp = _cells(x, d)
+        cells = annio.load(cp) if cp else None
+        mpp = _mpp_of(src, cells, x['id'], log)
         tis_p = ld / f'{x["id"]}.tissue.parquet'
         if not tis_p.exists():
             _, tis_layer = spatial.tissue_mask(src)
             tis_layer.origin = 'detected'
             annio.export(tis_layer, tis_p, slide=Path(_slide(x, d)).name)
         tissue = annio.load(tis_p)
-        cp = _cells(x, d)
-        cells = annio.load(cp) if cp else None
         objs = objects_from_layer(cells, mpp) if cells is not None else None
         if objs is not None and len(objs) and not (ld / f'{x["id"]}.density.parquet').exists():
             cls = None
@@ -642,9 +651,11 @@ def _bench_metrics(sel, d: Path) -> list[dict]:
         _, tissue = spatial.tissue_mask(src)
         t1 = time.perf_counter()
         cp = _cells(x, d)
-        objs = objects_from_layer(annio.load(cp), (src.info.mpp or (None,))[0]) if cp else None
+        cells = annio.load(cp) if cp else None
+        mpp = _mpp_of(src, cells, x['id'], lambda *_: None)
+        objs = objects_from_layer(cells, mpp) if cells is not None else None
         t2 = time.perf_counter()
-        df = region_metrics(tissue, source=src, objects=objs)
+        df = region_metrics(tissue, source=src, objects=objs, mpp=mpp)
         t3 = time.perf_counter()
         rows.append(
             {

@@ -26,7 +26,8 @@ jobs:
     steps:
       - name: Needs HF_TOKEN
         if: env.HF_TOKEN == ''
-        run: echo "::notice::No HF_TOKEN secret: request access to facebook/sam3 on Hugging Face and add a token as the repository secret HF_TOKEN to export SAM 3."
+        run: |
+          echo "::notice::No HF_TOKEN secret - request access to facebook/sam3 on Hugging Face, then add a token as the repository secret HF_TOKEN to export SAM 3."
       - uses: actions/checkout@v5
         if: env.HF_TOKEN != ''
       - uses: astral-sh/setup-uv@v7

@@ -217,7 +217,8 @@ def test_native_window_wiring(files, monkeypatch):
     assert seen['title'] == 'wissi-viz' and seen['url'] == 'http://127.0.0.1:9/app?native=1'
     assert isinstance(seen['window']['js_api'], D.Bridge)
     st = seen['start']
-    assert Path(st['icon']).name == 'icon.png' and Path(st['icon']).exists()
+    want = 'icon.ico' if sys.platform == 'win32' else 'icon.png'  # WinForms reads .ico files only
+    assert Path(st['icon']).name == want and Path(st['icon']).exists()
     assert st['private_mode'] is False and st['storage_path'].endswith('webview')
     ((title, items),) = st['menu']
     assert title == 'File' and [i.title for i in items if i] == [

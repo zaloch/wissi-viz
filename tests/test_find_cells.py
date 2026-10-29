@@ -96,8 +96,7 @@ def test_cells_over_http_and_sam3_published(session, monkeypatch):  # noqa: F811
     monkeypatch.setattr(weights, 'published', lambda release, timeout=4.0: False)
     caps = c.get(f'{P}/find/capabilities').json()
     assert caps['cells']['classic']['available'] and set(caps['cells']) == {'cellpose', 'classic', 'classpose'}
-    if sam3.folder() is None:
-        assert caps['text']['sam3']['published'] is False
+    assert caps['text']['sam3']['source'] == f'https://huggingface.co/{sam3.HF_REPO}'
     j = c.post(f'{P}/slides/{sid}/find', json={'mode': 'text', 'model': 'classic', 'prompt': '',
                                                'scope': {'kind': 'view', 'rect': [300, 300, 900, 900]}}).json()  # fmt: skip
     assert j['title'] == 'Find cells · classic stain threshold'
@@ -156,3 +155,68 @@ def test_sam3_reads_exports_with_the_processor_inside():
     assert k[0, 25, 30] and not k[0, 7, 7] and k[1, 7, 7]
     small = {**raw, 'masks': m[:, :, ::2, ::2].astype(np.float32)}  # another size, as probabilities
     assert sam3.postprocess(small, (40, 50), 0.5)[2].shape == (2, 40, 50)
+
+
+def test_sam3_download_from_the_public_copy(tmp_path, monkeypatch):
+    """SAM 3 comes from the public export (here a stand-in zip): checked, unpacked flat, licence and notice beside it;
+    a file with another fingerprint is refused."""
+    import hashlib
+    import zipfile
+
+    from wissi_viz import sam3, weights
+
+    z = tmp_path / 'src' / 'sam3_vit_h.zip'
+    z.parent.mkdir()
+    with zipfile.ZipFile(z, 'w') as zf:
+        for n in ('sam3_image_encoder.onnx', 'sam3_image_encoder.onnx.data', 'sam3_language_encoder.onnx',
+                  'sam3_decoder.onnx', 'config.yaml'):  # fmt: skip
+            zf.writestr(f'sam3_vit_h/{n}', b'x' * 10)
+    monkeypatch.setattr(weights, 'cache_dir', lambda name: tmp_path / 'cache' / name)
+    monkeypatch.setattr(sam3, 'HF_URL', z.as_uri())
+    monkeypatch.delenv('WISSI_SAM3_DIR', raising=False)
+
+    def no_onnx(*a, **k):
+        raise ImportError('onnx')
+
+    monkeypatch.setattr(sam3, 'quantize', no_onnx)
+    monkeypatch.setattr(sam3, 'HF_SHA256', '0' * 64)
+    with pytest.raises(ValueError, match='checksum'):
+        sam3.download()
+    assert sam3.folder() is None
+    monkeypatch.setattr(sam3, 'HF_SHA256', hashlib.sha256(z.read_bytes()).hexdigest())
+    msgs = []
+    d = sam3.download(lambda f, m: msgs.append(m))
+    assert sam3.folder() == d and (d / 'sam3_decoder.onnx').exists() and (d / 'sam3_image_encoder.onnx.data').exists()
+    assert not (d / 'sam3_vit_h.zip').exists() and 'Grant of Rights' in (d / 'LICENSE-SAM.txt').read_text('utf-8')
+    assert 'huggingface.co/nrl-ai' in (d / 'NOTICE.txt').read_text('utf-8') and 'float32' in sam3.status()['precision']
+    assert any('Hugging Face' in m for m in msgs)
+
+
+def test_sam3_local_int8_copy(tmp_path):
+    """The int8 copy made on this computer: each part quantized (or kept) and still runs, close to float32."""
+    onnx = pytest.importorskip('onnx')
+    import onnxruntime as ort
+    from onnx import TensorProto, helper, numpy_helper
+
+    from wissi_viz import sam3
+
+    rng = np.random.default_rng(0)
+    w = rng.normal(size=(64, 64)).astype(np.float32)
+    src = tmp_path / 'fp32'
+    src.mkdir()
+    for local in sam3.PARTS:
+        g = helper.make_graph(
+            [helper.make_node('MatMul', ['x', 'w'], ['y'])], local,
+            [helper.make_tensor_value_info('x', TensorProto.FLOAT, [1, 64])],
+            [helper.make_tensor_value_info('y', TensorProto.FLOAT, [1, 64])], [numpy_helper.from_array(w, 'w')],
+        )  # fmt: skip
+        m = helper.make_model(g, opset_imports=[helper.make_opsetid('', 17)], ir_version=9)  # what ONNX Runtime reads
+        onnx.save(m, str(src / f'sam3_{local}.onnx'))
+    out = tmp_path / 'int8'
+    prec = sam3.quantize(src, out, parts=('image_encoder', 'language_encoder'))
+    assert prec == {'image_encoder': 'int8', 'language_encoder': 'int8', 'decoder': 'float32'}
+    x = rng.normal(size=(1, 64)).astype(np.float32)
+    for name in sam3.PARTS.values():
+        y = ort.InferenceSession(str(out / f'sam3-{name}.onnx')).run(None, {'x': x})[0]
+        assert np.abs(y - x @ w).max() < 0.05 * np.abs(x @ w).max()
+    assert (out / 'sam3-image-encoder.onnx').stat().st_size < (src / 'sam3_image_encoder.onnx').stat().st_size

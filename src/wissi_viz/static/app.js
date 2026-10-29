@@ -1533,7 +1533,7 @@ async function setLicense(accept) {
     await api('/models/sam3/license', { accept });
     findCaps = null;
     $('sam3-lic').close();
-    toast({ title: accept ? 'SAM License accepted' : 'SAM License acceptance withdrawn', sub: accept ? 'SAM 3 downloads on its first run (about 1.5 GB, once).' : 'By text uses Grounding DINO + SAM 2.1.' });
+    toast({ title: accept ? 'SAM License accepted' : 'SAM License acceptance withdrawn', sub: accept ? 'SAM 3 downloads on its first run (about 3.3 GB, from Hugging Face, once).' : 'By text uses Grounding DINO + SAM 2.1.' });
     if (!accept) $('f-model').value = 'grounding';
     renderDraw();
   } catch (e) { toast({ kind: 'bad', title: 'Could not save', sub: e.message }); }
@@ -1579,10 +1579,9 @@ async function renderDraw() {
   ws.value = [...ws.options].some((o) => o.value === keepW) ? keepW : 'view';
   $('f-cand-row').hidden = findMode !== 'objects';
   const tx = caps.text || {}, s3 = tx.sam3 || {}, cellCaps = caps.cells || {};
-  for (const o of $('f-model').options) {   // what this server has: a cell model not installed, SAM 3 not published
+  for (const o of $('f-model').options) {   // what this server has: a cell model not installed
     const c = cellCaps[o.value];
     if (c) { o.disabled = !c.available; o.title = c.why || ''; o.textContent = o.textContent.replace(/ · not installed$/, '') + (c.available ? '' : ' · not installed'); }
-    if (o.value === 'sam3') o.textContent = `SAM 3 · SAM License (opt-in)${s3.published === false ? ' · not available yet' : ''}`;
   }
   if ($('f-model').selectedOptions[0]?.disabled) $('f-model').value = 'grounding';
   const model = $('f-model').value, cellModel = model in CELL_MODELS;
@@ -1590,7 +1589,7 @@ async function renderDraw() {
   $('f-model-row').hidden = findMode !== 'text';
   $('f-text-row').hidden = $('f-expand-row').hidden = findMode !== 'text' || cellModel;
   $('f-lic-row').hidden = findMode !== 'text' || model !== 'sam3';
-  $('f-lic-msg').textContent = s3.accepted ? `SAM License accepted${s3.downloaded ? '' : ' · downloads ~1.5 GB on the first run'}.`
+  $('f-lic-msg').textContent = s3.accepted ? `SAM License accepted${s3.downloaded ? '' : ' · downloads ~3.3 GB from Hugging Face on the first run'}.`
     : 'SAM 3 needs its licence accepted first.';
   $('f-lic').textContent = s3.accepted ? 'Licence' : 'Read the licence…';
   $('f-head').textContent = findMode === 'text' ? (cellModel ? 'Find every cell' : 'Find all by name') : findMode === 'areas' ? 'Map the areas' : 'Find all like them';
@@ -1618,9 +1617,8 @@ async function renderDraw() {
     } else if (findMode === 'text') {
       const words = $('f-prompt').value.split(/[.,;\n]+/).map((w) => w.trim()).filter(Boolean);
       const g = tx.grounding || {};
-      const dl = model === 'sam3' ? (s3.downloaded ? '' : ' Downloads SAM 3 once (~1.5 GB).') : (g.downloaded ? '' : ` Downloads Grounding DINO once (~${g.size_mb || 250} MB).`);
-      if (model === 'sam3' && s3.published === false && !s3.downloaded) { msg = 'SAM 3 is not available for this version yet (its download is not published): use Grounding DINO + SAM 2.1, or point WISSI_SAM3_DIR at an export of your own.'; ok = false; }
-      else if (model === 'sam3' && !s3.accepted) { msg = 'Accept the SAM License to use SAM 3, or pick Grounding DINO + SAM 2.1.'; ok = false; }
+      const dl = model === 'sam3' ? (s3.downloaded ? '' : ' Downloads SAM 3 once (~3.3 GB from Hugging Face).') : (g.downloaded ? '' : ` Downloads Grounding DINO once (~${g.size_mb || 250} MB).`);
+      if (model === 'sam3' && !s3.accepted) { msg = 'Accept the SAM License to use SAM 3, or pick Grounding DINO + SAM 2.1.'; ok = false; }
       else if (!words.length) { msg = 'Type what to find, e.g. “nucleus”, or “gland. vessel” (one class per phrase).'; ok = false; }
       else if ($('f-expand').checked && words.length === 1) msg = `${model === 'sam3' ? 'SAM 3' : 'Grounding DINO + SAM 2.1'} finds ${words[0]} about ${$('f-size').value} µm across; the best matches then become examples and SAM outlines everything like them.${dl} The whole slide can take long without a GPU.`;
       else msg = `${model === 'sam3' ? 'SAM 3' : 'Grounding DINO + SAM 2.1'} finds every ${words.join(', ')} about ${$('f-size').value} µm across${pos ? `, keeping those like your ${pos} example${pos === 1 ? '' : 's'}` : ''}.${dl} ${model === 'sam3' ? 'SAM 3 handles dense small objects well.' : 'Grounding DINO finds larger structures (glands, vessels, fat, folds) far better than dense nuclei: for those, use Segment everything with examples, or SAM 3.'} The whole slide can take long without a GPU.`;

@@ -216,6 +216,29 @@ def _native_icon(window) -> None:
         pass
 
 
+def _macos_identity() -> None:
+    """On macOS, name the app (menu bar, Dock, ⌘-Tab) and give it its icon before the window opens. Run from Python,
+    the process otherwise shows as "Python" with Python's rocket: its bundle is the interpreter's."""
+    if sys.platform != 'darwin':
+        return
+    try:
+        from AppKit import NSApplication, NSImage
+        from Foundation import NSBundle
+
+        b = NSBundle.mainBundle()
+        for info in (b.localizedInfoDictionary(), b.infoDictionary()):
+            try:  # the bundle's dictionary is mutable in practice; read only on some systems
+                if info is not None:
+                    info['CFBundleName'] = APP_NAME
+                    info['CFBundleDisplayName'] = APP_NAME
+            except Exception:  # noqa: BLE001
+                pass
+        img = NSImage.alloc().initWithContentsOfFile_(str(icon_path('icns')))
+        NSApplication.sharedApplication().setApplicationIconImage_(img)
+    except Exception:  # noqa: BLE001  (cosmetic: pyobjc missing or a changed AppKit)
+        pass
+
+
 def _windows_app_id() -> None:
     """Group the window under its own taskbar button and icon instead of python.exe's."""
     if sys.platform == 'win32':
@@ -230,6 +253,7 @@ def run_native(url: str, session: Session, debug: bool = False, width: int = 144
 
     bridge = Bridge(session)
     _windows_app_id()
+    _macos_identity()
     window = webview.create_window(
         APP_NAME,
         f'{url}/app?native=1',

@@ -97,6 +97,51 @@ def fetch(
     return d
 
 
+def download(
+    url: str, dest: Path, sha256_hex: str, progress: Callable[[float, str], None] | None = None, label: str = ''
+) -> Path:
+    """Download one large file to ``dest``, resuming a ``.part`` left by an interrupted run, and check its SHA-256.
+    ``progress(fraction, message)`` as in :func:`fetch` (raising from it stops the download; the part is kept)."""
+    dest = Path(dest)
+    if dest.exists() and sha256(dest) == sha256_hex:
+        return dest
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + '.part')
+    label = label or dest.name
+    for attempt in range(4):
+        have = tmp.stat().st_size if tmp.exists() else 0
+        req = urllib.request.Request(url, headers={'Range': f'bytes={have}-'} if have else {})
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r:
+                if have and r.status != 206:  # the server sent the whole file: start again
+                    have = 0
+                total = have + int(r.headers.get('Content-Length') or 0)
+                with open(tmp, 'ab' if have else 'wb') as f:
+                    done = have
+                    while chunk := r.read(1 << 20):
+                        f.write(chunk)
+                        done += len(chunk)
+                        if progress and total:
+                            progress(
+                                done / total,
+                                f'downloading {label} ({done / 2**20:,.0f} of {total / 2**20:,.0f} MB, once)',
+                            )
+            break
+        except OSError as e:
+            if getattr(e, 'code', None) == 416:  # the part is already complete
+                break
+            if attempt == 3 or getattr(e, 'code', None) in (401, 403, 404):
+                raise RuntimeError(f'download of {label} failed: {e}{certs.hint(e)}') from e
+            time.sleep(2 * (attempt + 1))
+    got = sha256(tmp)
+    if got != sha256_hex:
+        tmp.unlink(missing_ok=True)
+        raise ValueError(f'{label}: checksum mismatch ({got[:12]}…, expected {sha256_hex[:12]}…): the file at {url} '
+                         'changed or the download was corrupted; try again')  # fmt: skip
+    os.replace(tmp, dest)
+    return dest
+
+
 _PUBLISHED: dict[str, tuple[float, bool | None]] = {}
 
 

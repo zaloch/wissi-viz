@@ -1,29 +1,22 @@
-# Builds SAM 3 (Meta, SAM License) as int8 ONNX for wissi-viz and publishes it, with the licence, as the GitHub release
-# `sam3-onnx-v1`, which wissi-viz downloads only after a user accepts the SAM License in the app.
-#
-# With the repository secret HF_TOKEN (a Hugging Face token of an account granted access to
-# https://huggingface.co/facebook/sam3): exported from Meta's official checkpoint with samexporter and checked against
-# Meta's PyTorch Sam3Processor. Without it: from the public float32 ONNX export made with samexporter
-# (nrl-ai/anylearning-sam3-onnx, checked by SHA-256), quantized the same way and checked against itself.
+# Checks that SAM 3 still works the way the app gets it: straight from the public ONNX export on Hugging Face
+# (nrl-ai/anylearning-sam3-onnx, SHA-256 checked), quantized to int8 on the machine, finding the cat in a test picture.
+# Nothing is published: wissi-viz does not host or redistribute SAM 3.
 name: sam3-onnx
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * 1'   # weekly: notice if the public file changes or disappears
   push:
     branches: [main]
-    paths: [scripts/export_sam3_onnx.py, .github/workflows/sam3-onnx.yml]
+    paths: [src/wissi_viz/sam3.py, .github/workflows/sam3-onnx.yml]
 
 permissions:
-  contents: write
-
-env:
-  SAMEXPORTER_REV: 35133ce8670e0d190ac10cc08efba9b9a443fb51
+  contents: read
 
 jobs:
-  export:
+  check:
     runs-on: ubuntu-latest
-    timeout-minutes: 330
-    env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
@@ -32,52 +25,16 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
           sudo swapoff -a || true
           sudo fallocate -l 16G /mnt/swapfile && sudo chmod 600 /mnt/swapfile && sudo mkswap /mnt/swapfile && sudo swapon /mnt/swapfile
-          sudo mkdir -p /mnt/w && sudo chown "$USER" /mnt/w
           df -h / /mnt; free -g
       - name: Install
         run: |
-          run() { out=$("$@" 2>&1) || { echo "::error::$* :: $(echo "$out" | tail -c 2500 | tr '\n' ' ')"; exit 1; }; echo "$out" | tail -3; }
-          git clone -q https://github.com/vietanhdev/samexporter.git /mnt/w/samexporter
-          git -C /mnt/w/samexporter checkout -q "$SAMEXPORTER_REV"
-          git -C /mnt/w/samexporter submodule update --init sam3
-          run uv venv -p 3.12
-          if [ -n "$HF_TOKEN" ]; then
-            run uv pip install torch==2.10.0 torchvision==0.25.0 --index-url https://download.pytorch.org/whl/cpu
-            run uv pip install -e /mnt/w/samexporter/sam3
-            run uv pip install -e /mnt/w/samexporter
-            run uv pip install onnxruntime pooch einops pycocotools psutil
-          else
-            echo "::notice::No HF_TOKEN secret: building from the public float32 export (see the comment at the top)"
-            run uv pip install onnx onnxruntime huggingface_hub pooch
-          fi
-          run uv pip install -e .
-      - name: Export, quantize and check
-        run: |
-          MIRROR=$([ -n "$HF_TOKEN" ] || echo --mirror)
-          uv run --no-sync python scripts/export_sam3_onnx.py --samexporter /mnt/w/samexporter --out /mnt/w/dist \
-            --work /mnt/w/work $MIRROR > /mnt/w/export.log 2>&1 \
-            || { echo "::notice::$(grep '^IO ' /mnt/w/export.log | tr '\n' ' ' | head -c 4000)"; echo "::error::export failed :: $(tail -c 3000 /mnt/w/export.log | tr '\n' ' ')"; exit 1; }
-          tail -80 /mnt/w/export.log
-          echo "::notice::$(grep -E '^ +sam3|MB$|instances' /mnt/w/export.log | head -30 | tr '\n' ' ')"
-          echo "::notice::$(uv run --no-sync python -c "import json;r=json.load(open('/mnt/w/dist/check.json'));print(json.dumps({'summary':r.get('summary'),'sizes':r['sizes_mb']}))")"
-      - name: Publish release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          S=$(uv run --no-sync python -c "import json;print(json.dumps(json.load(open('/mnt/w/dist/check.json')).get('summary')))")
-          if [ -n "$HF_TOKEN" ]; then
-            FROM="exported to ONNX from the official checkpoint (facebook/sam3) with samexporter (MIT)"
-            CHECK="Checked against Meta's PyTorch Sam3Processor"
-          else
-            FROM="from the public float32 ONNX export made with samexporter (MIT) (huggingface.co/nrl-ai/anylearning-sam3-onnx, checked by SHA-256)"
-            CHECK="int8 checked against the float32 graphs"
-          fi
-          gh release view sam3-onnx-v1 >/dev/null 2>&1 || gh release create sam3-onnx-v1 --title "SAM 3 ONNX (SAM License)" \
-            --notes "SAM 3 by Meta, $FROM, quantized (int8 where that keeps the results) for wissi-viz's opt-in find by text. These files are under the SAM License (LICENSE-SAM.txt): by downloading or using them you agree to it. wissi-viz downloads them only after you accept it in the app. See NOTICE.txt. $CHECK: $S"
-          gh release upload sam3-onnx-v1 /mnt/w/dist/* --clobber
-      - name: The published files work through wissi-viz
+          uv venv -p 3.12
+          uv pip install -e ".[sam3]" pooch pytest pytest-github-actions-annotate-failures
+      - name: Download from Hugging Face, quantize here, find the cat
         env:
           WISSI_TEST_SAM3: '1'
+          XDG_CACHE_HOME: /mnt/cache
         run: |
-          uv pip install pytest pytest-github-actions-annotate-failures
+          sudo mkdir -p /mnt/cache && sudo chown "$USER" /mnt/cache
           uv run --no-sync pytest -q -rfE tests/test_grounding.py -k real_sam3
+          echo "::notice::$(cat /mnt/cache/*/models/sam3/NOTICE.txt 2>/dev/null | tr '\n' ' ')"

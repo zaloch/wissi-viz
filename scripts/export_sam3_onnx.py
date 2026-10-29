@@ -19,9 +19,9 @@ checked against its SHA-256), quantizes it the same way and checks the int8 grap
     python scripts/export_sam3_onnx.py --samexporter path/to/samexporter --out dist/sam3 --mirror
 
 Writes ``sam3-{image-encoder,language-encoder,decoder}.onnx`` (int8 where that keeps the results; ``.data`` files),
-``bpe_simple_vocab_16e6.txt.gz``, ``LICENSE-SAM.txt``, ``NOTICE.txt``, ``check.json`` and ``SHA256SUMS``. Run by
-.github/workflows/sam3-onnx.yml, which publishes them as the GitHub release ``sam3-onnx-v1``. You may run it yourself
-and point ``WISSI_SAM3_DIR`` at the output instead.
+``bpe_simple_vocab_16e6.txt.gz``, ``LICENSE-SAM.txt``, ``NOTICE.txt``, ``check.json`` and ``SHA256SUMS``, for your own
+use: point ``WISSI_SAM3_DIR`` at the output. (The app itself downloads the public export from Hugging Face and makes
+its int8 copy locally, :func:`wissi_viz.sam3.download`; this project does not publish SAM 3.)
 """
 
 from __future__ import annotations
@@ -158,18 +158,6 @@ def _describe(work: Path) -> None:
         print(f'IO {g.name}: in {", ".join(ins)} | out {", ".join(outs)}', flush=True)
 
 
-def _graph_bytes(graph: Path) -> int:
-    """A graph's size with the external-data files it refers to."""
-    import onnx
-    from onnx.external_data_helper import uses_external_data
-
-    m = onnx.load(str(graph), load_external_data=False)
-    locs = {
-        e.value for t in m.graph.initializer if uses_external_data(t) for e in t.external_data if e.key == 'location'
-    }
-    return graph.stat().st_size + sum((graph.parent / loc).stat().st_size for loc in locs)
-
-
 def self_reference(fp32: Path) -> dict:
     """The float32 graphs through wissi-viz on the test pictures (the reference when Meta's PyTorch model is not
     available): the int8 graphs must find the same instances."""
@@ -201,36 +189,13 @@ CONFIGS = [
 
 
 def quantize(work: Path, out: Path, quant=tuple(PARTS)) -> dict:
-    """Write ``sam3-<part>.onnx`` (+ ``.data`` when large): the parts in ``quant`` with int8 matrix multiplications,
-    the others as they are (float32). Returns {part: precision}."""
-    import onnx
-    from onnxruntime.quantization import QuantType, quantize_dynamic
+    """``sam3-<part>.onnx`` in ``out``: the parts in ``quant`` int8, the others float32 (as the app does locally)."""
+    from wissi_viz import sam3
 
-    prec = {}
-    for local, name in PARTS.items():
-        src = work / f'sam3_{local}.onnx'
-        dst = out / f'sam3-{name}.onnx'
-        for p in out.glob(f'sam3-{name}.onnx*'):
-            p.unlink()
-        big = _graph_bytes(src) > 1.5 * 2**30
-        if local in quant:
-            quantize_dynamic(str(src), str(dst), weight_type=QuantType.QInt8, op_types_to_quantize=['MatMul', 'Gemm'],
-                             use_external_data_format=big)  # fmt: skip
-            prec[local] = 'int8'
-        else:
-            prec[local] = 'float32'
-        m = onnx.load(str(dst if local in quant else src))
-        for p in out.glob(f'sam3-{name}.onnx?*'):  # the quantizer's own external-data names
-            p.unlink()
-        if big:  # the weights next to the graph under a stable name
-            onnx.save_model(m, str(dst), save_as_external_data=True, all_tensors_to_one_file=True,
-                            location=f'sam3-{name}.onnx.data', size_threshold=1024)  # fmt: skip
-        else:
-            onnx.save_model(m, str(dst))
-        del m
-        gc.collect()
+    prec = sam3.quantize(work, out, quant)
+    for name in PARTS.values():
         size = sum(p.stat().st_size for p in out.glob(f'sam3-{name}.onnx*')) / 2**20
-        print(local, '→', dst.name, prec[local], f'{size:.0f} MB', flush=True)
+        print(name, prec, f'{size:.0f} MB', flush=True)
     return prec
 
 

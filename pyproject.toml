@@ -51,9 +51,12 @@ sam = ["torch>=2.2; sys_platform != 'darwin' or platform_machine != 'x86_64'",
 sam-onnx = ["onnxruntime>=1.20", "scipy>=1.11", "scikit-image>=0.22"]   # now in the core install; kept for old commands
 # everything permissive in one go: `uv sync --extra all` / `pip install "wissi-viz[all]"` (not lgpl). Includes PyTorch
 # (sam) on platforms that have it, the desktop window, the HTTP client for tile APIs and the benchmark tools.
-all = ["wissi-viz[analysis,io,slideio,nicegui,server,polars,remote,desktop,bench,sam]"]
+all = ["wissi-viz[analysis,io,slideio,nicegui,server,polars,remote,desktop,bench,sam,sam3]"]
 # everything `wissi-viz --demo` / `--benchmark` use (add [sam] or [sam-onnx] for SAM 2.1, [cells] for Cellpose-SAM)
 demo = ["wissi-viz[analysis,io,server,desktop,bench]"]
+# SAM 3 (opt-in, downloaded from Hugging Face after you accept its licence): onnx (Apache-2.0) makes a faster int8
+# copy on this computer; without it the float32 model is used.
+sam3 = ["onnx>=1.16"]
 # Cellpose-SAM for Find all → By text → Cellpose-SAM and `wissi-viz segment`. Opt-in, not in [all]: Cellpose is BSD-3
 # but it requires fill-voids (LGPL-3.0). Needs PyTorch (no wheels for Intel Macs).
 cells = ["cellpose>=4.0; sys_platform != 'darwin' or platform_machine != 'x86_64'"]

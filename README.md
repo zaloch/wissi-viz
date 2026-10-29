@@ -54,7 +54,7 @@
   Measure). Per-channel histograms for fluorescence, per scene for CZI. Click a cell for its measurements and where
   it ranks in its layer; right-click for actions under the cursor; `?` lists the keys.
 - **Built for servers:** memory and disk tile caches with byte budgets, memory-mapped object layers, an integration probe and a load tester.
-- **Permissive licences only.** The default install is BSD / MIT / Apache-2.0 / ISC, and a test enforces it. LGPL readers are an opt-in extra; SAM 3 (SAM License) is never installed, only downloaded after you accept its licence.
+- **Permissive licences only.** The default install is BSD / MIT / Apache-2.0 / ISC, and a test enforces it. LGPL readers are an opt-in extra; SAM 3 (SAM License) is never installed or hosted by this project: after you accept its licence, the app downloads it from Hugging Face.
 
 ## Install
 

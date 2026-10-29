@@ -271,6 +271,10 @@ def check(out: Path) -> dict:
             for v, det in dets.items():
                 case[v] = compare(rb, rs, det, rgb, names, 0.9 if (v == 'fp32' and variant == 'square') else 0.75)
             print(json.dumps(case), flush=True)
+            print(f'CASE {pic}/{variant}: ref {len(rb)} · fp32 {case["fp32"]["boxes"]} '
+                  f'(recall {case["fp32"]["recall_of_reference"]}, Δscore {case["fp32"]["median_score_diff"]}) · int8 '
+                  f'{case["int8"]["boxes"]} (recall {case["int8"]["recall_of_reference"]}) · prob Δ '
+                  f'{case["onnx_vs_torch_prob_max_diff"]:.4f} · masks {case["same_text_masks"]}', flush=True)  # fmt: skip
             report['cases'].append(case)
     C = [c for c in report['cases'] if c['variant'] == 'square']
     P = [c for c in report['cases'] if c['variant'] == 'picture']
@@ -326,6 +330,7 @@ def main() -> None:
     names = sorted(p.name for p in out.iterdir() if p.is_file() and p.name != 'SHA256SUMS')
     (out / 'SHA256SUMS').write_text(''.join(f'{_sha(out / n)}  {n}\n' for n in names), encoding='utf-8')
     print(json.dumps(rep['summary'], indent=1), json.dumps(rep['sizes_mb']))
+    print('SUMMARY', json.dumps(rep['summary']), flush=True)
     s = rep['summary']
     if not s['tokens_match'] or not s['text_masks_match'] or s['fp32_recall'] < 0.9:
         raise SystemExit('wissi-viz pipeline does not match transformers: see check.json')

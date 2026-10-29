@@ -533,14 +533,16 @@ def segment_everything(
     geom, where = scope_geometry(registry, sid, scope, tissue=True)
     svc = sam_service()
     impl = svc._load()
-    want_ds = max(1.0, d0 / 28.0)  # objects ~28 px across in the model's input
+    # the model sees each object ~40 px across (SAM outlines objects of a few px badly: on a 0.5 µm/px H&E, nuclei
+    # are ~16 px, so tiles are enlarged up to 4×); the classic fill works at the slide's own pixels or coarser
+    f = max(1.0, d0 / 28.0) if impl.name == 'classic' else max(0.25, d0 / 40.0)  # level-0 px per model px
     lv = 0
-    for i, L in enumerate(info.levels):
-        if L.downsample <= want_ds * 1.0001:
+    for i, Lv in enumerate(info.levels):
+        if Lv.downsample <= f * 1.0001:
             lv = i
-    L = info.levels[lv]
-    ds = L.downsample
-    d_img = d0 / ds
+    ds = info.levels[lv].downsample
+    VW, VH = info.width / f, info.height / f  # the slide in model px
+    d_img = d0 / f
     T = 1024 if impl.name != 'classic' else 768
     O = int(min(T // 4, max(16, 2.5 * d_img)))  # noqa: E741
     step = T - O
@@ -549,13 +551,13 @@ def segment_everything(
     else:
         gx0, gy0, gx1, gy1 = 0, 0, info.width, info.height
     tiles = []
-    for ty in range(int(gy0 / ds // step), int(math.ceil(gy1 / ds / step)) + 1):
-        for tx in range(int(gx0 / ds // step), int(math.ceil(gx1 / ds / step)) + 1):
+    for ty in range(int(gy0 / f // step), int(math.ceil(gy1 / f / step)) + 1):
+        for tx in range(int(gx0 / f // step), int(math.ceil(gx1 / f / step)) + 1):
             x, y = tx * step, ty * step
-            w, h = min(T, L.width - x), min(T, L.height - y)
+            w, h = int(min(T, VW - x)), int(min(T, VH - y))
             if w < 8 or h < 8:
                 continue
-            box = shapely.box(x * ds, y * ds, (x + w) * ds, (y + h) * ds)
+            box = shapely.box(x * f, y * f, (x + w) * f, (y + h) * f)
             if geom is None or geom.intersects(box):
                 tiles.append((x, y, w, h))
     if not tiles:
@@ -567,9 +569,11 @@ def segment_everything(
     if ex:
         b = ex.bboxes()
         ea = (b[:, 2] - b[:, 0]) * (b[:, 3] - b[:, 1]) * (math.pi / 4)  # the ellipse in each box
-        amin, amax = float(ea.min()) / 4 / ds**2, float(ea.max()) * 4 / ds**2
+        amin, amax = float(ea.min()) / 4 / f**2, float(ea.max()) * 4 / f**2
     else:
-        amin, amax = (0.08 * d_img) ** 2, (3.0 * d_img) ** 2 * math.pi
+        amin, amax = math.pi / 4 * (0.3 * d_img) ** 2, math.pi / 4 * (3.0 * d_img) ** 2  # 0.3–3× the diameter
+        if impl.name == 'classic':  # its fills can join touching objects: keep those too
+            amax *= 4
     amin = max(amin, 6.0)
     polys: list[np.ndarray] = []
     name = _unique(registry, sid, name or (f'Segmented · {cls}' if ex else 'Segmented objects'))
@@ -578,9 +582,9 @@ def segment_everything(
     upd(0.0, f'{impl.name}: {len(tiles)} tile{"s" if len(tiles) > 1 else ""} in {where}')
     for ti, (x, y, w, h) in enumerate(tiles):
         upd(ti / len(tiles), f'{impl.name}: tile {ti + 1} of {len(tiles)} · {len(polys):,} objects')
-        rgb = _rgb(src, lv, x, y, w, h)
-        polys += _tile_objects(svc, impl, rgb, x, y, ds, d_img, amin, amax, O, (x == 0, y == 0,
-                               x + w >= L.width, y + h >= L.height), geom, job)  # fmt: skip
+        rgb = _read_scaled(src, lv, ds, x * f, y * f, w * f, h * f, w, h)
+        polys += _tile_objects(svc, impl, rgb, x, y, f, d_img, amin, amax, O, (x == 0, y == 0,
+                               x + w >= VW - 1, y + h >= VH - 1), geom, job)  # fmt: skip
         if time.perf_counter() - last_pub > 4 and polys:  # show progress on the slide
             _publish(registry, sid, _polys_features(polys, 'candidate'), None, 0, prov, 'candidate', '#9aa3ad')
             last_pub = time.perf_counter()
@@ -591,7 +595,7 @@ def segment_everything(
     F = _polys_features(polys, cls)
     rid = uuid.uuid4().hex[:10]
     sim = None
-    note = f'{impl.name} at level {lv} ({ds:g}× downsample)'
+    note = f'{impl.name} at {f:.2g} level-0 px per model px' + (f' (level {lv})' if lv else '')
     if ex:
         upd(0.95, f'comparing {len(polys):,} outlines with the examples…')
         lvm = _level_for(src, d0)
@@ -606,6 +610,18 @@ def segment_everything(
         rid if sim is not None else None, lname, n, len(polys), strictness, where, t0, 'segment', note=note,
         kpis=[['found', f'{n:,}'], ['outlined', f'{len(polys):,}'], ['tiles', str(len(tiles))]],
     )  # fmt: skip
+
+
+def _read_scaled(src, lv: int, ds: float, x0: float, y0: float, w0: float, h0: float, w: int, h: int) -> np.ndarray:
+    """The level-0 rectangle (x0, y0, w0, h0), read at level ``lv`` (downsample ``ds``), as ``w`` × ``h`` RGB."""
+    L = src.info.levels[lv]
+    lx, ly = int(x0 / ds), int(y0 / ds)
+    lw = max(1, min(int(round(w0 / ds)), L.width - lx))
+    lh = max(1, min(int(round(h0 / ds)), L.height - ly))
+    rgb = _rgb(src, lv, lx, ly, lw, lh)
+    if (lw, lh) != (w, h):
+        rgb = np.asarray(Image.fromarray(rgb).resize((w, h), Image.BILINEAR))
+    return rgb
 
 
 def _tile_objects(svc, impl, rgb, x, y, ds, d_img, amin, amax, O, edges, geom, job) -> list[np.ndarray]:  # noqa: E741
@@ -657,6 +673,12 @@ def _tile_objects(svc, impl, rgb, x, y, ds, d_img, amin, amax, O, edges, geom, j
             a = int(m.sum())
             if a < amin or a > amax:
                 continue
+            if not classic:  # cut by the tile's edge (not the slide's): whole in the next tile, which overlaps
+                mh, mw = m.shape
+                if (cx0 <= 0 and not edges[0]) or (cy0 <= 0 and not edges[1]):
+                    continue
+                if (cx0 + mw >= w and not edges[2]) or (cy0 + mh >= h and not edges[3]):
+                    continue
             cov = covered[cy0 : cy0 + m.shape[0], cx0 : cx0 + m.shape[1]]
             if (m & cov).sum() > 0.25 * a:
                 continue

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="src/wissi_viz/assets/icon.png" width="112" alt="wissi-viz icon">
+  <img src="src/wissi_viz/assets/icon.png" width="112" alt="wissi-viz tiled W icon">
 </p>
 
 <h1 align="center">wissi-viz</h1>

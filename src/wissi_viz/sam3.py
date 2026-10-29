@@ -313,12 +313,15 @@ def detector(progress=None, device: str | None = None) -> Sam3:
 
 
 def status() -> dict:
+    here = folder() is not None
     return {
         'model': 'sam3 (int8)',
         'license': LICENSE_NAME,
         'license_url': LICENSE_URL,
         'accepted': accepted(),
-        'downloaded': folder() is not None,
+        'downloaded': here,
+        # False: this version's download is not published (nothing to fetch); None: GitHub not reachable from here
+        'published': True if here else weights.published(RELEASE),
         'loaded': _DET is not None,
         'size_mb': 1300,
     }

@@ -37,7 +37,9 @@
   view, a region or the whole slide: similar objects of a cell layer, *segment everything* with SAM and keep the
   similar, or a pixel classifier for areas (tumour, stroma, …). Or **by text**: type “nucleus” or “gland. vessel” and
   Grounding DINO + SAM 2.1 (Apache-2.0) outline every match, or SAM 3 (opt-in, under Meta's SAM License, which the
-  app shows before downloading it). Background jobs with progress, cancel and a live strictness slider.
+  app shows before downloading it). Or pick a **cell model** there (Cellpose-SAM, a classic stain threshold, or
+  Classpose) to outline every nucleus into a measured cell layer, on any slide, tile APIs included. Background jobs
+  with progress, cancel and a live strictness slider.
 - **An efficient annotation format.** GeoParquet (≈3× smaller than GeoJSON, spatially filterable, opens in GeoPandas, QGIS and DuckDB), with `wissi-viz convert` to and from QuPath GeoJSON, HALO, Aperio and ASAP XML, CSV, COCO and label masks.
 - **Measurements of any region.** Shape, stain or channel intensity, texture, and — with cells — counts, density, composition, diversity, neighbour distances, contacts and clustering (Clark–Evans, Morisita, Ripley), per class, in one exportable table.
 - **Spatial analysis:**
@@ -106,7 +108,7 @@ wissi-viz desktop --connect my_api.json    # images from a tile API (or: Connect
 |---|---|
 | **Layers** (`L`) | nested, by source (drawn & SAM · found · detected · analysis · imported) or flat; per layer: show / hide (`H`), solo (`S`), opacity, outline, fill, colour by class or any measurement, class toggles with counts and colours, zoom / export / summary / remove; hovering a row pulses its objects on the slide |
 | **Image** (`I`) | histograms of the whole image, the view or a CZI scene; per fluorescence channel: drag min / max, gamma, colour, solo, auto; link channels; brightfield levels, stain view |
-| **Annotate** (`D`) | ① examples: SAM, drawing tools, or pick objects (`P`); ② find all like them: similar objects, segment everything, areas, or by text (Grounding DINO + SAM 2.1, or SAM 3 opt-in) |
+| **Annotate** (`D`) | ① examples: SAM, drawing tools, or pick objects (`P`); ② find all like them: similar objects, segment everything, areas, or by text (Grounding DINO + SAM 2.1, SAM 3 opt-in, or a cell model: Cellpose-SAM, classic, Classpose) |
 | **Analyze** (`A`) | density & hotspots, nearest neighbours, proximity, margin bands, infiltration, composition, Ripley's L, neighbour enrichment, cellular neighbourhoods, contact graph, Moran's I: each run adds layers to the slide and a card with numbers, a chart, the table and a CSV |
 | **Measure** (`M`) | count, share and averages per class, cells per mm² of tissue, region areas; shape, intensity, texture and cell statistics for every region |
 

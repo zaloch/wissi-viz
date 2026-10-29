@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import time
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
@@ -94,6 +95,25 @@ def fetch(
         os.replace(tmp, d / local)
     (d / '.complete').write_text(release, encoding='utf-8')  # every file is here (the set, not just some)
     return d
+
+
+_PUBLISHED: dict[str, tuple[float, bool | None]] = {}
+
+
+def published(release: str, timeout: float = 4.0) -> bool | None:
+    """Whether ``release`` is on GitHub (its ``SHA256SUMS`` exists): True, False, or None when GitHub cannot be
+    reached. A yes is remembered; a no or an unknown is asked again after ten minutes."""
+    t, v = _PUBLISHED.get(release, (0.0, None))
+    if v is True or (t and time.monotonic() - t < 600):
+        return v
+    try:  # GET, not HEAD: the asset store's signed links answer HEAD with 401 (SHA256SUMS is a few hundred bytes)
+        with urllib.request.urlopen(f'{RELEASES}/{release}/SHA256SUMS', timeout=timeout) as r:
+            r.read(1 << 16)
+            v = True
+    except OSError as e:  # HTTPError (404: not published), URLError, timeouts, TLS
+        v = False if getattr(e, 'code', None) == 404 else None
+    _PUBLISHED[release] = (time.monotonic(), v)
+    return v
 
 
 def ort_session(path: Path, device: str | None = None):

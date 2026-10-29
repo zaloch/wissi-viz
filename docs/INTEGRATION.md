@@ -1,6 +1,6 @@
 # Integrating wissi-viz
 
-*Current as of wissi-viz 0.12.0.* This guide covers how to put wissi-viz into an app: NiceGUI (wissi), other Python web frameworks, JavaScript frameworks and notebooks. It also covers:
+*Current as of wissi-viz 0.13.0.* This guide covers how to put wissi-viz into an app: NiceGUI (wissi), other Python web frameworks, JavaScript frameworks and notebooks. It also covers:
 - how to show large cell and object tables;
 - how to keep the viewer smooth, including on clients without a GPU;
 - how to connect a vendor tile API such as PathCore or HALO Link;
@@ -32,6 +32,7 @@
 | 0.9.1 | `--system-certs` / `WISSI_VIZ_SYSTEM_CERTS=1`: downloads trust the operating system's certificates, for networks that inspect HTTPS (§13). | Nothing; use the flag where downloads fail with `CERTIFICATE_VERIFY_FAILED`. `truststore` (MIT) is a new core dependency. |
 | 0.10.0 | **Find all, image tools, projects.** Annotate tab: examples (SAM, drawing, picked objects) → find all like them: similar objects, segment everything (SAM / classic) or areas (pixel classifier), in the view, a region or the whole slide, as background jobs with progress, cancel and a live strictness slider (§12, `wissi_viz.findall`, §16). Image tab: histograms of the whole image, the view or a CZI scene, with draggable windows, auto, link, solo. View bar on the slide (zoom, 1:1, 2.5–40×, overview map, scale bar, snapshot, full screen) and an FPS readout. Layers: nested / by source / flat views and source badges (`origin`, saved with layers). Slide list: projects and folder groups. In-page file picker with places, a path bar, multi-select and Open this folder (also in a browser window). `--demo` asks quick or full. | `scikit-learn` (BSD-3) joins the `analysis` extra. Layers you draw are tagged drawn / sam. The scale bar now shows after a pane change (it stayed hidden). Channel auto-contrast reads a finer level (bright structures saturated before). In the in-page picker a click selects; double-click or Open opens. The Draw tab is now Annotate (same key, `D`). |
 | 0.12.0 | **Find by text.** Annotate → Find all → By text: name what to find and every match is outlined, by Grounding DINO + SAM 2.1 (Apache-2.0, downloaded once from this project's release) or SAM 3 (opt-in under Meta's SAM License, shown and accepted in the app before anything is downloaded) (§15, `findall.find_by_text`, `wissi_viz.grounding`, `wissi_viz.sam3`). Find-all results can hold several classes (one per phrase). *Then find all like the best matches*: confident text matches become examples for segment everything. **Chains and batches**: Make regions… / Keep only inside… (a layer's menu), Only inside (any analysis, on the cells inside a region layer), Run on all images or a project (one table, a row per image) (§16, `wissi_viz.layerops`, `analyses.run_batch`). | ONNX Runtime no longer picks CoreML on macOS (it compiled SAM's graphs for minutes; CPU is used instead). New endpoints `GET`/`POST {prefix}/models/sam3/license`. Segment everything enlarges tiles so SAM sees each object ~40 px across (nuclei on a 0.5 µm/px H&E were ~16 px: 6× more of them are now outlined on CMU-1), keeps per click the best-scored of SAM's masks that has the object's size, and drops masks cut by a tile's edge (each is found whole in the overlapping tile). `[all]` is now every permissive extra (desktop, remote, bench and sam too): `uv sync --extra all`. **Awkward files** (`tests/test_edge_cases.py` runs each through opening, tiles, histograms, tissue, measuring, SAM, segment everything and every export): Philips TIFF resolution is read (CAMELYON16); layers keep the µm/px they were made at; analysis without any resolution assumes 0.5 µm/px and says so; float and 32-bit channels are scaled from their range (they read as 0) and 16-bit RGB is scaled to 8 bit (it wrapped); empty, truncated and non-slide files are refused at once with a plain reason; invalid shapes (NaN coordinates, fewer than 3 points) are left out and counted instead of breaking the layer; table rows without a valid position are left out; numeric class names work; downloads of slides with non-ASCII names work; dropped sample-pack downloads resume. Model downloads are checked against the release's SHA-256 sums. |
+| 0.13.0 | **Cells in Find all.** Annotate → Find all → By text → Model has a second group, *Cells and nuclei*: Cellpose-SAM (`[cells]` extra), the classic stain threshold (no model) or Classpose (whole slide files, via uv) outline every nucleus of the view, a region or the slide into a *detected* cell layer with classes and measurements, which the analyses use; no prompt needed. They read the slide's tiles, so they work on tile-API slides (HALO and other connectors) too, which `wissi-viz segment` cannot (§15, `findall.find_cells`, `segment.segment_source`). **SAM 3 is downloadable**: the release `sam3-onnx-v1` is built from the public float32 export when there is no Hugging Face access to Meta's checkpoint; until a version's download is published the app says so instead of failing (`sam3.status()['published']`). | Nothing. `pip install "wissi-viz[cells]"` for Cellpose-SAM: opt-in and not in `[all]`, since Cellpose requires fill-voids (LGPL-3.0). |
 | 0.11.0 | **SAM 2.1 built in.** SAM 2.1 tiny (int8 ONNX, 33 MB) ships inside the package and ONNX Runtime is a core dependency: click / box annotation and *segment everything* use SAM without extras, downloads or a GPU (§15). | ONNX Runtime, SciPy and scikit-image are now core dependencies (all permissive; ~24 MB wheel). `WISSI_SAM_MODEL` defaults to the bundled tiny on onnx (`small` / `tiny-fp32` download float32 exports). Intel Macs on Python 3.14 have no ONNX Runtime wheel and keep the classic fill. On a GPU, replace onnxruntime with onnxruntime-gpu. |
 | 0.7.0 | **Desktop app and platform support.** `wissi-viz-app` opens the viewer in its own native window with its own icon (pywebview), as an option next to the embedded element. Windows, macOS and Linux are supported and CI-tested; packaging moved to uv (`uv.lock`, dependency groups). Python 3.10–3.11 work again (older czifile). | Nothing for embedded use. For the app: `uv tool install "wissi-viz[desktop]"` (§12). For development: `uv sync` (§13). |
 | 0.5.0 | **Object pyramid.** Millions of cells are shown as screen-sized aggregated dots, then as GPU-drawn outlines when zoomed in. There is a **server mode** (default) and a **client mode**. | Use `cached_object_layer` for big tables (§5). Choose `overlays: 'server'\|'client'\|'auto'`. |
@@ -816,17 +817,42 @@ tile on a 4-core CPU (float32 ~4.5 s), plus SAM 2.1 for the outlines.
 multiplications to int8 and checks wissi-viz's own tokenizer, text masks, resizing and post-processing against the
 PyTorch model (the release's `check.json`: the same tokens and text masks, every reference box found on 800 × 800 tiles with float32 and int8, 96 % on padded whole pictures, scores within ~0.02). The graph takes 800 × 800 pixels (tiles are read at that
 size); the caption's per-phrase attention mask is computed by wissi-viz and passed in, since traced into the graph
-it would be frozen to one caption. SAM 3: exported from Meta's official gated
-checkpoint by `.github/workflows/sam3-onnx.yml` (`scripts/export_sam3_onnx.py`, with samexporter, MIT), quantized to
-int8 and checked against Meta's `Sam3Processor`. That workflow needs a repository secret `HF_TOKEN` from a Hugging
-Face account granted access to [facebook/sam3](https://huggingface.co/facebook/sam3); you can also run the script
-yourself and set `WISSI_SAM3_DIR`.
+it would be frozen to one caption. SAM 3: built by `.github/workflows/sam3-onnx.yml` (`scripts/export_sam3_onnx.py`). With a repository secret
+`HF_TOKEN` from a Hugging Face account granted access to [facebook/sam3](https://huggingface.co/facebook/sam3), it is
+exported from Meta's official gated checkpoint with samexporter (MIT), quantized to int8 and checked against Meta's
+`Sam3Processor`. Without it (`--mirror`), it starts from the public float32 export made with the same samexporter and
+SAM 3 revisions ([nrl-ai/anylearning-sam3-onnx](https://huggingface.co/nrl-ai/anylearning-sam3-onnx), checked by
+SHA-256), quantizes it the same way and checks the int8 graphs against the float32 ones; `NOTICE.txt` in the release
+says which. You can also run the script yourself and set `WISSI_SAM3_DIR`. `GET {prefix}/find/capabilities` reports
+`text.sam3.published`: false while this version's download is not on GitHub (the app then says so).
 
 **SAM 3's licence.** The SAM License lets you use, change and share SAM 3 (commercially too), but anything shared
 must carry a copy of the licence, publications must acknowledge SAM 3, and it may not be used for military, warfare,
 nuclear, espionage or weapons purposes or against trade controls. wissi-viz therefore never ships SAM 3: the app
 shows the licence (`models/SAM-License.txt`) and records your acceptance in the user config folder
 (`licenses.json`); `WISSI_SAM3_ACCEPT_LICENSE=1` does the same for servers and scripts.
+
+### Find cells: Cellpose-SAM, classic threshold or Classpose
+
+**Annotate → Find all → By text → Model → Cells and nuclei**: no prompt; every nucleus in the view, a region or the
+whole slide is outlined into a new layer `Cells · <model>` (origin *detected*, so it is listed with the other cell
+layers and the analyses use it), classed by size on H&E (or by the brightest marker on fluorescence) and measured
+(area, perimeter, circularity, eccentricity, mean stain or channel intensity).
+
+| Model | Licence | Runs on | Install |
+|---|---|---|---|
+| **Cellpose-SAM** | BSD-3 (it brings fill-voids, LGPL-3.0) | the slide's tiles (any source, tile APIs too), GPU if PyTorch has one | `pip install "wissi-viz[cells]"` (opt-in, not in `[all]`) |
+| **Classic stain threshold** | — (no model) | the slide's tiles (any source): haematoxylin OD (H&E) or the first channel, Otsu, watershed | always available |
+| **Classpose** | MIT weights, trained on CC BY-NC-SA data: check before commercial use | the whole slide **file** (in its own environment through uv), then the cells in the scope are kept | `uv` on the PATH |
+
+```python
+findall.find_cells(registry, 'case1', model='cellpose', scope={'kind': 'region', 'layer': 'Regions · Found · gland'})
+segment.segment_source(source, 'classic', geom)   # any SlideSource, a shapely geometry in level-0 px (None: all)
+```
+
+The app's job body is `{mode: 'text', model: 'cellpose' | 'classic' | 'classpose', scope}` (or `mode: 'cells'`).
+Combined with the chain steps (§16): find areas or text matches → *Make regions…* → find cells *inside* that region
+layer → any analysis.
 
 ```python
 from wissi_viz import findall, sam3
@@ -919,7 +945,7 @@ analyses.run_batch(registry, registry.ids(), 'density', 'cells', {'cell_um': 100
 | `POST …/slides/{id}/find` `{mode, examples, candidates, training, scope, strictness, object_um, detail, prompt, model}` | find all like the examples or by name (§12, §15), in the background → the job; `mode`: `objects` · `segment` · `areas` · `text`; `examples`: `{layer, classes, picks: [{layer, index, neg}]}`; `scope`: `{kind: view, rect}` · `{kind: region, layer}` · `{kind: slide}` |
 | `GET {prefix}/jobs/{job}` · `POST …/jobs/{job}/cancel` · `GET …/slides/{id}/jobs` | a background job: state, progress, message, error, result |
 | `POST …/slides/{id}/find/threshold` `{result, strictness}` | re-filter a finished result without measuring again |
-| `GET {prefix}/find/capabilities` | the SAM backend, whether areas (scikit-learn) are available, and the text models (downloaded, SAM 3 licence accepted) |
+| `GET {prefix}/find/capabilities` | the SAM backend, whether areas (scikit-learn) are available, the text models (downloaded, published, SAM 3 licence accepted) and the cell models (installed, or what to install) |
 | `GET …/slides/{id}/histogram?rect=x0,y0,x1,y1` | per-channel (or R, G, B) histograms and 0.1 / 1 / 50 / 99 / 99.9 % percentiles; zero (unscanned) pixels counted apart |
 
 Styling, removing, adding annotations, running analyses and finding are edits: `create_router(..., allow_edit=False)`
@@ -945,7 +971,7 @@ findall.find_areas(registry, 'case1', training='Annotations', detail='medium')  
 
 ```bash
 wissi-viz segment slide.svs cells.parquet                    # auto: Cellpose-SAM if installed, else classic
-wissi-viz segment slide.svs cells.parquet --model cellpose   # pip install cellpose (BSD-3); GPU if available
+wissi-viz segment slide.svs cells.parquet --model cellpose   # pip install "wissi-viz[cells]"; GPU if available
 wissi-viz segment slide.svs cells.parquet --model classpose  # H&E cell types, in its own uvx environment
 uv run wissi-viz --demo [quick|full]                         # [demo] extra
 uv run wissi-viz --benchmark [quick|full]

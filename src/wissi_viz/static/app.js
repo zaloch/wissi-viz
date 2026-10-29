@@ -1506,6 +1506,7 @@ function renderPicks() {
 
 // ---- find all
 let findMode = 'objects', findCaps = null, findJob = null;
+const CELL_MODELS = { cellpose: 'Cellpose-SAM', classic: 'The classic stain threshold', classpose: 'Classpose' };
 for (const b of $('f-modes').children) b.onclick = () => { findMode = b.dataset.mode; renderDraw(); };
 $('f-strict').oninput = () => { $('f-strict-o').textContent = (+$('f-strict').value).toFixed(2); };
 $('f-size').oninput = () => { $('f-size-o').textContent = `${$('f-size').value} µm`; };
@@ -1577,17 +1578,24 @@ async function renderDraw() {
     ...regions.map((L) => h('option', { value: `region:${L.name}` }, `inside ${L.name}`)));
   ws.value = [...ws.options].some((o) => o.value === keepW) ? keepW : 'view';
   $('f-cand-row').hidden = findMode !== 'objects';
-  $('f-size-row').hidden = findMode !== 'segment' && findMode !== 'text';
-  $('f-text-row').hidden = $('f-model-row').hidden = findMode !== 'text';
-  $('f-expand-row').hidden = findMode !== 'text';
-  const tx = caps.text || {}, model = $('f-model').value, s3 = tx.sam3 || {};
+  const tx = caps.text || {}, s3 = tx.sam3 || {}, cellCaps = caps.cells || {};
+  for (const o of $('f-model').options) {   // what this server has: a cell model not installed, SAM 3 not published
+    const c = cellCaps[o.value];
+    if (c) { o.disabled = !c.available; o.title = c.why || ''; o.textContent = o.textContent.replace(/ · not installed$/, '') + (c.available ? '' : ' · not installed'); }
+    if (o.value === 'sam3') o.textContent = `SAM 3 · SAM License (opt-in)${s3.published === false ? ' · not available yet' : ''}`;
+  }
+  if ($('f-model').selectedOptions[0]?.disabled) $('f-model').value = 'grounding';
+  const model = $('f-model').value, cellModel = model in CELL_MODELS;
+  $('f-size-row').hidden = findMode !== 'segment' && (findMode !== 'text' || cellModel);
+  $('f-model-row').hidden = findMode !== 'text';
+  $('f-text-row').hidden = $('f-expand-row').hidden = findMode !== 'text' || cellModel;
   $('f-lic-row').hidden = findMode !== 'text' || model !== 'sam3';
   $('f-lic-msg').textContent = s3.accepted ? `SAM License accepted${s3.downloaded ? '' : ' · downloads ~1.3 GB on the first run'}.`
     : 'SAM 3 needs its licence accepted first.';
   $('f-lic').textContent = s3.accepted ? 'Licence' : 'Read the licence…';
-  $('f-head').textContent = findMode === 'text' ? 'Find all by name' : findMode === 'areas' ? 'Map the areas' : 'Find all like them';
+  $('f-head').textContent = findMode === 'text' ? (cellModel ? 'Find every cell' : 'Find all by name') : findMode === 'areas' ? 'Map the areas' : 'Find all like them';
   $('f-detail-row').hidden = findMode !== 'areas';
-  $('f-strict-row').hidden = findMode === 'areas';
+  $('f-strict-row').hidden = findMode === 'areas' || (findMode === 'text' && cellModel);
   const mine = picks.filter((x) => x.slide === sid);
   const hint = $('f-hint'), run = $('f-run');
   exampleCount(sid, ({ n, classes }) => {
@@ -1602,11 +1610,17 @@ async function renderDraw() {
     } else if (findMode === 'segment') {
       msg = pos ? `${caps.sam || 'SAM'} outlines every object, keeping those like your ${pos} example${pos === 1 ? '' : 's'}.`
         : `${caps.sam || 'SAM'} outlines every object about ${$('f-size').value} µm across (no examples: keeps all). The whole slide can take long without a GPU.`;
+    } else if (findMode === 'text' && cellModel) {
+      const where = $('f-where').selectedOptions[0]?.textContent || 'this view';
+      msg = model === 'classpose'
+        ? `Classpose outlines and types every cell of the whole slide file (first run installs it with uv; slow without a GPU), then keeps those in ${where}. Its weights were trained on non-commercial datasets: check before commercial use.`
+        : `${CELL_MODELS[model]} outlines every nucleus in ${where}, classed by size (or brightest marker) with area, shape and stain measurements: a cell layer the analyses use.${model === 'cellpose' ? ' The whole slide can take long without a GPU.' : ''}`;
     } else if (findMode === 'text') {
       const words = $('f-prompt').value.split(/[.,;\n]+/).map((w) => w.trim()).filter(Boolean);
       const g = tx.grounding || {};
       const dl = model === 'sam3' ? (s3.downloaded ? '' : ' Downloads SAM 3 once (~1.3 GB).') : (g.downloaded ? '' : ` Downloads Grounding DINO once (~${g.size_mb || 250} MB).`);
-      if (model === 'sam3' && !s3.accepted) { msg = 'Accept the SAM License to use SAM 3, or pick Grounding DINO + SAM 2.1.'; ok = false; }
+      if (model === 'sam3' && s3.published === false && !s3.downloaded) { msg = 'SAM 3 is not available for this version yet (its download is not published): use Grounding DINO + SAM 2.1, or point WISSI_SAM3_DIR at an export of your own.'; ok = false; }
+      else if (model === 'sam3' && !s3.accepted) { msg = 'Accept the SAM License to use SAM 3, or pick Grounding DINO + SAM 2.1.'; ok = false; }
       else if (!words.length) { msg = 'Type what to find, e.g. “nucleus”, or “gland. vessel” (one class per phrase).'; ok = false; }
       else if ($('f-expand').checked && words.length === 1) msg = `${model === 'sam3' ? 'SAM 3' : 'Grounding DINO + SAM 2.1'} finds ${words[0]} about ${$('f-size').value} µm across; the best matches then become examples and SAM outlines everything like them.${dl} The whole slide can take long without a GPU.`;
       else msg = `${model === 'sam3' ? 'SAM 3' : 'Grounding DINO + SAM 2.1'} finds every ${words.join(', ')} about ${$('f-size').value} µm across${pos ? `, keeping those like your ${pos} example${pos === 1 ? '' : 's'}` : ''}.${dl} ${model === 'sam3' ? 'SAM 3 handles dense small objects well.' : 'Grounding DINO finds larger structures (glands, vessels, fat, folds) far better than dense nuclei: for those, use Segment everything with examples, or SAM 3.'} The whole slide can take long without a GPU.`;
@@ -1618,7 +1632,7 @@ async function renderDraw() {
     }
     hint.textContent = msg;
     run.disabled = !ok;
-    run.textContent = findMode === 'areas' ? 'Find areas' : findMode === 'segment' ? 'Segment everything' : findMode === 'text' ? 'Find by text' : 'Find all like these';
+    run.textContent = findMode === 'areas' ? 'Find areas' : findMode === 'segment' ? 'Segment everything' : findMode === 'text' ? (cellModel ? 'Find cells' : 'Find by text') : 'Find all like these';
   });
 }
 
@@ -1675,7 +1689,7 @@ function trackJob(job, sid) {
       const r = j.result;
       findResults.unshift({ ...r, slide: sid, title: j.title });
       renderFindResults(true);
-      toast({ kind: 'analysis', title: `${j.title}: ${r.count.toLocaleString('en-US')} ${r.mode === 'areas' ? 'areas' : 'found'}`, sub: `${r.layer} · ${r.where}`,
+      toast({ kind: 'analysis', title: `${j.title}: ${r.count.toLocaleString('en-US')} ${r.mode === 'areas' ? 'areas' : r.mode === 'cells' ? 'cells' : 'found'}`, sub: `${r.layer} · ${r.where}`,
         action: { label: 'Show', fn: () => showFound(r.layer, sid) }, ms: 8000 });
       setTimeout(() => showFound(r.layer, sid, false), 400);
       log(`${j.title}: ${r.count} in ${r.where} (${r.seconds} s)${r.note ? ` · ${r.note}` : ''}`);
@@ -1696,7 +1710,7 @@ function renderFindResults(fresh = false) {
   const box = $('f-results');
   box.replaceChildren(...findResults.slice(0, 8).map((r, i) => {
     const card = h('div', { class: `result${fresh && i === 0 ? ' new' : ''}`, dataset: { layer: r.layer } });
-    const count = h('span', { class: 'chip' }, `${r.count.toLocaleString('en-US')}${r.of && r.mode !== 'areas' ? ` of ${r.of.toLocaleString('en-US')}` : ''}`);
+    const count = h('span', { class: 'chip' }, `${r.count.toLocaleString('en-US')}${r.of && r.mode !== 'areas' && r.mode !== 'cells' ? ` of ${r.of.toLocaleString('en-US')}` : ''}`);
     card.append(h('div', { class: 'row' }, h('b', { class: 'grow', style: 'font-weight: 600' }, r.layer), count));
     if (r.kpis?.length) card.append(h('div', { class: 'kpis' }, ...r.kpis.map(([k, v]) => h('span', { class: 'kpi' }, h('span', { class: 'k' }, k), h('span', { class: 'v' }, v)))));
     if (r.result) {   // live strictness: the server keeps the scores, so this re-filters without measuring again

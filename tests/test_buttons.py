@@ -193,6 +193,7 @@ def test_every_button_does_what_it_says(data, tmp_path, monkeypatch):
             ctx = b.new_context(viewport={'width': 1500, 'height': 920}, accept_downloads=True,
                                 permissions=['clipboard-read', 'clipboard-write'])  # fmt: skip
             pg = ctx.new_page()
+            pg.set_default_timeout(75000)  # slow CI machines (Intel Macs) re-render and re-open slides slowly
             slow = float(os.environ.get('WISSI_SWEEP_CPU_SLOWDOWN', '0') or 0)
             if slow > 1:  # find races: a slow machine (e.g. WISSI_SWEEP_CPU_SLOWDOWN=4)
                 ctx.new_cdp_session(pg).send('Emulation.setCPUThrottlingRate', {'rate': slow})
@@ -587,6 +588,16 @@ def _brightfield(w, data, s):
     n_before = pg.locator('#f-results .result').count()
     w.check('#f-run', f'() => document.querySelectorAll("#f-results .result").length > {n_before}', timeout=60000)
     assert pg.locator('#f-results .result >> nth=0').get_attribute('data-layer').startswith('Text · nucleus, gland')
+    # a cell model: no prompt, a detected cell layer
+    pg.select_option('#f-model', 'classic')
+    pg.wait_for_function(
+        '() => document.getElementById("f-text-row").hidden && document.getElementById("f-run").textContent === "Find cells"'
+    )
+    assert pg.locator('#f-model option[value=classpose]').count() == 1
+    n_before = pg.locator('#f-results .result').count()
+    w.check('#f-run', f'() => document.querySelectorAll("#f-results .result").length > {n_before}', timeout=60000)
+    assert pg.locator('#f-results .result >> nth=0').get_attribute('data-layer').startswith('Cells · classic')
+    pg.select_option('#f-model', 'grounding')
     w.check('#f-modes [data-mode=objects]', '() => !document.getElementById("f-cand-row").hidden')
     w.check('#a-pick', '() => document.body.classList.contains("picking")')
     for k in (5, 6, 7):

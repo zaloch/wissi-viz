@@ -139,9 +139,11 @@ class _Cellpose:
         import torch
         from cellpose import models
 
-        use_gpu = torch.cuda.is_available() if gpu is None else gpu
-        self.model = models.CellposeModel(gpu=use_gpu)
-        self.device = 'cuda' if use_gpu else 'cpu'
+        mps = getattr(torch.backends, 'mps', None)
+        dev = 'cuda' if torch.cuda.is_available() else 'mps' if mps is not None and mps.is_available() else 'cpu'
+        use_gpu = dev != 'cpu' if gpu is None else gpu
+        self.model = models.CellposeModel(gpu=use_gpu)  # Cellpose picks CUDA, or MPS on Apple silicon
+        self.device = dev if use_gpu else 'cpu'
 
     def labels(self, imgs: list[np.ndarray], rgb: bool) -> list[np.ndarray]:
         x = []
@@ -251,6 +253,78 @@ def _run_tiles(jobs: list, workers: int | None, log, t0: float) -> list:
         if k % 50 == 0:
             log(f'  {k}/{len(jobs)} tiles, {time.time() - t0:.0f} s')
     return parts
+
+
+def segment_source(
+    src,
+    model: str = 'auto',
+    geom=None,
+    target_mpp: float = 0.5,
+    tile: int = 1024,
+    overlap: int = 64,
+    progress=None,
+):
+    """Segment the cells of an open slide (any source: a file, a tile API) in this process, in the tissue tiles
+    that touch ``geom`` (a shapely geometry in level-0 px; None = the whole slide), keeping the cells whose centre
+    lies inside it. ``model``: cellpose | classic | auto. ``progress(fraction, message)`` is called per tile (a
+    job's ``update``: raising from it stops). Returns Features (outlines, classes, measurements)."""
+    info = src.info
+    mpp = (info.mpp or (None,))[0] or target_mpp
+    if model == 'auto':
+        model = 'cellpose' if 'cellpose' in available() else 'classic'
+    if model not in ('cellpose', 'classic'):
+        raise ValueError(f'{model}: cellpose | classic here (Classpose runs on whole slide files)')
+    scale = min(1.0, mpp / target_mpp)
+    tile_l0, ov_l0 = int(tile / scale), int(overlap / scale)
+    tiles = _tissue_tiles(src, tile_l0, ov_l0)
+    if geom is not None:
+        import shapely
+
+        tiles = [t for t in tiles if geom.intersects(shapely.box(t[0], t[1], t[0] + t[2], t[1] + t[3]))]
+    rgb = info.mode == 'rgb'
+    names = list(STAINS) if rgb else [_slug(c.name or f'ch{i}') for i, c in enumerate(info.channels)]
+    min_px = max(6, int(8 * (0.5 / target_mpp) ** 2))
+    say = progress or (lambda *a: None)
+    parts: list = []
+    if model == 'cellpose':
+        say(0.0, 'loading Cellpose-SAM…')
+        cp = _Cellpose()
+        batch = 4
+        for b0 in range(0, len(tiles), batch):
+            say(b0 / max(1, len(tiles)), f'Cellpose-SAM ({cp.device}): tile {b0 + 1} of {len(tiles)}')
+            ts = tiles[b0 : b0 + batch]
+            imgs = [_read(src, *t[:4], scale) for t in ts]
+            for t, im, lab in zip(ts, imgs, cp.labels(imgs, rgb)):
+                r = _finish_tile(lab, im, rgb, t, scale, ov_l0, info, names, min_px)
+                if r:
+                    parts.append(r)
+    else:
+        rng = np.random.default_rng(0)
+        samp = [tiles[i] for i in rng.choice(len(tiles), min(10, len(tiles)), replace=False)] if tiles else []
+        vals = []
+        for t in samp:
+            im = _read(src, *t[:4], scale)
+            v = (_stain_od(im)['hematoxylin'][~_background(im)] if rgb else im[..., 0].ravel())[::5]
+            vals.append(v)
+        v = np.concatenate(vals) if vals else np.zeros(1)
+        thr = otsu(v, 0.0)
+        if rgb:
+            thr = max(thr, 0.15)
+        for k, t in enumerate(tiles):
+            say(k / max(1, len(tiles)), f'classic: tile {k + 1} of {len(tiles)}')
+            im = _read(src, *t[:4], scale)
+            r = _finish_tile(_classic_labels(im, rgb, thr), im, rgb, t, scale, ov_l0, info, names, min_px)
+            if r:
+                parts.append(r)
+    F = _features(parts, rgb, names, mpp)
+    if geom is not None and len(F):
+        import shapely
+
+        c = F.centroid()
+        shapely.prepare(geom)
+        F = annio.subset(F, np.nonzero(shapely.contains_xy(geom, c[:, 0], c[:, 1]))[0])
+    F.mpp = mpp
+    return F
 
 
 def segment_slide(
@@ -376,6 +450,11 @@ def _palette(n: int) -> list[str]:
 
 def _classpose(slide, out, log) -> Path:
     """Run Classpose in its own environment (uvx) and convert its cell contours (GeoJSON) to GeoParquet."""
+    return annio.export(classpose_layer(slide, log), out, slide=Path(slide).name)
+
+
+def classpose_layer(slide, log=print):
+    """Classpose on a whole slide file, in its own environment (uvx): the cells as an AnnotationLayer."""
 
     log(
         'Classpose: weights are labelled MIT but were trained on datasets with non-commercial terms '
@@ -402,8 +481,7 @@ def _classpose(slide, out, log) -> Path:
         log('  ' + ' '.join(cmd))
         subprocess.run(cmd, check=True)
         gj = next(Path(d).rglob('*cell_contours.geojson'))
-        layer = annio.load(gj, name='cells')
-        return annio.export(layer, out, slide=Path(slide).name)
+        return annio.load(gj, name='cells')
 
 
 def _cuda() -> bool:

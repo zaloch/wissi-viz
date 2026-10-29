@@ -52,8 +52,11 @@ sam-onnx = ["onnxruntime>=1.20", "scipy>=1.11", "scikit-image>=0.22"]   # now in
 # everything permissive in one go: `uv sync --extra all` / `pip install "wissi-viz[all]"` (not lgpl). Includes PyTorch
 # (sam) on platforms that have it, the desktop window, the HTTP client for tile APIs and the benchmark tools.
 all = ["wissi-viz[analysis,io,slideio,nicegui,server,polars,remote,desktop,bench,sam]"]
-# everything `wissi-viz --demo` / `--benchmark` use (add [sam] or [sam-onnx] for SAM 2.1, cellpose for Cellpose-SAM)
+# everything `wissi-viz --demo` / `--benchmark` use (add [sam] or [sam-onnx] for SAM 2.1, [cells] for Cellpose-SAM)
 demo = ["wissi-viz[analysis,io,server,desktop,bench]"]
+# Cellpose-SAM for Find all → By text → Cellpose-SAM and `wissi-viz segment`. Opt-in, not in [all]: Cellpose is BSD-3
+# but it requires fill-voids (LGPL-3.0). Needs PyTorch (no wheels for Intel Macs).
+cells = ["cellpose>=4.0; sys_platform != 'darwin' or platform_machine != 'x86_64'"]
 # opt-in, NOT permissive (LGPL): extra formats / alternative CZI backend
 lgpl = ["pylibCZIrw>=4.1", "openslide-python>=1.3", "openslide-bin>=4.0"]
 dev = ["pytest", "httpx", "playwright"]   # pip users; uv uses the dev dependency group below

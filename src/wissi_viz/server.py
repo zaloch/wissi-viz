@@ -641,16 +641,19 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
         async def find_start(sid: str, request: Request):
             """Find all like the examples, or by name, in the background: {mode: objects | segment | areas | text,
             examples: {layer, classes, picks}, candidates, training, classes, scope: {kind: view | region | slide,
-            rect, layer}, strictness, object_um, detail, prompt, model: grounding | sam3, name} → the job (poll
+            rect, layer}, strictness, object_um, detail, prompt, model: grounding | sam3 | cellpose | classic | classpose,
+            name} → the job (poll
             ``GET /jobs/{id}``)."""
             findall = _findall()
             body = await request.json()
             entry(sid)
             titles = {'objects': 'Find similar objects', 'segment': 'Segment everything', 'areas': 'Find areas',
-                      'text': 'Find by text'}  # fmt: skip
+                      'text': 'Find by text', 'cells': 'Find cells'}  # fmt: skip
+            title = titles.get(body.get('mode'), 'Find all')
+            if body.get('mode') == 'text' and body.get('model') in findall.CELL_MODELS:
+                title = f'Find cells · {findall.CELL_MODELS[body["model"]]}'
             job = jobs.submit(
-                'find', lambda job: _jsonable(findall.run(registry, sid, body, job)), slide=sid,
-                title=titles.get(body.get('mode'), 'Find all'),
+                'find', lambda job: _jsonable(findall.run(registry, sid, body, job)), slide=sid, title=title,
             )  # fmt: skip
             return JSONResponse(job.to_dict(), headers=hdrs('no-cache'))
 

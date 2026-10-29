@@ -29,6 +29,7 @@ import math
 import time
 import uuid
 from collections import OrderedDict
+from pathlib import Path
 
 import numpy as np
 import shapely
@@ -38,7 +39,7 @@ from skimage import measure
 from skimage.color import rgb2lab
 from skimage.feature import multiscale_basic_features, peak_local_max
 
-from . import annio, grounding, sam3
+from . import annio, grounding, sam3, segment
 from .annotations import AnnotationLayer
 from .jobs import Job
 from .metrics import object_metrics
@@ -977,6 +978,86 @@ def find_by_text(
     )  # fmt: skip
 
 
+# ================================================================================================ cells
+CELL_MODELS = {
+    'cellpose': 'Cellpose-SAM',
+    'classic': 'classic stain threshold',
+    'classpose': 'Classpose',
+}
+
+
+def cell_models() -> dict:
+    """The cell models this server can run: {id: {label, available, why}} (the By text model list's third group)."""
+    have = set(segment.available())
+    why = {
+        'cellpose': 'pip install "wissi-viz[cells]" (Cellpose is BSD-3; it brings fill-voids, LGPL-3.0)',
+        'classpose': 'install uv (https://docs.astral.sh/uv/): Classpose runs in its own environment',
+    }
+    return {
+        k: {'label': v, 'available': k in have, 'why': '' if k in have else why.get(k, '')}
+        for k, v in CELL_MODELS.items()
+    }
+
+
+def find_cells(
+    registry,
+    sid: str,
+    *,
+    model: str = 'cellpose',
+    scope: dict | None = None,
+    name: str | None = None,
+    job: Job | None = None,
+) -> dict:
+    """Outline every cell nucleus in the scope with a cell model: ``cellpose`` (Cellpose-SAM), ``classic`` (stain
+    threshold + watershed, no model) or ``classpose`` (whole slide files only: it runs on the slide, then the cells in
+    the scope are kept). Adds a ``detected`` layer with classes (by size, or by the brightest marker) and
+    measurements (area, perimeter, circularity, stain / channel means), which the analyses use."""
+    t0 = time.perf_counter()
+    if model not in CELL_MODELS:
+        raise ValueError(f'unknown cell model {model!r} ({" | ".join(CELL_MODELS)})')
+    caps = cell_models()[model]
+    if not caps['available']:
+        raise ValueError(f'{CELL_MODELS[model]} is not installed here: {caps["why"]}')
+    upd = job.update if job else (lambda *a, **k: None)
+    src = _source(registry, sid)
+    geom, where = scope_geometry(registry, sid, scope)
+    if model == 'classpose':
+        e = registry.get(sid)[0]
+        path = e.path
+        if e.factory is not None or path is None or not Path(path).is_file():
+            raise ValueError('Classpose reads slide files, and this slide comes from a tile API: use Cellpose-SAM '
+                             'or the classic threshold, which read the tiles')  # fmt: skip
+        upd(0.02, 'Classpose: the whole slide in its own environment (the first run installs it)…')
+        L = segment.classpose_layer(path, log=lambda m: upd(None, str(m)[:200]))
+        F = annio.from_layer(L)
+        if geom is not None and len(F):
+            c = F.centroid()
+            shapely.prepare(geom)
+            F = _subset(F, np.nonzero(shapely.contains_xy(geom, c[:, 0], c[:, 1]))[0])
+        F.mpp = _mpp(src)
+    else:
+        F = segment.segment_source(src, model, geom, progress=lambda f, m: upd(0.02 + 0.9 * f, m))
+    if not len(F):
+        raise ValueError(f'no cells found in {where} by {CELL_MODELS[model]}')
+    upd(0.95, f'{len(F):,} cells: adding the layer…')
+    lname = _unique(registry, sid, name or f'Cells · {CELL_MODELS[model]}')
+    L = annio.to_layer(F, name=lname)
+    L.origin = 'detected'
+    L.mpp = F.mpp
+    L.fill_opacity = 0.25
+    L.line_width = 1.2
+    L.detail_min_px = 3.0
+    registry.add_annotations(sid, L)
+    names = F.class_of()
+    kinds, counts = np.unique(names, return_counts=True)
+    kpis = [['cells', f'{len(F):,}']]
+    kpis += [[str(k), f'{c:,}'] for k, c in sorted(zip(kinds, counts), key=lambda kc: -kc[1])[:4]]
+    if 'area_um2' in F.props and len(F):
+        kpis.append(['median area', f'{float(np.median(F.props["area_um2"])):.0f} µm²'])
+    out = _summary(None, lname, len(F), len(F), 0.5, where, t0, 'cells', note=CELL_MODELS[model], kpis=kpis)
+    return out
+
+
 # ================================================================================================ areas
 def find_areas(
     registry,
@@ -1184,6 +1265,7 @@ def capabilities() -> dict:
         'sam': st.get('backend') or (st.get('available') or ['classic'])[0],
         'details': list(DETAIL_UM),
         'text': {'grounding': grounding.status(), 'sam3': sam3.status()},
+        'cells': cell_models(),
     }
 
 
@@ -1210,6 +1292,9 @@ def run(registry, sid: str, body: dict, job: Job | None = None) -> dict:
         return find_areas(registry, sid, training=body['training'], classes=body.get('classes'),
                           scope=body.get('scope'), detail=body.get('detail') or 'medium', name=body.get('name'),
                           job=job)  # fmt: skip
+    if mode == 'cells' or (mode == 'text' and body.get('model') in CELL_MODELS):
+        return find_cells(registry, sid, model=body.get('model') or 'cellpose', scope=body.get('scope'),
+                          name=body.get('name'), job=job)  # fmt: skip
     if mode == 'text':
         ex = body.get('examples') or None
         if ex and not (ex.get('layer') or ex.get('picks')):
@@ -1218,4 +1303,4 @@ def run(registry, sid: str, body: dict, job: Job | None = None) -> dict:
                             examples=ex, scope=body.get('scope'), strictness=float(body.get('strictness', 0.5)),
                             object_um=float(body.get('object_um') or 10), name=body.get('name'), job=job,
                             expand=bool(body.get('expand')))  # fmt: skip
-    raise ValueError(f'unknown mode {mode!r} (objects | segment | areas | text)')
+    raise ValueError(f'unknown mode {mode!r} (objects | segment | areas | text | cells)')

@@ -579,14 +579,19 @@
         <button class="mode" data-mode="objects" aria-pressed="true" title="Score every object of a layer (e.g. detected cells) against the examples"><b>Similar objects</b><span>in a layer of detected cells</span></button>
         <button class="mode" data-mode="segment" aria-pressed="false" title="SAM (or the classic fill) outlines every object, keeping those like the examples"><b>Segment everything</b><span>outline every object, keep similar</span></button>
         <button class="mode" data-mode="areas" aria-pressed="false" title="Train a pixel classifier on shapes of two or more classes and map those areas"><b>Areas</b><span>tumour, stroma… from brushed shapes</span></button>
-        <button class="mode" data-mode="text" aria-pressed="false" title="Name what to find (nucleus, gland…): a text-prompted detector finds them and SAM outlines them"><b>By text</b><span>type what to find: nucleus, gland…</span></button>
+        <button class="mode" data-mode="text" aria-pressed="false" title="Name what to find (nucleus, gland…): a text-prompted detector finds them and SAM outlines them; or pick a cell model (Cellpose-SAM, classic, Classpose) to outline every nucleus"><b>By text</b><span>nucleus, gland… or a cell model</span></button>
       </div>
+      <div class="f2" id="f-model-row" hidden>Model <select id="f-model" aria-label="Model">
+        <optgroup label="Name it (text prompt)">
+          <option value="grounding">Grounding DINO + SAM 2.1 · Apache-2.0</option>
+          <option value="sam3">SAM 3 · SAM License (opt-in)</option></optgroup>
+        <optgroup label="Cells and nuclei (no prompt)">
+          <option value="cellpose">Cellpose-SAM · BSD-3</option>
+          <option value="classic">Classic stain threshold · no model</option>
+          <option value="classpose">Classpose · whole slide files</option></optgroup></select></div>
       <div class="f2" id="f-text-row" hidden>Find <input type="text" id="f-prompt" placeholder="nucleus. gland. blood vessel" aria-label="What to find (one class per phrase)" spellcheck="false"></div>
       <label class="panel-note" id="f-expand-row" hidden style="display: flex; gap: 6px; align-items: flex-start"><input type="checkbox" id="f-expand" checked>
         <span>Then find all like the best matches: they become examples for <i>segment everything</i> (finds the dense small objects, e.g. nuclei, the text model misses; one phrase)</span></label>
-      <div class="f2" id="f-model-row" hidden>Model <select id="f-model" aria-label="Text model">
-        <option value="grounding">Grounding DINO + SAM 2.1 · Apache-2.0</option>
-        <option value="sam3">SAM 3 · SAM License (opt-in)</option></select></div>
       <div class="panel-note" id="f-lic-row" hidden><span id="f-lic-msg"></span> <button id="f-lic" class="btn" style="margin-left: 4px">Read the licence…</button></div>
       <div class="f2" id="f-cand-row">Search <select id="f-cand" aria-label="Objects to search"></select></div>
       <div class="f2" id="f-size-row" hidden>Object size <span class="row"><input type="range" id="f-size" min="3" max="60" step="1" value="10" aria-label="Object size"><output id="f-size-o" class="mono" style="width: 52px; text-align: right">10 µm</output></span></div>

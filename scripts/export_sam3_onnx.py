@@ -11,6 +11,13 @@ SAM 3's weights are gated on Hugging Face: request access at https://huggingface
 3. :mod:`wissi_viz.sam3` (float32 and int8) is checked against Meta's own ``Sam3Processor`` in PyTorch on a few
    pictures and prompts: the same instances, the same masks.
 
+Without access to the gated checkpoint, ``--mirror`` starts from the public float32 ONNX export of SAM 3 made with
+the same samexporter and SAM 3 revisions (https://huggingface.co/nrl-ai/anylearning-sam3-onnx, ``sam3_vit_h.zip``,
+checked against its SHA-256), quantizes it the same way and checks the int8 graphs against the float32 ones through
+:mod:`wissi_viz.sam3` (no PyTorch needed):
+
+    python scripts/export_sam3_onnx.py --samexporter path/to/samexporter --out dist/sam3 --mirror
+
 Writes ``sam3-{image-encoder,language-encoder,decoder}-int8.onnx`` (and external-data files if any),
 ``bpe_simple_vocab_16e6.txt.gz``, ``LICENSE-SAM.txt``, ``NOTICE.txt``, ``check.json`` and ``SHA256SUMS``. Run by
 .github/workflows/sam3-onnx.yml, which publishes them as the GitHub release ``sam3-onnx-v1``. You may run it yourself
@@ -28,6 +35,7 @@ import shutil
 import subprocess
 import sys
 import time
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -35,6 +43,9 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 
+#: the public float32 export (same samexporter and SAM 3 revisions as SAMEXPORTER_REV in the workflow)
+MIRROR = ('nrl-ai/anylearning-sam3-onnx', 'sam3_vit_h.zip',
+          '1617436f9db7eb9dd69029c2c465d54b316c36c21143f0fde0d1be513f15b7d5')  # fmt: skip
 PARTS = {'image_encoder': 'image-encoder', 'language_encoder': 'language-encoder', 'decoder': 'decoder'}
 CASES = [
     ('chelsea', ['cat', 'eye']),
@@ -101,6 +112,67 @@ def export(samexporter: Path, work: Path, ckpt: str | None) -> None:
     subprocess.run(cmd, cwd=samexporter, check=True)
 
 
+def from_mirror(work: Path) -> str:
+    """The public float32 export, checked and unpacked into ``work`` (``sam3_<part>.onnx`` + external data)."""
+    from huggingface_hub import hf_hub_download
+
+    repo, name, sha = MIRROR
+    if all((work / f'sam3_{p}.onnx').exists() for p in PARTS):
+        return f'https://huggingface.co/{repo} ({name}, sha256 {sha})'
+    z = Path(hf_hub_download(repo, name, cache_dir=str(work / 'hf')))
+    got = _sha(z)
+    if got != sha:
+        raise SystemExit(
+            f'{repo}/{name}: sha256 {got}, expected {sha} (the mirror changed: check it, then update MIRROR)'
+        )
+    with zipfile.ZipFile(z) as zf:
+        for info in zf.infolist():
+            base = Path(info.filename).name  # flat: the graphs name their external data files without folders
+            if info.is_dir() or not base or base.startswith('.'):
+                continue
+            with zf.open(info) as r, open(work / base, 'wb') as f:
+                shutil.copyfileobj(r, f, 1 << 24)
+            print('  ', base, f'{(work / base).stat().st_size / 2**20:.0f} MB', flush=True)
+    shutil.rmtree(work / 'hf', ignore_errors=True)
+    missing = [p for p in PARTS if not (work / f'sam3_{p}.onnx').exists()]
+    if missing:
+        have = sorted(p.name for p in work.iterdir() if p.is_file())
+        raise SystemExit(f'{name} has no sam3_{"/".join(missing)}.onnx (it has {have})')
+    return f'https://huggingface.co/{repo} ({name}, sha256 {sha})'
+
+
+def _graph_bytes(graph: Path) -> int:
+    """A graph's size with the external-data files it refers to."""
+    import onnx
+    from onnx.external_data_helper import uses_external_data
+
+    m = onnx.load(str(graph), load_external_data=False)
+    locs = {
+        e.value for t in m.graph.initializer if uses_external_data(t) for e in t.external_data if e.key == 'location'
+    }
+    return graph.stat().st_size + sum((graph.parent / loc).stat().st_size for loc in locs)
+
+
+def self_reference(fp32: Path) -> dict:
+    """The float32 graphs through wissi-viz on the test pictures (the reference when Meta's PyTorch model is not
+    available): the int8 graphs must find the same instances."""
+    from wissi_viz import sam3
+
+    m = sam3.Sam3(fp32, 'cpu')
+    out = {}
+    for pic, rgb, prompts in _pictures():
+        for p in prompts:
+            t0 = time.perf_counter()
+            b, s, _, masks = m.detect(rgb, [p], min_score=0.4)
+            out[(pic, p)] = {'masks': masks, 'boxes': b, 'scores': s, 'seconds': time.perf_counter() - t0}
+            print(pic, p, int((s > 0.5).sum()), 'float32 instances', flush=True)
+    if not (out[('chelsea', 'cat')]['scores'] > 0.5).any():
+        raise SystemExit('the float32 graphs do not find the cat in skimage.data.chelsea(): not a working SAM 3')
+    del m
+    gc.collect()
+    return out
+
+
 def quantize(work: Path, out: Path) -> None:
     import onnx
     from onnxruntime.quantization import QuantType, quantize_dynamic
@@ -108,7 +180,7 @@ def quantize(work: Path, out: Path) -> None:
     for local, name in PARTS.items():
         src = work / f'sam3_{local}.onnx'
         dst = out / f'sam3-{name}-int8.onnx'
-        big = sum(p.stat().st_size for p in work.iterdir() if p.name.startswith(f'sam3_{local}')) > 1.5 * 2**30
+        big = _graph_bytes(src) > 1.5 * 2**30
         quantize_dynamic(str(src), str(dst), weight_type=QuantType.QInt8, op_types_to_quantize=['MatMul', 'Gemm'],
                          use_external_data_format=big)  # fmt: skip
         if big:  # keep the weights next to the graph under a stable name
@@ -184,13 +256,19 @@ def main() -> None:
     ap.add_argument('--work', default='work/sam3', help='float32 export (large; not published)')
     ap.add_argument('--checkpoint', default=None, help='a local sam3.pt (default: download from Hugging Face)')
     ap.add_argument('--skip-check', action='store_true')
+    ap.add_argument('--mirror', action='store_true', help='start from the public float32 export (no gated access)')
     a = ap.parse_args()
     sx, out, work = Path(a.samexporter).resolve(), Path(a.out), Path(a.work)
     out.mkdir(parents=True, exist_ok=True)
     work.mkdir(parents=True, exist_ok=True)
-    ref = None if a.skip_check else reference(a.checkpoint)
-    if not (work / 'sam3_decoder.onnx').exists():
-        export(sx, work, a.checkpoint)
+    source = None
+    if a.mirror:
+        source = from_mirror(work)
+        ref = None
+    else:
+        ref = None if a.skip_check else reference(a.checkpoint)
+        if not (work / 'sam3_decoder.onnx').exists():
+            export(sx, work, a.checkpoint)
     quantize(work, out)
     shutil.copy(sx / 'samexporter' / 'assets' / 'bpe_simple_vocab_16e6.txt.gz', out / 'bpe_simple_vocab_16e6.txt.gz')
     shutil.copy(sx / 'sam3' / 'LICENSE', out / 'LICENSE-SAM.txt')
@@ -200,19 +278,24 @@ def main() -> None:
         'SAM 3 by Meta Platforms, Inc., licensed under the SAM License (LICENSE-SAM.txt), which applies to these files.\n'
         'Weights: https://huggingface.co/facebook/sam3 (official checkpoint). Model code: '
         f'https://github.com/facebookresearch/sam3 ({rev3}).\n'
-        f'Exported to ONNX with samexporter (MIT, https://github.com/vietanhdev/samexporter, {rev}).\n'
-        'Modified by wissi-viz: the weights of the matrix multiplications were quantized to 8-bit integers '
+        + (
+            f'Exported to ONNX with samexporter (MIT, https://github.com/vietanhdev/samexporter, {rev}).\n'
+            if source is None
+            else f'Exported to ONNX with samexporter (MIT, https://github.com/vietanhdev/samexporter, {rev}); the '
+            f'float32 export used is the public one at {source}.\n'
+        )
+        + 'Modified by wissi-viz: the weights of the matrix multiplications were quantized to 8-bit integers '
         '(scripts/export_sam3_onnx.py).\n'
         'If you publish results obtained with SAM 3, the SAM License asks you to acknowledge its use.\n'
         'The CLIP tokenizer vocabulary (bpe_simple_vocab_16e6.txt.gz) is from OpenAI CLIP (MIT).\n',
         encoding='utf-8',
     )
-    rep: dict = {'samexporter': rev, 'sam3': rev3}
-    if ref is not None:
+    rep: dict = {'samexporter': rev, 'sam3': rev3, 'float32_from': source or 'facebook/sam3 via samexporter'}
+    if ref is not None or (a.mirror and not a.skip_check):
         fp32 = work / '_wissi'
         fp32.mkdir(exist_ok=True)
-        for f in work.glob('sam3_*'):
-            if not (fp32 / f.name).exists():
+        for f in work.iterdir():  # the graphs and their external data
+            if f.is_file() and not (fp32 / f.name).exists():
                 (fp32 / f.name).symlink_to(f.resolve())
         shutil.copy(out / 'bpe_simple_vocab_16e6.txt.gz', fp32 / 'bpe_simple_vocab_16e6.txt.gz')
         int8 = out / '_wissi'
@@ -225,7 +308,12 @@ def main() -> None:
             (int8 / f'{local}.onnx').unlink(missing_ok=True)
             (int8 / f'{local}.onnx').symlink_to((out / f'sam3-{name}-int8.onnx').resolve())
         shutil.copy(out / 'bpe_simple_vocab_16e6.txt.gz', int8 / 'bpe_simple_vocab_16e6.txt.gz')
-        rep.update(check(ref, {'fp32': fp32, 'int8': int8}))
+        if ref is None:  # mirror: the float32 graphs through wissi-viz are the reference for the int8 ones
+            ref = self_reference(fp32)
+            rep.update(check(ref, {'int8': int8}))
+            rep['reference'] = 'the float32 graphs through wissi_viz.sam3 (no PyTorch reference without HF access)'
+        else:
+            rep.update(check(ref, {'fp32': fp32, 'int8': int8}))
         shutil.rmtree(int8)
     rep['sizes_mb'] = {p.name: round(p.stat().st_size / 2**20, 1) for p in sorted(out.iterdir()) if p.is_file()}
     (out / 'check.json').write_text(json.dumps(rep, indent=1), encoding='utf-8')
@@ -233,8 +321,10 @@ def main() -> None:
     (out / 'SHA256SUMS').write_text(''.join(f'{_sha(out / n)}  {n}\n' for n in names), encoding='utf-8')
     print(json.dumps(rep.get('summary'), indent=1), json.dumps(rep['sizes_mb']))
     s = rep.get('summary')
-    if s and s['fp32']['recall_iou75'] < 0.8:
+    if s and 'fp32' in s and s['fp32']['recall_iou75'] < 0.8:
         raise SystemExit("wissi-viz SAM 3 pipeline does not match Meta's Sam3Processor: see check.json")
+    if s and 'fp32' not in s and s['int8']['recall_iou75'] < 0.8:
+        raise SystemExit('the int8 graphs do not find what the float32 ones find: see check.json')
 
 
 if __name__ == '__main__':

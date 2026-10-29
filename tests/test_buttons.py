@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -169,6 +170,13 @@ def test_every_button_does_what_it_says(data, tmp_path, monkeypatch):
     from wissi_viz import findall, sam3
 
     monkeypatch.setattr(findall, 'text_detector', lambda model='grounding', progress=None: _FakeText())
+    read = findall._read_scaled
+
+    def slow_read(*a, **k):  # segment everything takes long enough to be cancelled on fast machines too
+        time.sleep(0.4)
+        return read(*a, **k)
+
+    monkeypatch.setattr(findall, '_read_scaled', slow_read)
     monkeypatch.setattr(sam3, 'user_dir', lambda kind: tmp_path / kind)  # the licence choice stays in the test
     monkeypatch.delenv('WISSI_SAM3_ACCEPT_LICENSE', raising=False)
 
@@ -277,6 +285,7 @@ def _brightfield(w, data, s):
     w.check(
         '#b-paths',
         f'() => ({G})().panes.some((p) => p.slide?.info?.id === {json.dumps(sid)}) && !document.getElementById("picker").classList.contains("on")',
+        timeout=40000,  # a slow runner may still be preparing the other slide (the registry is busy)
     )
     pg.select_option('#n', '1')
     pg.click('#slides li[title$="he.svs"]')
@@ -482,12 +491,18 @@ def _brightfield(w, data, s):
     w.audit('analysis result')
     # the same analysis on the cells inside a region only
     pg.select_option('#an-within', 'regions')
-    pg.wait_for_selector('.an-card:has-text("Density")')
-    pg.click('.an-card:has-text("Density")') if not pg.is_visible('#an-run') else None
-    pg.click('#an-run')
-    pg.wait_for_function(
-        '() => /in regions/.test(document.querySelector("#an-results .result b").textContent)', timeout=90000
+    pg.wait_for_function('() => document.getElementById("an-within").value === "regions"')
+    pg.wait_for_timeout(300)  # the catalogue re-renders: click the new Run button, not the old one
+    if not pg.is_visible('#an-run'):
+        pg.click('.an-card:has-text("Density")')
+    w.check(
+        '#an-run',
+        '() => /in regions/.test(document.querySelector("#an-results .result b").textContent) '
+        '|| document.querySelector(".toast.bad")',
+        timeout=90000,
     )
+    title = pg.locator('#an-results .result b').first.text_content()
+    assert 'in regions' in title, (title, pg.locator('.toast').all_text_contents())
     pg.select_option('#an-within', '')
     w.check(
         '#an-results .result button:has-text("Table")',

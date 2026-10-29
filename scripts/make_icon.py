@@ -40,8 +40,7 @@ def render(size: int = SIZE) -> Image.Image:
 
 def svg() -> str:
     tiles = '\n'.join(
-        f'  <rect x="{x}" y="{y}" width="{TILE_SIZE}" height="{TILE_SIZE}" '
-        f'rx="{TILE_RADIUS}" fill="{color}"/>'
+        f'  <rect x="{x}" y="{y}" width="{TILE_SIZE}" height="{TILE_SIZE}" rx="{TILE_RADIUS}" fill="{color}"/>'
         for x, y, color in TILES
     )
     return f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {SIZE} {SIZE}">

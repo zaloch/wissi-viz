@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: [.github/workflows/pack-cells.yml]
+    paths: [.github/workflows/pack-cells.yml, scripts/pack_cells.py]
 
 permissions:
   contents: write
@@ -35,26 +35,7 @@ jobs:
         shell: bash
         run: |
           rc=0
-          uv run --no-sync python - > /tmp/log.txt 2>&1 <<'PY' || rc=$?
-          import time, traceback
-          from wissi_viz import pack
-          sel = pack.items('full')[${{ matrix.shard }}::4]
-          d = pack.pack_dir('/mnt/pack')
-          print('images:', [x['id'] for x in sel], flush=True)
-          t0 = time.time()
-          pack.download(sel, d)
-          pack.prepare(sel, d)
-          failed = []
-          for x in sel:  # one at a time: a slide that fails is reported, the others still get their cells
-              try:
-                  pack.segment([x], d, model='auto')
-              except BaseException as e:
-                  failed.append(x['id'])
-                  print(f'::error::{x["id"]}: {type(e).__name__}: {str(e)[:500]} :: '
-                        + ' | '.join(traceback.format_exc().strip().splitlines()[-4:])[:1500], flush=True)
-          print(f'::notice::shard ${{ matrix.shard }}: {len(sel) - len(failed)} of {len(sel)} images in '
-                f'{(time.time() - t0) / 60:.0f} min', flush=True)
-          PY
+          uv run --no-sync python scripts/pack_cells.py --shard ${{ matrix.shard }} --of 4 --dir /mnt/pack > /tmp/log.txt 2>&1 || rc=$?
           grep -v '^::' /tmp/log.txt | tail -30
           grep '^::' /tmp/log.txt || true
           if [ $rc -ne 0 ]; then echo "::error::$(grep -v '^::' /tmp/log.txt | tail -6 | tr '\n' ' ' | cut -c1-2500)"; exit 1; fi

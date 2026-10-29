@@ -32,6 +32,7 @@ import sys
 import tempfile
 import time
 from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 
 import numpy as np
@@ -226,6 +227,32 @@ def _finish_tile(lab, img, rgb, tile, scale, overlap_l0, info, names, min_px):
 
 
 # ------------------------------------------------------------------------------------------------ public API
+def _run_tiles(jobs: list, workers: int | None, log, t0: float) -> list:
+    """The classic tile jobs in worker processes; if the pool breaks (a worker killed for memory, or a script
+    that worker processes cannot re-import, e.g. one read from standard input), the rest run in this process."""
+    parts: list = []
+    done = 0
+    try:
+        # spawn on every OS: forking a process that already runs threads (servers, BLAS) can deadlock
+        with ProcessPoolExecutor(workers or os.cpu_count(), mp_context=mp.get_context('spawn')) as ex:
+            for r in ex.map(_tile_job, jobs, chunksize=2):
+                if r:
+                    parts.append(r)
+                done += 1
+                if done % 50 == 0:
+                    log(f'  {done}/{len(jobs)} tiles, {time.time() - t0:.0f} s')
+        return parts
+    except BrokenProcessPool as e:
+        log(f'  worker processes stopped ({e.__class__.__name__}); the remaining {len(jobs) - done} tiles run here')
+    for k, job in enumerate(jobs[done:], done):
+        r = _tile_job(job)
+        if r:
+            parts.append(r)
+        if k % 50 == 0:
+            log(f'  {k}/{len(jobs)} tiles, {time.time() - t0:.0f} s')
+    return parts
+
+
 def segment_slide(
     slide: str | Path,
     out: str | Path,
@@ -265,13 +292,7 @@ def segment_slide(
         if rgb:
             thr = max(thr, 0.15)  # haematoxylin OD of a nucleus is well above 0.15
         jobs = [(str(slide), t, scale, ov_l0, thr, names, min_px) for t in tiles]
-        # spawn on every OS: forking a process that already runs threads (servers, BLAS) can deadlock
-        with ProcessPoolExecutor(workers or os.cpu_count(), mp_context=mp.get_context('spawn')) as ex:
-            for k, r in enumerate(ex.map(_tile_job, jobs, chunksize=2)):
-                if r:
-                    parts.append(r)
-                if k % 50 == 0:
-                    log(f'  {k}/{len(tiles)} tiles, {time.time() - t0:.0f} s')
+        parts = _run_tiles(jobs, workers, log, t0)
     elif model == 'cellpose':
         cp = _Cellpose()
         log(f'  Cellpose-SAM on {cp.device}')

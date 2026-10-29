@@ -1,7 +1,7 @@
 """Find objects by name: Grounding DINO (IDEA Research, Apache-2.0) turns a text prompt ("nucleus. mitotic figure.")
 into boxes; :mod:`wissi_viz.findall` then outlines each box with SAM 2.1.
 
-    det = detector()                                   # downloads the model once (~230 MB, int8)
+    det = detector()                                   # downloads the model once (~250 MB, int8)
     boxes, scores, labels = det.detect(rgb, ['nucleus', 'gland'])
 
 Runs on ONNX Runtime (a core dependency): no PyTorch. The model is Grounding DINO tiny (Swin-T + BERT,
@@ -11,8 +11,9 @@ workflow, which also quantizes the weights to int8 and checks the results agains
 ``WISSI_GROUNDING_MODEL=fp32`` uses the float32 file; ``WISSI_GROUNDING_DIR`` points at files you already have
 (``model.onnx``, ``vocab.txt``).
 
-The model was trained on natural images: on slides it knows coarse things (cells, nuclei, glands, vessels, fat,
-tissue folds) better than pathology terms. Pick a few examples as well to keep only those like them.
+The model was trained on natural images: on slides it finds larger structures (glands, vessels, fat, folds) well but
+marks only a handful of objects in dense fields of small ones (nuclei): for those, segment everything with examples,
+or SAM 3, does better.
 """
 
 from __future__ import annotations
@@ -289,6 +290,6 @@ def status() -> dict:
         'model': f'grounding-dino-tiny ({v})',
         'downloaded': folder(v) is not None,
         'loaded': v in _DET,
-        'size_mb': 230 if v == 'int8' else 720,
+        'size_mb': 250 if v == 'int8' else 660,
         'license': 'Apache-2.0',
     }

@@ -1503,10 +1503,10 @@ async function renderDraw() {
     } else if (findMode === 'text') {
       const words = $('f-prompt').value.split(/[.,;\n]+/).map((w) => w.trim()).filter(Boolean);
       const g = tx.grounding || {};
-      const dl = model === 'sam3' ? (s3.downloaded ? '' : ' Downloads SAM 3 once (~1.3 GB).') : (g.downloaded ? '' : ` Downloads Grounding DINO once (~${g.size_mb || 230} MB).`);
+      const dl = model === 'sam3' ? (s3.downloaded ? '' : ' Downloads SAM 3 once (~1.3 GB).') : (g.downloaded ? '' : ` Downloads Grounding DINO once (~${g.size_mb || 250} MB).`);
       if (model === 'sam3' && !s3.accepted) { msg = 'Accept the SAM License to use SAM 3, or pick Grounding DINO + SAM 2.1.'; ok = false; }
       else if (!words.length) { msg = 'Type what to find, e.g. “nucleus”, or “gland. vessel” (one class per phrase).'; ok = false; }
-      else msg = `${model === 'sam3' ? 'SAM 3' : 'Grounding DINO + SAM 2.1'} finds every ${words.join(', ')} about ${$('f-size').value} µm across${pos ? `, keeping those like your ${pos} example${pos === 1 ? '' : 's'}` : ''}.${dl} Names of everyday things work best; the whole slide can take long without a GPU.`;
+      else msg = `${model === 'sam3' ? 'SAM 3' : 'Grounding DINO + SAM 2.1'} finds every ${words.join(', ')} about ${$('f-size').value} µm across${pos ? `, keeping those like your ${pos} example${pos === 1 ? '' : 's'}` : ''}.${dl} ${model === 'sam3' ? 'SAM 3 handles dense small objects well.' : 'Grounding DINO finds larger structures (glands, vessels, fat, folds) far better than dense nuclei: for those, use Segment everything with examples, or SAM 3.'} The whole slide can take long without a GPU.`;
     } else {
       const k = classes.filter((c) => c.n > 0);
       msg = k.length >= 2 ? `Train on ${k.map((c) => `${c.name} (${c.n})`).join(', ')} in ${drawLayer} → map those areas.`

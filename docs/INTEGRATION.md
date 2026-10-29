@@ -795,17 +795,20 @@ read in tiles at the scale where an object of the **Object size** is about 48 px
 
 | Model | Licence | How it works | Download (once) |
 |---|---|---|---|
-| **Grounding DINO + SAM 2.1** (default) | Apache-2.0 | Grounding DINO tiny (IDEA Research) turns the prompt into boxes; the bundled SAM 2.1 outlines each box | ~GD_INT8 MB (int8) from this project's GitHub release `grounding-dino-tiny-onnx-v1`; `WISSI_GROUNDING_MODEL=fp32` for the float32 file (GD_FP32 MB) |
+| **Grounding DINO + SAM 2.1** (default) | Apache-2.0 | Grounding DINO tiny (IDEA Research) turns the prompt into boxes; the bundled SAM 2.1 outlines each box | ~250 MB (int8) from this project's GitHub release `grounding-dino-tiny-onnx-v1`; `WISSI_GROUNDING_MODEL=fp32` for the float32 file (660 MB) |
 | **SAM 3** (opt-in) | SAM License (Meta) | finds and outlines every instance of the named concept in one model | ~1.3 GB (int8) from release `sam3-onnx-v1`, **only after you accept the SAM License** in the app |
 
-Both run on ONNX Runtime (no PyTorch). Grounding DINO was trained on natural images: on slides it knows cells,
-nuclei, glands, vessels, fat and folds better than pathology terms, so a few picked examples help it. SAM 3 understands
-open-vocabulary concepts much better, but it is large (~848M parameters; several seconds per tile on a CPU).
+Both run on ONNX Runtime (no PyTorch). Grounding DINO was trained on natural images and returns a few hundred boxes
+at most per tile: it finds larger structures (glands, vessels, fat, folds, tissue pieces) well, but in dense fields of
+small objects it marks only a handful (on an IHC field of ~150 nuclei it returned 2–3 confident boxes). For nuclei and
+cells use *segment everything* with a few examples, or SAM 3, which was trained to return every instance of a concept
+(but is large: ~848M parameters, several seconds per tile on a CPU). Grounding DINO int8 takes ~2.4 s per 800 × 800
+tile on a 4-core CPU (float32 ~4.5 s), plus SAM 2.1 for the outlines.
 
 **Where the files come from.** Grounding DINO: exported from IDEA Research's weights in `transformers` by
 `.github/workflows/grounding-onnx.yml` (`scripts/build_grounding_onnx.py`), which quantizes the matrix
 multiplications to int8 and checks wissi-viz's own tokenizer, text masks, resizing and post-processing against the
-PyTorch model (the release's `check.json`: GD_CHECK). The graph takes 800 × 800 pixels (tiles are read at that
+PyTorch model (the release's `check.json`: the same tokens and text masks, every reference box found on 800 × 800 tiles with float32 and int8, 96 % on padded whole pictures, scores within ~0.02). The graph takes 800 × 800 pixels (tiles are read at that
 size); the caption's per-phrase attention mask is computed by wissi-viz and passed in, since traced into the graph
 it would be frozen to one caption. SAM 3: exported from Meta's official gated
 checkpoint by `.github/workflows/sam3-onnx.yml` (`scripts/export_sam3_onnx.py`, with samexporter, MIT), quantized to

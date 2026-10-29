@@ -847,7 +847,7 @@ layers and the analyses use it), classed by size on H&E (or by the brightest mar
 
 ```python
 findall.find_cells(registry, 'case1', model='cellpose', scope={'kind': 'region', 'layer': 'Regions · Found · gland'})
-segment.segment_source(source, 'classic', geom)   # any SlideSource, a shapely geometry in level-0 px (None: all)
+segment.segment_source(source, 'classic', geom)  # any SlideSource, a shapely geometry in level-0 px (None: all)
 ```
 
 The app's job body is `{mode: 'text', model: 'cellpose' | 'classic' | 'classpose', scope}` (or `mode: 'cells'`).

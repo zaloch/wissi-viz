@@ -1625,7 +1625,7 @@ async function renderDraw() {
     } else {
       const k = classes.filter((c) => c.n > 0);
       msg = k.length >= 2 ? `Train on ${k.map((c) => `${c.name} (${c.n})`).join(', ')} in ${drawLayer} → map those areas.`
-        : `Draw shapes of at least two classes in ${drawLayer} (e.g. Tumor and Stroma: change the class, draw, repeat).`;
+        : `Draw shapes of at least two classes in ${drawLayer} (e.g. Area 1 and Area 2: change the class, draw, repeat).`;
       ok = ok && k.length >= 2;
     }
     hint.textContent = msg;

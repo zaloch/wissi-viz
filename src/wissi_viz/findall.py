@@ -1090,7 +1090,7 @@ def find_areas(
     if len(labels) < 2:
         raise ValueError(
             f'{training} has {len(labels)} class{"" if len(labels) == 1 else "es"} of shapes: brush examples of at '
-            'least two (e.g. Tumor and Stroma) — draw each with its class set in the Annotate tab'
+            'least two (e.g. Area 1 and Area 2) — draw each with its class set in the Annotate tab'
         )
     geom, where = scope_geometry(registry, sid, scope, tissue=True)
     if geom is not None and (scope or {}).get('kind', 'slide') == 'slide':  # tissue: keep faint edges (fat, stroma)

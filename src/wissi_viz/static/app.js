@@ -2146,7 +2146,10 @@ async function start() {
   const tabAsked = new URLSearchParams(location.search).get('tab');
   if (tabAsked) setTab(tabAsked);
   const fallback = new URLSearchParams(location.search).get('fallback');   // the desktop app could not open its own window
-  if (fallback) { toast({ kind: 'bad', title: 'Opened in a browser window instead of the app window', sub: fallback, ms: 20000 }); log(`app window: ${fallback}`, true); }
+  if (fallback) {
+    toast({ kind: 'bad', title: 'Opened in a browser window instead of the app window', sub: fallback, ms: 20000 }); log(`app window: ${fallback}`, true);
+    document.title = 'wissi-viz (browser window: see the notice)';   // the title bar says so too, not only the notice
+  }
   apply();
   renderRecent(st.recent);
   if (!CAPS.open) {

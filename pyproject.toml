@@ -27,6 +27,10 @@ dependencies = [
   "onnxruntime>=1.20; sys_platform != 'darwin' or platform_machine != 'x86_64' or python_version < '3.14'",
   "scipy>=1.11",            # BSD-3: masks → outlines (SAM), classic fallback
   "scikit-image>=0.22",     # BSD-3
+  # the app window on macOS and Windows (pywebview BSD-3, uvicorn BSD-3), so a plain `uv run` / `pip install` keeps it;
+  # Linux needs GTK or Qt bindings on top, so there it stays in the desktop extra
+  "pywebview>=5; sys_platform == 'darwin' or sys_platform == 'win32'",
+  "uvicorn>=0.29; sys_platform == 'darwin' or sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]

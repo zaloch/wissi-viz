@@ -114,7 +114,9 @@ def _violations(path: Path) -> list[str]:
 def test_core_set_matches_pyproject():
     text = (ROOT / 'pyproject.toml').read_text(encoding='utf-8')
     block = re.search(r'^dependencies = \[(.*?)^\]', text, re.S | re.M).group(1)
-    dists = re.findall(r'^\s*"([A-Za-z0-9_.-]+)', block, re.M)
+    # dependencies for some platforms only (e.g. the app window on Windows / macOS) stay lazy imports: not core
+    dists = [m.group(1) for m in re.finditer(r'^\s*"([A-Za-z0-9_.-]+)([^"]*)"', block, re.M)
+             if "sys_platform ==" not in m.group(2)]  # fmt: skip
     assert dists, 'no core dependencies parsed'
     imports = {DIST_TO_IMPORT.get(d.lower(), d.lower().replace('-', '_')) for d in dists}
     assert imports <= CORE, f'update CORE in tests/test_style.py: {sorted(imports - CORE)}'

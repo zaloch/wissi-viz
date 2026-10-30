@@ -161,9 +161,10 @@ def published(release: str, timeout: float = 4.0) -> bool | None:
     return v
 
 
-def ort_session(path: Path, device: str | None = None):
+def ort_session(path: Path | bytes, device: str | None = None):
     """An ONNX Runtime session on the best available device (``device``: auto | cuda | dml | cpu). Not CoreML: it
-    handles the dynamic shapes of these graphs poorly, and ONNX Runtime's CPU kernels are fast on Apple silicon."""
+    handles the dynamic shapes of these graphs poorly, and ONNX Runtime's CPU kernels are fast on Apple silicon.
+    ``path`` may also be a serialized model (bytes)."""
     import onnxruntime as ort
 
     avail = ort.get_available_providers()
@@ -172,4 +173,5 @@ def ort_session(path: Path, device: str | None = None):
         want = [p for p in ('CUDAExecutionProvider', 'DmlExecutionProvider') if p in avail]
     so = ort.SessionOptions()
     so.log_severity_level = 3  # errors only (int8 graphs log harmless shape-merge warnings)
-    return ort.InferenceSession(str(path), so, providers=[p for p in want if p in avail] + ['CPUExecutionProvider'])
+    model = path if isinstance(path, bytes) else str(path)
+    return ort.InferenceSession(model, so, providers=[p for p in want if p in avail] + ['CPUExecutionProvider'])

@@ -831,7 +831,11 @@ public ONNX export of Meta's checkpoint made with samexporter (MIT) straight fro
 ([nrl-ai/anylearning-sam3-onnx](https://huggingface.co/nrl-ai/anylearning-sam3-onnx), `sam3_vit_h.zip`, ~3.3 GB,
 resumable), refuses it if its SHA-256 differs from the one wissi-viz expects, and, with the `onnx` package (`[sam3]`
 extra, in `[all]`), makes an int8 copy on your computer (~1.2 GB; on the check pictures it finds the same instances
-with the same masks as float32, ~2.5× faster on a CPU) and deletes the float32 files. `.github/workflows/sam3-onnx.yml`
+with the same masks as float32, ~2.5× faster on a CPU) and deletes the float32 files. That public export holds Meta's post-processing in its decoder, including a fixed cut
+that drops every match scoring under 0.5; wissi-viz lowers that one threshold to 0.05 when it loads the decoder (in
+memory, `sam3.lower_score_cut`), so the strictness slider reaches weaker matches as it does for Grounding DINO. SAM 3
+is trained on short concept names ("neuron", "nucleus", "blood vessel"): long descriptions usually find nothing, and
+the app says so. `.github/workflows/sam3-onnx.yml`
 runs that path weekly and on changes (download, quantize, find the cat) and publishes nothing. With access to the
 gated [facebook/sam3](https://huggingface.co/facebook/sam3), `scripts/export_sam3_onnx.py` exports your own copy;
 point `WISSI_SAM3_DIR` at it.

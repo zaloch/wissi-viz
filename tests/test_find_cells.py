@@ -220,3 +220,43 @@ def test_sam3_local_int8_copy(tmp_path):
         y = ort.InferenceSession(str(out / f'sam3-{name}.onnx')).run(None, {'x': x})[0]
         assert np.abs(y - x @ w).max() < 0.05 * np.abs(x @ w).max()
     assert (out / 'sam3-image-encoder.onnx').stat().st_size < (src / 'sam3_image_encoder.onnx').stat().st_size
+
+
+def test_sam3_fixed_score_cut_is_lowered(tmp_path):
+    """A decoder with Sam3Processor's fixed 0.5 cut (scores > 0.5 → NonZero → the outputs) returns lower scores once
+    the cut is lowered; the masks' own 0.5 (no NonZero after it) is left alone."""
+    onnx = pytest.importorskip('onnx')
+    import onnxruntime as ort
+    from onnx import TensorProto, helper
+
+    from wissi_viz import sam3
+
+    c = lambda name, v: helper.make_node(
+        'Constant', [], [name], value=helper.make_tensor(name, TensorProto.FLOAT, [], [v])
+    )
+    nodes = [
+        c('half', 0.5), c('mhalf', 0.5),
+        helper.make_node('Greater', ['s', 'half'], ['keep']),
+        helper.make_node('NonZero', ['keep'], ['nz']),
+        helper.make_node('Transpose', ['nz'], ['idx'], perm=[1, 0]),
+        helper.make_node('GatherND', ['s', 'idx'], ['scores']),
+        helper.make_node('Greater', ['m', 'mhalf'], ['masks']),
+    ]  # fmt: skip
+    g = helper.make_graph(nodes, 'dec', [helper.make_tensor_value_info('s', TensorProto.FLOAT, [4]),
+                                         helper.make_tensor_value_info('m', TensorProto.FLOAT, [4])],
+                          [helper.make_tensor_value_info('scores', TensorProto.FLOAT, None),
+                           helper.make_tensor_value_info('masks', TensorProto.BOOL, None)])  # fmt: skip
+    p = tmp_path / 'sam3_decoder.onnx'
+    onnx.save(helper.make_model(g, opset_imports=[helper.make_opsetid('', 17)], ir_version=9), str(p))
+    feed = {'s': np.array([0.04, 0.2, 0.45, 0.8], np.float32), 'm': np.array([0.2, 0.6, 0.4, 0.9], np.float32)}
+    before = ort.InferenceSession(str(p)).run(None, feed)
+    assert before[0].tolist() == pytest.approx([0.8])
+    lowered = sam3.lower_score_cut(p, 0.1)
+    after = ort.InferenceSession(lowered).run(None, feed)
+    assert after[0].tolist() == pytest.approx([0.2, 0.45, 0.8]) and after[1].tolist() == before[1].tolist()
+    raw = tmp_path / 'raw.onnx'  # a decoder with raw outputs: nothing to lower
+    g2 = helper.make_graph([helper.make_node('Identity', ['s'], ['pred_logits'])], 'raw',
+                           [helper.make_tensor_value_info('s', TensorProto.FLOAT, [4])],
+                           [helper.make_tensor_value_info('pred_logits', TensorProto.FLOAT, [4])])  # fmt: skip
+    onnx.save(helper.make_model(g2, opset_imports=[helper.make_opsetid('', 17)], ir_version=9), str(raw))
+    assert sam3.lower_score_cut(raw) is None

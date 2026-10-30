@@ -179,7 +179,8 @@ def postprocess(raw: dict, size: tuple[int, int], min_score: float, max_n: int =
     """Decoder heads → (boxes xyxy px, scores, masks (n, h, w) bool) above ``min_score``, best first. The score is
     the query's probability times the presence probability (as Meta's ``Sam3Processor``); masks are resized only for
     the queries kept. Older exports (the decoder graph holds ``Sam3Processor``'s post-processing, outputs
-    ``boxes, scores, masks``, already filtered at 0.5) are read as they are."""
+    ``boxes, scores, masks``, already filtered: at 0.5, or at :data:`SCORE_FLOOR` once :func:`lower_score_cut` lowered it)
+    are read as they are."""
     if 'pred_logits' not in raw and 'scores' in raw:
         return _processed(raw, size, min_score, max_n)
     logits = np.asarray(raw['pred_logits'], np.float32).reshape(-1)
@@ -217,6 +218,54 @@ def _processed(raw: dict, size: tuple[int, int], min_score: float, max_n: int):
     return boxes[keep], scores[keep], masks
 
 
+#: the lowest score a decoder that holds Sam3Processor's post-processing returns once its fixed 0.5 cut is lowered
+SCORE_FLOOR = 0.05
+
+
+def lower_score_cut(path: Path, floor: float = SCORE_FLOOR) -> bytes | None:
+    """The decoder at ``path`` with its fixed confidence cut lowered to ``floor``, serialized; None if it has no such
+    cut (a decoder with raw outputs) or the ``onnx`` package is missing.
+
+    Exports that hold ``Sam3Processor``'s post-processing keep only queries scoring > 0.5: one ``Greater`` node
+    (scores vs a constant 0.5) whose result picks, through ``NonZero``, the boxes, scores and masks returned. Only
+    that node's threshold is replaced; the masks' own 0.5 (a different ``Greater``, on probabilities) is untouched."""
+    try:
+        import onnx
+        from onnx import numpy_helper
+    except ImportError:
+        return None
+    m = onnx.load(str(path))  # with its external data, if any
+    g = m.graph
+    if 'scores' not in {o.name for o in g.output}:
+        return None
+    consts = {t.name: numpy_helper.to_array(t) for t in g.initializer if np.prod(t.dims or [1]) == 1}
+    for n in g.node:
+        if n.op_type == 'Constant':
+            for at in n.attribute:
+                if at.name == 'value' and np.prod(at.t.dims or [1]) == 1:
+                    consts[n.output[0]] = numpy_helper.to_array(at.t)
+    users: dict[str, list[str]] = {}
+    for n in g.node:
+        for i in n.input:
+            users.setdefault(i, []).append(n.op_type)
+    changed = 0
+    for n in g.node:
+        if n.op_type != 'Greater' or len(n.input) != 2 or n.input[1] not in consts:
+            continue
+        c = consts[n.input[1]]
+        if not np.isclose(float(c.ravel()[0]), 0.5) or 'NonZero' not in users.get(n.output[0], []):
+            continue
+        name = f'wissi_score_floor_{changed}'
+        g.initializer.append(numpy_helper.from_array(np.full(c.shape, floor, c.dtype), name))
+        n.input[1] = name
+        changed += 1
+    if not changed:
+        return None
+    entry = m.metadata_props.add()
+    entry.key, entry.value = 'wissi_score_floor', str(floor)
+    return m.SerializeToString()
+
+
 # ================================================================================================ model
 class Sam3:
     name = 'sam3'
@@ -235,7 +284,10 @@ class Sam3:
 
         self.enc = weights.ort_session(path('image_encoder'), device)
         self.lang = weights.ort_session(path('language_encoder'), device)
-        self.dec = weights.ort_session(path('decoder'), device)
+        dpath = path('decoder')
+        lowered = lower_score_cut(dpath)  # an export with Sam3Processor's fixed 0.5 cut: lowered, so strictness works
+        self.score_cut = SCORE_FLOOR if lowered is not None else None
+        self.dec = weights.ort_session(lowered if lowered is not None else dpath, device)
         self.dec_in = {i.name: i for i in self.dec.get_inputs()}
         self.dec_out = [o.name for o in self.dec.get_outputs()]
         bc = self.dec_in.get('box_coords')

@@ -266,3 +266,7 @@ def test_real_sam3_finds_the_cat(monkeypatch):
     det = S3.detector()
     b, s, lab, m = det.detect(data.chelsea(), ['cat'], min_score=0.5)
     assert len(s) >= 1 and m[0].mean() > 0.2  # the cat fills much of the picture
+    if det.score_cut is not None:  # an export with a fixed 0.5 cut: lowered, so weaker matches come through too
+        assert det.score_cut == S3.SCORE_FLOOR
+        low = det.detect(data.astronaut(), ['person', 'flag', 'rocket', 'face'], min_score=0.1)[1]
+        assert (low < 0.5).any() and (low >= 0.1).all(), low

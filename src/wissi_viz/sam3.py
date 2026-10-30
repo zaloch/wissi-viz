@@ -386,7 +386,8 @@ def _graph_bytes(graph: Path) -> int:
     return graph.stat().st_size + sum((graph.parent / loc).stat().st_size for loc in locs)
 
 
-def quantize(src: Path, out: Path, parts=tuple(PARTS), progress=None) -> dict:
+def quantize(src: Path, out: Path, parts=tuple(PARTS), progress=None, weights8: str = 'int8',
+             reduce_range: bool = False) -> dict:  # fmt: skip
     """Write ``out/sam3-<part>.onnx`` (+ ``.data`` when large) from the float32 ``src/sam3_<part>.onnx``: the matrix
     multiplications of ``parts`` as int8 (ONNX Runtime dynamic quantization), the others as they are. Needs the
     ``onnx`` package. Returns {part: precision}."""
@@ -403,8 +404,9 @@ def quantize(src: Path, out: Path, parts=tuple(PARTS), progress=None) -> dict:
             p.unlink()
         big = _graph_bytes(s) > 1.5 * 2**30
         if local in parts:
-            quantize_dynamic(str(s), str(dst), weight_type=QuantType.QInt8, op_types_to_quantize=['MatMul', 'Gemm'],
-                             use_external_data_format=big)  # fmt: skip
+            wt = QuantType.QUInt8 if weights8 == 'uint8' else QuantType.QInt8
+            quantize_dynamic(str(s), str(dst), weight_type=wt, op_types_to_quantize=['MatMul', 'Gemm'],
+                             use_external_data_format=big, reduce_range=reduce_range)  # fmt: skip
         m = onnx.load(str(dst if local in parts else s))
         # the IR version of the source: a newer onnx package may write one the installed ONNX Runtime cannot read
         m.ir_version = min(m.ir_version, onnx.load(str(s), load_external_data=False).ir_version)

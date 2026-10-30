@@ -321,9 +321,11 @@ def test_page_in_browser_mode(files, tmp_path):
             assert pg.is_visible('#empty')
             pg.click('#empty button[data-act=open]')  # no native dialogs here → the path box
             pg.wait_for_selector('#pathbox textarea', state='visible')
-            pg.fill('#paths', f'"{files["a"]}"\n{files["b"]}\n{files["csv"]}')
-            # the button's handler is bound when the app finishes starting: on slow machines a click before that is lost
+            # the button's handler is bound when the app finishes starting, which may also reset the box: on slow
+            # machines a click (or text typed) before that is lost
             pg.wait_for_function('() => !!document.getElementById("b-paths").onclick', timeout=60000)
+            pg.fill('#paths', f'"{files["a"]}"\n{files["b"]}\n{files["csv"]}')
+            pg.wait_for_function('() => document.getElementById("paths").value.includes("csv")')
             pg.click('#b-paths')
             try:
                 pg.wait_for_function('() => document.querySelectorAll("#slides li").length === 2', timeout=90000)

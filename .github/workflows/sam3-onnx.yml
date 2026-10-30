@@ -8,7 +8,7 @@ on:
     - cron: '17 6 * * 1'   # weekly: notice if the public file changes or disappears
   push:
     branches: [main]
-    paths: [src/wissi_viz/sam3.py, .github/workflows/sam3-onnx.yml]
+    paths: [src/wissi_viz/sam3.py, scripts/sam3_inspect.py, .github/workflows/sam3-onnx.yml]
 
 permissions:
   contents: read
@@ -38,3 +38,10 @@ jobs:
           sudo mkdir -p /mnt/cache && sudo chown "$USER" /mnt/cache
           uv run --no-sync pytest -q -rfE tests/test_grounding.py -k real_sam3
           echo "::notice::$(cat /mnt/cache/*/models/sam3/NOTICE.txt 2>/dev/null | tr '\n' ' ')"
+      - name: How the decoder makes its scores
+        if: always()
+        run: |
+          d=$(ls /mnt/cache/*/models/sam3/sam3-decoder.onnx 2>/dev/null | head -1)
+          [ -n "$d" ] && uv run --no-sync python scripts/sam3_inspect.py "$d" > /mnt/inspect.txt 2>&1 || true
+          head -c 3800 /mnt/inspect.txt | tr '\n' '|' | sed 's/^/::notice::/'; echo
+          tail -c +3800 /mnt/inspect.txt | head -c 3800 | tr '\n' '|' | sed 's/^/::notice::/'; echo

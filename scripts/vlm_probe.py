@@ -145,6 +145,37 @@ def outlined(rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
     return out
 
 
+def views(rgb: np.ndarray, mask: np.ndarray, mpp: float, side: int = 1280, crop: int = 512, zoom: int = 2) -> list:
+    """What the model is shown: the whole section (longest side ``side`` px) and two details at full resolution, each
+    ``crop`` px enlarged ``zoom`` times so that neurons are ~60 px across, chosen where the tissue is densest. Returns
+    [(label, image, the same with the experts' outlines, µm per shown pixel)]."""
+    from scipy import ndimage as ndi
+
+    H, W = rgb.shape[:2]
+    k = min(1.0, side / max(H, W))
+    size = (max(1, round(W * k)), max(1, round(H * k)))
+    out = [('the whole section', np.asarray(Image.fromarray(rgb).resize(size, Image.LANCZOS)),
+            np.asarray(Image.fromarray(outlined(rgb, mask)).resize(size, Image.LANCZOS)), mpp / k)]  # fmt: skip
+    g = ndi.uniform_filter(rgb[..., 0].astype(np.float32), 31)
+    tissue = g > g.mean() + 0.25 * g.std()
+    frac = ndi.uniform_filter(tissue.astype(np.float32), crop)
+    picked = []
+    for y, x in zip(*np.unravel_index(np.argsort(frac, axis=None)[::-1], frac.shape)):
+        if len(picked) == 2:
+            break
+        if all(max(abs(y - py), abs(x - px)) >= crop for py, px in picked):
+            picked.append((int(y), int(x)))
+    for j, (y, x) in enumerate(picked):
+        y0 = min(max(0, y - crop // 2), max(0, H - crop))
+        x0 = min(max(0, x - crop // 2), max(0, W - crop))
+        box = (slice(y0, y0 + crop), slice(x0, x0 + crop))
+        big = (min(crop, W - x0) * zoom, min(crop, H - y0) * zoom)
+        out.append((f'detail {j + 1}', np.asarray(Image.fromarray(rgb[box]).resize(big, Image.BICUBIC)),
+                    np.asarray(Image.fromarray(outlined(rgb[box], mask[box])).resize(big, Image.BICUBIC)),
+                    mpp / zoom))  # fmt: skip
+    return out
+
+
 def samples(work: Path) -> list[dict]:
     """Rat DRG neurofilament immunofluorescence (CC BY 4.0) with three goals: one plain, one with sizes, and one
     that can only partly be done (the images have one marker, so CGRP-positive neurons cannot be told apart)."""
@@ -164,10 +195,10 @@ def samples(work: Path) -> list[dict]:
         name, rgb, mask, n, mpp = drg_image(nf, j * max(n_imgs // 3, 1))
         out.append({
             'name': f'{name}-goal{j + 1}',
-            'image': rgb,
-            'outlined': outlined(rgb, mask),
+            'views': views(rgb, mask, mpp),
             'goal': goal,
-            'context': f'Pixel size about {mpp:.2f} µm.',
+            'context': ('Sample: a section of rat dorsal root ganglion (DRG). One fluorescence channel: Neurofilament '
+                        f'(an antibody marking neurons). Pixel size about {mpp:.2f} µm.'),
             'reference_count': n,
             'expect': {'is_microscopy': True, 'modality': 'fluorescence',
                        'stain_has': ['neurofil', 'fluoresc', 'immuno', 'antibod', 'marker', 'neuron'], **exp},
@@ -175,9 +206,8 @@ def samples(work: Path) -> list[dict]:
     return out
 
 
-def png_b64(rgb: np.ndarray, side: int = 640) -> str:
+def png_b64(rgb: np.ndarray) -> str:
     im = Image.fromarray(rgb).convert('RGB')
-    im.thumbnail((side, side))
     b = io.BytesIO()
     im.save(b, format='PNG')
     return base64.b64encode(b.getvalue()).decode()
@@ -274,6 +304,8 @@ def main(argv=None) -> int:
     p.add_argument('--host', default=os.environ.get('OLLAMA_HOST_URL', 'http://localhost:11434'))
     p.add_argument('--out', default='vlm-probe')
     p.add_argument('--work', default='vlm-probe-work', help='where the DRG images are downloaded and unpacked')
+    p.add_argument('--budget', type=float, default=float(os.environ.get('WISSI_VLM_BUDGET', 900)),
+                   help='most seconds per answer')  # fmt: skip
     p.add_argument('--limit', type=int, default=0, help='most tokens per answer (default 1024; 4096 if thinking)')
     p.add_argument('--think', choices=['on', 'off', 'default'], default=os.environ.get('WISSI_VLM_THINK', 'off'),
                    help="the model's reasoning before answering (default off)")  # fmt: skip
@@ -290,28 +322,32 @@ def main(argv=None) -> int:
     # speed first (plain text, then one image without the JSON format), so a slow or stuck answer can be told apart
     _, t = chat(a.host, a.model, [{'role': 'user', 'content': 'Reply with one word: ready.'}], None, 200, think=think)
     notice('vlm speed', f'{a.model} think={a.think} text: {t}')
-    img = png_b64(sample[0]['image'])
+    img = png_b64(sample[0]['views'][0][1])
     q = [{'role': 'user', 'content': 'In two sentences, what is this image?', 'images': [img]}]
-    text, t = chat(a.host, a.model, q, None, min(limit, 1024), think=think)
+    text, t = chat(a.host, a.model, q, None, min(limit, 1024), a.budget, think=think)
     notice('vlm image', f'{a.model} {t} · {text[-1500:]}')
 
     failed = 0
     for s in sample:
-        img = png_b64(s['image'])
-        seen = Image.open(io.BytesIO(base64.b64decode(img)))
-        seen.save(out / f'{s["name"]}.png')  # exactly what the model is shown
-        Image.fromarray(s['outlined']).resize(seen.size).save(out / f'{s["name"]}.experts.png')
+        imgs = []
+        for j, (_, v, ref, _) in enumerate(s['views']):
+            imgs.append(png_b64(v))
+            Image.fromarray(v).save(out / f'{s["name"]}.{j}.png')  # exactly what the model is shown
+            Image.fromarray(ref).save(out / f'{s["name"]}.{j}.experts.png')
+        shown = '; '.join(f'image {j + 1}: {lab}, {um:.2f} µm per shown pixel' for j, (lab, _, _, um) in
+                          enumerate(s['views']))  # fmt: skip
         look_q = (
-            'Describe this image. Is it microscopy? Brightfield or fluorescence? Which stain or markers? Which tissue '
-            'or sample? Which structures are visible? Roughly how many cells or nuclei are visible?'
+            f'{s.get("context", "")}\nYou are shown {len(imgs)} images of it ({shown}).\nDescribe it. Is it '
+            'microscopy? Brightfield or fluorescence? Which stain or markers? Which tissue or sample? Which structures '
+            'are visible? Roughly how many cells (here: neurons) are in the whole section?'
         )
-        msgs = [{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': look_q, 'images': [img]}]
+        msgs = [{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': look_q, 'images': imgs}]
         plan, t2 = {}, {}
         try:
-            look, t1 = chat(a.host, a.model, msgs, LOOK, limit, think=think)
+            look, t1 = chat(a.host, a.model, msgs, LOOK, limit, a.budget, think=think)
             if '_raw' not in look:
                 plan_q = (
-                    f'Goal: {s["goal"]} {s.get("context", "")}\nTools available:\n{tools}\nPlan the analysis as steps using only these '
+                    f'Goal: {s["goal"]}\nTools available:\n{tools}\nPlan the analysis as steps using only these '
                     'tools. For each step give the tool, what it applies to (a short name), sizes in µm where relevant, '
                     'the marker for split_by_marker, and why. Say what the result will be, and the risks (what could '
                     'go wrong). Plan every part of the goal this image allows, even if other parts are not possible: list those '
@@ -319,7 +355,7 @@ def main(argv=None) -> int:
                     'of the goal fits this image, set feasible to no and give no steps.'
                 )
                 msgs += [{'role': 'assistant', 'content': json.dumps(look)}, {'role': 'user', 'content': plan_q}]
-                plan, t2 = chat(a.host, a.model, msgs, PLAN, limit, think=think)
+                plan, t2 = chat(a.host, a.model, msgs, PLAN, limit, a.budget, think=think)
         except Exception as e:  # noqa: BLE001 - report it and go on to the next image
             failed += 1
             notice(f'vlm {s["name"]}', f'{a.model} ERROR {type(e).__name__}: {e}')

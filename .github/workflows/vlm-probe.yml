@@ -1,4 +1,4 @@
-# A small test of Qwen3-VL 4B (Apache-2.0) through Ollama on a CPU runner: shown rat DRG neurofilament images
+# A small test of Qwen3-VL 4B / 8B / 30B-A3B (Apache-2.0) through Ollama on a CPU runner: shown rat DRG neurofilament images
 # (Zenodo 6546069, CC BY 4.0) and a goal each, does it describe them correctly and plan an analysis with wissi-viz's
 # tools? The answers are posted as notices; the images it saw and its answers go to the lab/vlm-probe-out branch.
 name: vlm-probe
@@ -14,34 +14,47 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:
-        model: ['qwen3-vl:4b', 'qwen3-vl:4b-instruct']
+        # the first tag that exists is used; 30b-a3b is a mixture of experts (~3B active of 30B, ~20 GB)
+        model: ['qwen3-vl:4b-instruct', 'qwen3-vl:8b-instruct', 'qwen3-vl:30b-a3b-instruct qwen3-vl:30b-instruct qwen3-vl:30b']
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
+      - name: Room (disk, swap)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          sudo swapoff -a || true
+          sudo fallocate -l 24G /mnt/swapfile && sudo chmod 600 /mnt/swapfile && sudo mkswap /mnt/swapfile && sudo swapon /mnt/swapfile
+          sudo mkdir -p /mnt/ollama && sudo chown "$USER" /mnt/ollama
+          df -h / /mnt; free -g
       - name: Ollama and the model
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq 7zip libarchive-tools >/dev/null
           curl -fsSL https://ollama.com/install.sh | sh
-          (pgrep -x ollama >/dev/null || (ollama serve > "$RUNNER_TEMP/ollama.log" 2>&1 &))
+          sudo systemctl stop ollama || true
+          (OLLAMA_MODELS=/mnt/ollama ollama serve > "$RUNNER_TEMP/ollama.log" 2>&1 &)
           for i in $(seq 1 30); do curl -sf http://localhost:11434/api/tags >/dev/null && break; sleep 2; done
           ollama --version
-          ollama pull '${{ matrix.model }}'
-          ollama show '${{ matrix.model }}' | head -30
+          for m in ${{ matrix.model }}; do
+            if ollama pull "$m"; then echo "WISSI_VLM_MODEL=$m" >> "$GITHUB_ENV"; echo "::notice title=model::using $m"; break; fi
+            echo "::notice title=model::$m: not available"
+          done
+          grep -q WISSI_VLM_MODEL "$GITHUB_ENV"
+          ollama list
       - name: Probe
         env:
-          WISSI_VLM_MODEL: ${{ matrix.model }}
+          WISSI_VLM_BUDGET: '2400'
         run: |
           uv run -p 3.12 --no-project --with numpy --with pillow --with tifffile --with scipy \
             python scripts/vlm_probe.py --out "$RUNNER_TEMP/vlm-probe" --work "$RUNNER_TEMP/work"
       - name: Ollama's log
         if: always()
         run: |
-          { sudo journalctl -u ollama --no-pager 2>/dev/null || cat "$RUNNER_TEMP/ollama.log"; } > "$RUNNER_TEMP/ollama-all.log" || true
-          grep -iE 'error|panic|fail|out of memory' "$RUNNER_TEMP/ollama-all.log" | tail -15 | cut -c1-600 | sed 's/^/::notice title=ollama::/'
+          grep -iE 'error|panic|fail|out of memory|requires more|system memory' "$RUNNER_TEMP/ollama.log" | tail -15 | cut -c1-600 | sed 's/^/::notice title=ollama::/'
+          free -g
       - uses: actions/upload-artifact@v4
         if: always()
         with:

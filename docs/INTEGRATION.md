@@ -830,7 +830,7 @@ it would be frozen to one caption. SAM 3: **not hosted by this project.** After 
 public ONNX export of Meta's checkpoint made with samexporter (MIT) straight from Hugging Face
 ([nrl-ai/anylearning-sam3-onnx](https://huggingface.co/nrl-ai/anylearning-sam3-onnx), `sam3_vit_h.zip`, ~3.3 GB,
 resumable), refuses it if its SHA-256 differs from the one wissi-viz expects, and, with the `onnx` package (`[sam3]`
-extra, in `[all]`), makes an int8 copy on your computer (~1.2 GB; on the check pictures it finds the same instances
+extra, in `[all]`), makes an int8 copy on your computer (7-bit weights: full 8-bit int8 saturates on x86 CPUs without VNNI, where SAM 3 then misses objects; ~1.2 GB; on the check pictures it finds the same instances
 with the same masks as float32, ~2.5× faster on a CPU) and deletes the float32 files. That public export holds Meta's post-processing in its decoder, including a fixed cut
 that drops every match scoring under 0.5; wissi-viz lowers that one threshold to 0.05 when it loads the decoder (in
 memory, `sam3.lower_score_cut`), so the strictness slider reaches weaker matches as it does for Grounding DINO. SAM 3

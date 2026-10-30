@@ -324,8 +324,14 @@ def test_page_in_browser_mode(files, tmp_path):
             # the button's handler is bound when the app finishes starting, which may also reset the box: on slow
             # machines a click (or text typed) before that is lost
             pg.wait_for_function('() => !!document.getElementById("b-paths").onclick', timeout=60000)
-            pg.fill('#paths', f'"{files["a"]}"\n{files["b"]}\n{files["csv"]}')
-            pg.wait_for_function('() => document.getElementById("paths").value.includes("csv")')
+            for attempt in range(3):  # a slow start can still wipe what was typed: type again
+                pg.fill('#paths', f'"{files["a"]}"\n{files["b"]}\n{files["csv"]}')
+                try:
+                    pg.wait_for_function('() => document.getElementById("paths").value.includes("csv")', timeout=10000)
+                    break
+                except Exception:
+                    if attempt == 2:
+                        raise
             pg.click('#b-paths')
             try:
                 pg.wait_for_function('() => document.querySelectorAll("#slides li").length === 2', timeout=90000)

@@ -291,3 +291,20 @@ def test_dino_to_sam3_passes_the_best_boxes_as_examples():
     d.concepts = {'DAB stained and unstained neurons': 'neuron'}
     d.detect(np.zeros((4, 4, 3), np.uint8), ['DAB stained and unstained neurons'])
     assert s3.seen[0] == ['neuron']
+
+
+def test_sam3_old_int8_copies_are_remade_on_x86(tmp_path, monkeypatch):
+    from wissi_viz import sam3, weights
+
+    monkeypatch.setattr(weights, 'cache_dir', lambda name: tmp_path / name)
+    monkeypatch.delenv('WISSI_SAM3_DIR', raising=False)
+    d = tmp_path / 'sam3'
+    d.mkdir()
+    (d / '.complete').write_text('int8 (quantized on this computer)', encoding='utf-8')
+    for machine, kept in (('x86_64', False), ('AMD64', False), ('arm64', True), ('aarch64', True)):
+        monkeypatch.setattr(sam3.platform, 'machine', lambda m=machine: m)
+        assert (sam3.folder() == d) is kept, machine
+    monkeypatch.setattr(sam3.platform, 'machine', lambda: 'x86_64')
+    for note in (f'{sam3.QUANT_TAG} (quantized on this computer)', 'float32 (install the onnx package…)'):
+        (d / '.complete').write_text(note, encoding='utf-8')
+        assert sam3.folder() == d

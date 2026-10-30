@@ -26,6 +26,7 @@ import gzip
 import html
 import json
 import os
+import platform
 import re
 import shutil
 import threading
@@ -371,7 +372,18 @@ def folder() -> Path | None:
     if env:
         return Path(env)
     d = weights.cache_dir('sam3')
-    return d if (d / '.complete').exists() else None
+    done = d / '.complete'
+    if not done.exists():
+        return None
+    if _stale(done.read_text(encoding='utf-8')):
+        return None  # made with the old 8-bit recipe on an x86 CPU: downloaded and remade once
+    return d
+
+
+def _stale(note: str) -> bool:
+    return (
+        note.startswith('int8') and QUANT_TAG not in note and platform.machine().lower() in ('x86_64', 'amd64', 'i686')
+    )
 
 
 def _graph_bytes(graph: Path) -> int:
@@ -386,8 +398,14 @@ def _graph_bytes(graph: Path) -> int:
     return graph.stat().st_size + sum((graph.parent / loc).stat().st_size for loc in locs)
 
 
+#: the int8 recipe: 7-bit weights (``reduce_range``). Full 8-bit int8 saturates on x86 CPUs without VNNI (AVX2 only:
+#: many AMD EPYC / older Intel): there SAM 3 lost the cat, the cup… (scripts/sam3_quant_probe.py); 7 bits match float32
+#: everywhere. Copies made before carry no tag and are remade on x86 (ARM CPUs, e.g. Apple silicon, were never affected).
+QUANT_TAG = 'int8 r7'
+
+
 def quantize(src: Path, out: Path, parts=tuple(PARTS), progress=None, weights8: str = 'int8',
-             reduce_range: bool = False) -> dict:  # fmt: skip
+             reduce_range: bool = True) -> dict:  # fmt: skip
     """Write ``out/sam3-<part>.onnx`` (+ ``.data`` when large) from the float32 ``src/sam3_<part>.onnx``: the matrix
     multiplications of ``parts`` as int8 (ONNX Runtime dynamic quantization), the others as they are. Needs the
     ``onnx`` package. Returns {part: precision}."""
@@ -448,7 +466,7 @@ def download(progress=None) -> Path:
     try:
         quantize(fp32, d, progress=lambda f, m: say(0.92 + 0.07 * f, m))
         shutil.rmtree(fp32)
-        note = 'int8 (quantized on this computer)'
+        note = f'{QUANT_TAG} (quantized on this computer)'
     except ImportError:  # no onnx package: use the float32 graphs (slower)
         for p in fp32.iterdir():
             os.replace(p, d / p.name)

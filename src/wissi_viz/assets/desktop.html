@@ -586,12 +586,14 @@
       <div class="f2" id="f-model-row" hidden>Model <select id="f-model" aria-label="Model">
         <optgroup label="Name it (text prompt)">
           <option value="grounding">Grounding DINO + SAM 2.1 · Apache-2.0</option>
-          <option value="sam3">SAM 3 · SAM License (opt-in)</option></optgroup>
+          <option value="sam3">SAM 3 · SAM License (opt-in)</option>
+          <option value="dino-sam3">Grounding DINO → SAM 3 · examples (SAM License)</option></optgroup>
         <optgroup label="Cells and nuclei (no prompt)">
           <option value="cellpose">Cellpose-SAM · BSD-3</option>
           <option value="classic">Classic stain threshold · no model</option>
           <option value="classpose">Classpose · whole slide files</option></optgroup></select></div>
       <div class="f2" id="f-text-row" hidden>Find <input type="text" id="f-prompt" placeholder="nucleus. gland. blood vessel" aria-label="What to find (one class per phrase)" spellcheck="false"></div>
+      <div class="f2" id="f-s3name-row" hidden>SAM 3 name <input type="text" id="f-s3name" placeholder="auto" aria-label="The short name SAM 3 gets (1–3 words)" title="SAM 3 knows short names: what Grounding DINO's matches are examples of (empty: the last word of the description)" spellcheck="false"></div>
       <label class="panel-note" id="f-expand-row" hidden style="display: flex; gap: 6px; align-items: flex-start"><input type="checkbox" id="f-expand" checked>
         <span>Then find all like the best matches: they become examples for <i>segment everything</i> (finds the dense small objects, e.g. nuclei, the text model misses; one phrase)</span></label>
       <div class="panel-note" id="f-lic-row" hidden><span id="f-lic-msg"></span> <button id="f-lic" class="btn" style="margin-left: 4px">Read the licence…</button></div>

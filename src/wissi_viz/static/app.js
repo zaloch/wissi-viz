@@ -1509,8 +1509,14 @@ let findMode = 'objects', findCaps = null, findJob = null;
 const CELL_MODELS = { cellpose: 'Cellpose-SAM', classic: 'The classic stain threshold', classpose: 'Classpose' };
 for (const b of $('f-modes').children) b.onclick = () => { findMode = b.dataset.mode; renderDraw(); };
 $('f-strict').oninput = () => { $('f-strict-o').textContent = (+$('f-strict').value).toFixed(2); };
+const CONCEPT_STOP = new Set(['and', 'or', 'with', 'without', 'the', 'a', 'an', 'of', 'in', 'on', 'not', 'stained', 'unstained', 'positive', 'negative', 'visible', 'small', 'large', 'big']);
+const conceptOf = (phrase) => {   // as findall.concept: a short name for SAM 3 from a description
+  const w = phrase.split(/\s+/).map((x) => x.replace(/^[.,;:()"']+|[.,;:()"']+$/g, '')).filter(Boolean);
+  if (w.length <= 3) return w.join(' ');
+  return [...w].reverse().find((x) => !CONCEPT_STOP.has(x.toLowerCase()) && /^[A-Za-z]+$/.test(x)) || w[w.length - 1];
+};
 const sizeText = () => { const lo = +$('f-size').value, hi = +$('f-size-max').value; return hi && hi !== lo ? `${Math.min(lo, hi)}–${Math.max(lo, hi)} µm` : `about ${lo} µm`; };
-['f-size', 'f-size-max', 'f-exclude'].forEach((id) => { $(id).oninput = () => renderDraw(); });
+['f-size', 'f-size-max', 'f-exclude', 'f-s3name'].forEach((id) => { $(id).oninput = () => renderDraw(); });
 $('f-notin').onchange = () => renderDraw();
 $('ex-use').onchange = () => renderDraw();
 $('f-prompt').oninput = () => renderDraw();
@@ -1594,7 +1600,8 @@ async function renderDraw() {
   $('f-size-row').hidden = findMode !== 'segment' && (findMode !== 'text' || cellModel);
   $('f-model-row').hidden = findMode !== 'text';
   $('f-text-row').hidden = $('f-expand-row').hidden = $('f-excl-row').hidden = findMode !== 'text' || cellModel;
-  $('f-lic-row').hidden = findMode !== 'text' || model !== 'sam3';
+  $('f-lic-row').hidden = findMode !== 'text' || (model !== 'sam3' && model !== 'dino-sam3');
+  $('f-s3name-row').hidden = findMode !== 'text' || model !== 'dino-sam3';
   $('f-lic-msg').textContent = s3.accepted ? `SAM License accepted${s3.downloaded ? '' : ' · downloads ~3.3 GB from Hugging Face on the first run'}.`
     : 'SAM 3 needs its licence accepted first.';
   $('f-lic').textContent = s3.accepted ? 'Licence' : 'Read the licence…';
@@ -1627,13 +1634,19 @@ async function renderDraw() {
     } else if (findMode === 'text') {
       const words = $('f-prompt').value.split(/[.,;\n]+/).map((w) => w.trim()).filter(Boolean);
       const g = tx.grounding || {};
-      const dl = model === 'sam3' ? (s3.downloaded ? '' : ' Downloads SAM 3 once (~3.3 GB from Hugging Face).') : (g.downloaded ? '' : ` Downloads Grounding DINO once (~${g.size_mb || 250} MB).`);
-      const longs = [...words, ...$('f-exclude').value.split(/[.,;\n]+/).map((w) => w.trim()).filter(Boolean)].filter((w) => w.split(/\s+/).length > 3);
-      const short = longs.length && model === 'sam3' ? ` ⚠ SAM 3 knows short names (1–3 words, e.g. “neuron”, “nucleus”): “${longs[0]}” will likely find nothing; describe it in Grounding DINO instead, or shorten it.` : '';
-      if (model === 'sam3' && !s3.accepted) { msg = 'Accept the SAM License to use SAM 3, or pick Grounding DINO + SAM 2.1.'; ok = false; }
+      const both = model === 'dino-sam3', s3need = model === 'sam3' || both;
+      const name = { grounding: 'Grounding DINO + SAM 2.1', sam3: 'SAM 3', 'dino-sam3': 'Grounding DINO → SAM 3' }[model] || model;
+      const dl = [s3need && !s3.downloaded ? 'SAM 3 once (~3.3 GB from Hugging Face)' : '', model !== 'sam3' && !g.downloaded ? `Grounding DINO once (~${g.size_mb || 250} MB)` : ''].filter(Boolean);
+      const dlText = dl.length ? ` Downloads ${dl.join(' and ')}.` : '';
+      const s3name = $('f-s3name').value.trim() || conceptOf(words[0] || '');
+      $('f-s3name').placeholder = words[0] ? `auto: ${conceptOf(words[0])}` : 'auto';
+      const longs = [...(both ? [s3name] : words), ...$('f-exclude').value.split(/[.,;\n]+/).map((w) => w.trim()).filter(Boolean)].filter((w) => w.split(/\s+/).length > 3);
+      const short = longs.length && s3need ? ` ⚠ SAM 3 knows short names (1–3 words, e.g. “neuron”, “nucleus”): “${longs[0]}” will likely find nothing; ${both ? 'shorten it' : 'describe it with Grounding DINO → SAM 3 instead, or shorten it'}.` : '';
+      if (s3need && !s3.accepted) { msg = 'Accept the SAM License to use SAM 3, or pick Grounding DINO + SAM 2.1.'; ok = false; }
       else if (!words.length) { msg = 'Type what to find, e.g. “nucleus”, or “gland. vessel” (one class per phrase).'; ok = false; }
-      else if ($('f-expand').checked && words.length === 1) msg = `${model === 'sam3' ? 'SAM 3' : 'Grounding DINO + SAM 2.1'} finds ${words[0]} ${sizeText()} across; the best matches then become examples and SAM outlines everything like them.${short}${exNote}${dl} The whole slide can take long without a GPU.`;
-      else msg = `${model === 'sam3' ? 'SAM 3' : 'Grounding DINO + SAM 2.1'} finds every ${words.join(', ')} ${sizeText()} across${$('f-exclude').value.trim() ? `, not ${$('f-exclude').value.trim()}` : ''}.${short}${exNote}${dl} ${model === 'sam3' ? 'SAM 3 handles dense small objects well.' : 'Grounding DINO finds larger structures (glands, vessels, fat, folds) far better than dense nuclei: for those, use Segment everything with examples, or SAM 3.'} The whole slide can take long without a GPU.`;
+      else if (both) msg = `Grounding DINO reads “${words.join('”, “')}” and boxes its best matches in each tile; SAM 3 takes them as examples of “${s3name}” and finds every one like them, ${sizeText()} across${$('f-exclude').value.trim() ? `, not ${$('f-exclude').value.trim()}` : ''}.${$('f-expand').checked && words.length === 1 ? ' Then segment everything finds more like the best of those.' : ''}${short}${exNote}${dlText} The whole slide can take long without a GPU.`;
+      else if ($('f-expand').checked && words.length === 1) msg = `${name} finds ${words[0]} ${sizeText()} across; the best matches then become examples and SAM outlines everything like them.${short}${exNote}${dlText} The whole slide can take long without a GPU.`;
+      else msg = `${name} finds every ${words.join(', ')} ${sizeText()} across${$('f-exclude').value.trim() ? `, not ${$('f-exclude').value.trim()}` : ''}.${short}${exNote}${dlText} ${model === 'sam3' ? 'SAM 3 handles dense small objects well.' : 'Grounding DINO finds larger structures (glands, vessels, fat, folds) far better than dense nuclei: for those, use Segment everything with examples, SAM 3, or Grounding DINO → SAM 3.'} The whole slide can take long without a GPU.`;
     } else {
       const k = classes.filter((c) => c.n > 0);
       msg = k.length >= 2 ? `Train on ${k.map((c) => `${c.name} (${c.n})`).join(', ')} in ${drawLayer} → map those areas.`
@@ -1666,7 +1679,7 @@ $('f-run').onclick = async () => {
     examples: { layer: drawLayer, classes: cls ? [cls] : null, picks: mine.map(({ layer, index, neg }) => ({ layer, index, neg })), name: cls || null, color: $('a-color').value },
     candidates: $('f-cand').value || null, object_um: +$('f-size').value, object_um_max: +$('f-size-max').value || null,
     exclude: $('f-exclude').value, training: drawLayer, detail: $('f-detail').value,
-    prompt: $('f-prompt').value, model: $('f-model').value, expand: $('f-expand').checked,
+    prompt: $('f-prompt').value, model: $('f-model').value, expand: $('f-expand').checked, sam3_name: $('f-s3name').value.trim(),
   };
   if (findMode === 'text') findCaps = null;   // the model may download: show it as downloaded afterwards
   if (!(await layerExists(drawLayer))) body.examples.layer = null;

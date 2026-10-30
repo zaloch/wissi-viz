@@ -270,3 +270,31 @@ def test_real_sam3_finds_the_cat(monkeypatch):
         assert det.score_cut == S3.SCORE_FLOOR
         low = det.detect(data.astronaut(), ['person', 'flag', 'rocket', 'face'], min_score=0.1)[1]
         assert (low < 0.5).any() and (low >= 0.1).all(), low
+
+
+@pytest.mark.skipif(not os.environ.get('WISSI_TEST_SAM3'), reason='WISSI_TEST_SAM3=1 (downloads SAM 3)')
+def test_real_sam3_examples_and_dino_to_sam3(monkeypatch):
+    """SAM 3 takes example boxes ("like this one"), and Grounding DINO's boxes for a description lead it to the cat."""
+    from skimage import data
+
+    from wissi_viz import findall
+
+    monkeypatch.setenv('WISSI_SAM3_ACCEPT_LICENSE', '1')
+    det = S3.detector()
+    img = data.chelsea()
+    b, s, _, m = det.detect(img, ['cat'], min_score=0.5)
+    cat = m[int(np.argmax(s))]
+
+    def iou(a):
+        return float((a & cat).sum() / max(1, (a | cat).sum()))
+
+    plain = det.detect(img, ['animal'], min_score=0.3)
+    shown = det.detect(img, ['animal'], min_score=0.3, exemplars={0: [b[int(np.argmax(s))]]})
+    best = max((iou(x) for x in shown[3]), default=0.0)
+    print(
+        'animal: text only', plain[1].round(2).tolist(), '· with the cat as example', shown[1].round(2).tolist(), best
+    )
+    assert best > 0.6 and shown[1].max() >= (plain[1].max() if len(plain[1]) else 0) - 0.05
+    combo = findall.DinoSam3(G.detector(), det)
+    out = combo.detect(img, ['a furry animal lying on a couch'], min_score=0.3)
+    assert len(out[1]) and max(iou(x) for x in out[3]) > 0.6, out[1]

@@ -314,9 +314,15 @@ class Sam3:
             x = x.astype(np.uint8)
         return self.enc.run(None, {self.enc_in.name: np.ascontiguousarray(x)})
 
-    def decode(self, img: list[np.ndarray], txt: list[np.ndarray], size: tuple[int, int]) -> dict:
+    def decode(self, img: list[np.ndarray], txt: list[np.ndarray], size: tuple[int, int], boxes=()) -> dict:
+        """One decoder pass: the text, plus up to ``capacity`` example boxes (xyxy px of the picture of ``size``)."""
         h, w = size
         n = self.capacity
+        coords = np.zeros((n, 1, 4), np.float32)
+        pad = np.ones((1, n), np.bool_)  # True: a padding slot (no box)
+        for i, (x0, y0, x1, y1) in enumerate(list(boxes)[:n]):  # SAM 3 reads boxes as cx, cy, w, h in 0–1
+            coords[i, 0] = [(x0 + x1) / 2 / w, (y0 + y1) / 2 / h, max(1.0, x1 - x0) / w, max(1.0, y1 - y0) / h]
+            pad[0, i] = False
         feed = {
             'original_height': np.array(h, np.int64),
             'original_width': np.array(w, np.int64),
@@ -325,25 +331,31 @@ class Sam3:
             'language_mask': txt[0],
             'language_features': txt[1],
             'language_embeds': txt[2],
-            'box_coords': np.zeros((n, 1, 4), np.float32),
-            'box_labels': np.ones((n, 1), np.int64),
-            'box_masks': np.ones((1, n), np.bool_),  # every geometry slot is padding: text only
+            'box_coords': coords,
+            'box_labels': np.ones((n, 1), np.int64),  # 1: "like this"
+            'box_masks': pad,
         }
         out = self.dec.run(None, {k: v for k, v in feed.items() if k in self.dec_in})
         return dict(zip(self.dec_out, out))
 
-    def detect(self, rgb: np.ndarray, names: list[str], min_score: float = 0.15):
-        """Boxes (xyxy px), scores, phrase indices and masks of every instance of each of ``names`` in ``rgb``."""
+    def detect(self, rgb: np.ndarray, names: list[str], min_score: float = 0.15, exemplars=None):
+        """Boxes (xyxy px), scores, phrase indices and masks of every instance of each of ``names`` in ``rgb``.
+
+        ``exemplars``: {phrase index: [boxes xyxy px]}: examples of that phrase in the picture ("like this one"); the
+        decoder takes ``capacity`` of them per pass, so more mean more passes (the picture is encoded once)."""
         h, w = rgb.shape[:2]
         B, S, L, M = [], [], [], []
         with self._lock:
             img = self.image(rgb)
             for k, n in enumerate(names):
-                b, s, m = postprocess(self.decode(img, self.text(n), (h, w)), (h, w), min_score)
-                B.append(b)
-                S.append(s)
-                L.append(np.full(len(s), k, np.int64))
-                M.append(m)
+                ex = list((exemplars or {}).get(k, ()))
+                groups = [ex[i : i + self.capacity] for i in range(0, len(ex), self.capacity)] or [()]
+                for g in groups:
+                    b, s, m = postprocess(self.decode(img, self.text(n), (h, w), g), (h, w), min_score)
+                    B.append(b)
+                    S.append(s)
+                    L.append(np.full(len(s), k, np.int64))
+                    M.append(m)
         if not B:
             return (
                 np.zeros((0, 4), np.float32),

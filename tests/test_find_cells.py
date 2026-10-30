@@ -260,3 +260,34 @@ def test_sam3_fixed_score_cut_is_lowered(tmp_path):
                            [helper.make_tensor_value_info('pred_logits', TensorProto.FLOAT, [4])])  # fmt: skip
     onnx.save(helper.make_model(g2, opset_imports=[helper.make_opsetid('', 17)], ir_version=9), str(raw))
     assert sam3.lower_score_cut(raw) is None
+
+
+def test_dino_to_sam3_passes_the_best_boxes_as_examples():
+    from wissi_viz import findall
+
+    assert findall.concept('nucleus') == 'nucleus' and findall.concept('blood vessel') == 'blood vessel'
+    assert findall.concept('DAB stained and Unstained Neurons') == 'Neurons'
+    assert findall.concept('cells with visible and not visible nucleus') == 'nucleus'
+
+    class Dino:
+        def detect(self, rgb, names, min_score=0.1):
+            b = np.array([[0, 0, 10, 10], [1, 1, 11, 11], [50, 50, 60, 60], [80, 80, 90, 90], [5, 5, 9, 9]], float)
+            return b, np.array([0.9, 0.8, 0.7, 0.6, 0.5]), np.array([0, 0, 0, 0, 1])
+
+    class Sam3:
+        tile = 1008
+
+        def detect(self, rgb, names, min_score=0.1, exemplars=None):
+            self.seen = (names, exemplars)
+            return np.zeros((0, 4)), np.zeros(0), np.zeros(0, int), np.zeros((0, 4, 4), bool)
+
+    s3 = Sam3()
+    d = findall.DinoSam3(Dino(), s3, examples=3)
+    d.detect(np.zeros((4, 4, 3), np.uint8), ['DAB stained and unstained neurons', 'glia'])
+    names, ex = s3.seen
+    assert names == ['neurons', 'glia'] and d.tile == 1008 and d.masks
+    assert [list(x) for x in ex[0]] == [[0, 0, 10, 10], [50, 50, 60, 60], [80, 80, 90, 90]]  # overlapping 2nd skipped
+    assert [list(x) for x in ex[1]] == [[5, 5, 9, 9]]
+    d.concepts = {'DAB stained and unstained neurons': 'neuron'}
+    d.detect(np.zeros((4, 4, 3), np.uint8), ['DAB stained and unstained neurons'])
+    assert s3.seen[0] == ['neuron']

@@ -778,11 +778,74 @@ def _text_sim(score: np.ndarray) -> np.ndarray:
     return 0.12 + 0.76 * (np.asarray(score, float) - TEXT_FLOOR) / 0.5
 
 
+_STOP = {'and', 'or', 'with', 'without', 'the', 'a', 'an', 'of', 'in', 'on', 'not', 'stained', 'unstained', 'positive',
+         'negative', 'visible', 'small', 'large', 'big'}  # fmt: skip
+
+
+def concept(phrase: str) -> str:
+    """A short name for SAM 3 (trained on 1–3 word concepts) from a descriptive phrase: the phrase itself if short,
+    else its last word that is not a filler or a qualifier ("DAB stained and unstained neurons" → "neurons")."""
+    words = [w.strip('.,;:()"\'') for w in phrase.split()]
+    words = [w for w in words if w]
+    if len(words) <= 3:
+        return ' '.join(words)
+    for w in reversed(words):
+        if w.lower() not in _STOP and w.isalpha():
+            return w
+    return words[-1]
+
+
+class DinoSam3:
+    """Grounding DINO reads the (descriptive) prompt and boxes its most confident matches in each tile; those boxes
+    are SAM 3's examples ("like this one"), with a short name for the concept, and SAM 3 finds and outlines every
+    instance like them. Where Grounding DINO boxes nothing, SAM 3 looks by the name alone."""
+
+    name = 'dino-sam3'
+    label = 'Grounding DINO → SAM 3'
+    masks = True
+
+    def __init__(self, dino, s3, examples: int = 3, min_example: float = 0.25) -> None:
+        self.dino, self.sam3 = dino, s3
+        self.tile = int(getattr(s3, 'tile', 1008))
+        self.examples, self.min_example = examples, min_example
+        self.concepts: dict[str, str] = {}  # phrase → the name SAM 3 gets (default: :func:`concept`)
+
+    def detect(self, rgb: np.ndarray, names: list[str], min_score: float = 0.15):
+        b, s, lab = self.dino.detect(rgb, names, min_score=self.min_example)[:3]
+        ex: dict[int, list] = {}
+        for k in range(len(names)):
+            mine = np.nonzero(lab == k)[0]
+            mine = mine[np.argsort(-s[mine], kind='stable')]
+            picked: list[int] = []
+            for i in mine:  # the best boxes that do not overlap ones already picked
+                if all(_iou(b[i], b[j]) < 0.3 for j in picked):
+                    picked.append(int(i))
+                if len(picked) == self.examples:
+                    break
+            if picked:
+                ex[k] = [b[i] for i in picked]
+        short = [self.concepts.get(n) or concept(n) for n in names]
+        return self.sam3.detect(rgb, short, min_score=min_score, exemplars=ex)
+
+
+def _iou(a, b) -> float:
+    x0, y0, x1, y1 = max(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), min(a[3], b[3])
+    inter = max(0.0, x1 - x0) * max(0.0, y1 - y0)
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / union if union > 0 else 0.0
+
+
+TEXT_MODELS = {'grounding': 'Grounding DINO + SAM 2.1', 'sam3': 'SAM 3', 'dino-sam3': 'Grounding DINO → SAM 3'}
+
+
 def text_detector(model: str = 'grounding', progress=None):
-    """The model that finds things by name: ``grounding`` (Grounding DINO + SAM 2.1, Apache-2.0) or ``sam3``
-    (SAM 3, opt-in under Meta's SAM License)."""
+    """The model that finds things by name: ``grounding`` (Grounding DINO + SAM 2.1, Apache-2.0), ``sam3`` (SAM 3,
+    opt-in under Meta's SAM License) or ``dino-sam3`` (Grounding DINO's best matches as SAM 3's examples)."""
     if model == 'sam3':
         return sam3.detector(progress)
+    if model == 'dino-sam3':
+        s3 = sam3.detector(progress)  # first: it says if the licence is not accepted, before any download
+        return DinoSam3(grounding.detector(progress), s3)
     return grounding.detector(progress)
 
 
@@ -927,6 +990,7 @@ def find_by_text(
     expand: bool = False,
     object_um_max: float | None = None,
     exclude: str = '',
+    sam3_name: str = '',
 ) -> dict:
     """Outline everything in the scope that matches the text ``prompt`` (one class per phrase: "nucleus. gland").
 
@@ -960,6 +1024,8 @@ def find_by_text(
     if detector is None:
         upd(0.0, 'loading the model…')
         detector = text_detector(model, lambda f, m: upd(0.0, m))
+    if isinstance(detector, DinoSam3) and sam3_name.strip():  # the short name SAM 3 gets for the (first) phrase
+        detector.concepts = {names[0]: sam3_name.strip()}
     T = int(getattr(detector, 'tile', 800))
     f = max(0.5, (d_lo if ranged else d0) / 48.0)  # level-0 px per model px (≥ 0.5: at most 2× enlarged)
     if ranged:  # the largest still well inside a tile
@@ -1473,5 +1539,5 @@ def run(registry, sid: str, body: dict, job: Job | None = None) -> dict:
                             examples=ex, scope=body.get('scope'), strictness=float(body.get('strictness', 0.5)),
                             object_um=float(body.get('object_um') or 10), name=body.get('name'), job=job,
                             expand=bool(body.get('expand')), object_um_max=body.get('object_um_max'),
-                            exclude=body.get('exclude') or '')  # fmt: skip
+                            exclude=body.get('exclude') or '', sam3_name=body.get('sam3_name') or '')  # fmt: skip
     raise ValueError(f'unknown mode {mode!r} (objects | segment | areas | text | cells)')

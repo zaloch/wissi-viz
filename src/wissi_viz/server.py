@@ -337,9 +337,11 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
         )
 
     @r.get('/slides/{sid}/annotations/feature/{idx}')
-    def ann_feature(sid: str, idx: int, layer_name: str = Query(alias='layer'), pct: bool = False):
+    def ann_feature(
+        sid: str, idx: int, layer_name: str = Query(alias='layer'), pct: bool = False, geometry: bool = False
+    ):
         """One object: class, properties, centroid, size; ``pct=1`` adds each measurement's percentile within
-        its layer (the app's object card)."""
+        its layer (the app's object card); ``geometry=1`` its GeoJSON geometry (to put a deleted shape back)."""
         L = layer(sid, layer_name)
         if not (0 <= idx < len(L)):
             raise HTTPException(404)
@@ -352,6 +354,10 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
             'centroid': [float(c.cx[idx]), float(c.cy[idx])],
             'size': float(c.size[idx]),
         }
+        if geometry:
+            out['geometry'] = L.geometry(idx)
+            cn = L.class_of(idx)
+            out['properties'] = {**out['properties'], 'classification': {'name': cn, 'color': L.classes.get(cn)}}
         if pct:
             out['percentiles'] = summary.percentiles(L, props)
             out['order'] = summary.preferred_columns(L, 8)
@@ -538,7 +544,22 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
                 elif not L.origin:
                     L.origin = origin
                 registry.changed(sid, layer_name)
-            return JSONResponse({'ok': True}, headers=hdrs('no-cache'))
+            n = len(layers[layer_name])
+            return JSONResponse({'ok': True, 'indices': list(range(n - len(feats), n))}, headers=hdrs('no-cache'))
+
+        @r.post('/slides/{sid}/annotations/remove')
+        async def ann_remove_feature(sid: str, layer_name: str = Query(alias='layer'), index: int = Query(...)):
+            """Remove one feature of a layer (undo or delete in the viewer); the layer goes when it is left empty."""
+            L = layer(sid, layer_name)
+            try:
+                L.remove(index)
+            except (ValueError, IndexError) as ex:
+                raise HTTPException(400, str(ex)) from ex
+            if len(L):
+                registry.changed(sid, layer_name)
+            else:
+                registry.remove_annotations(sid, layer_name)
+            return JSONResponse({'ok': True, 'left': len(L)}, headers=hdrs('no-cache'))
 
         @r.post('/slides/{sid}/annotations/style')
         async def ann_style(sid: str, request: Request):

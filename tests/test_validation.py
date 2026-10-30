@@ -141,3 +141,25 @@ def test_drg_mosaic_and_a_run(tmp_path, monkeypatch):
     finally:
         s.shutdown()
     assert 'drg-mosaic' in validation.session_file(d).read_text(encoding='utf-8')
+
+
+def test_evidence_per_tool():
+    """validation.json → one measured sentence per tool: each case's best method of that tool, failures named."""
+    from wissi_viz import validation
+
+    res = {'cases': {
+        'drg': {'methods': {'grounding': {'found': 3, 'f1': 0.0, 'recall': 0.0, 'seconds': 700},
+                            'sam3': {'found': 0, 'f1': 0.0, 'recall': 0.0, 'seconds': 800},
+                            'segment': {'found': 1070, 'f1': 0.593, 'recall': 0.616, 'seconds': 3791}}},
+        'nuinsseg': {'methods': {'cellpose': {'found': 416, 'f1': 0.614, 'recall': 0.474, 'seconds': 120},
+                                 'classic': {'found': 637, 'f1': 0.151, 'recall': 0.139, 'seconds': 1}}},
+        'camelyon': {'methods': {'areas': {'dice': 0.459, 'seconds': 1.5},
+                                 'sam3': {'error': 'ValueError: nothing', 'seconds': 9}}},
+    }}  # fmt: skip
+    ev = validation.evidence(res)
+    assert set(ev) == {'find_by_text', 'segment_everything', 'find_cells', 'find_areas'}
+    assert 'neuron cell bodies' in ev['segment_everything'] and 'F1 0.59' in ev['segment_everything']
+    assert '~63 min on a CPU' in ev['segment_everything']
+    assert 'F1 0.61' in ev['find_cells'] and 'Cellpose-SAM' in ev['find_cells'] and 'classic' not in ev['find_cells']
+    assert 'Dice 0.46' in ev['find_areas'] and 'SAM 3 found nothing' in ev['find_by_text']
+    assert validation.evidence({}) == {}

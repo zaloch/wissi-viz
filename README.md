@@ -113,7 +113,10 @@ wissi-viz desktop --connect my_api.json    # images from a tile API (or: Connect
 | **Analyze** (`A`) | density & hotspots, nearest neighbours, proximity, margin bands, infiltration, composition, Ripley's L, neighbour enrichment, cellular neighbourhoods, contact graph, Moran's I: each run adds layers to the slide and a card with numbers, a chart, the table and a CSV |
 | **Measure** (`M`) | count, share and averages per class, cells per mm² of tissue, region areas; shape, intensity, texture and cell statistics for every region |
 
-Tools are on keys `1`–`8` (pan, point, rectangle, ellipse, polygon, freehand, ruler, SAM); the view bar on the slide
+Tools are on keys `1`–`9` (pan, point, rectangle, ellipse, polygon, freehand, measure length, measure area, SAM); each
+shows how to use it when hovered and on the slide while in use. Shapes show their size while drawn and keep it (area,
+perimeter, width, height or length, in µm when the slide is calibrated); measurements stay on screen until `Esc`, `↵`
+keeps one in a Measurements layer; `⌘Z` / `Ctrl+Z` undoes a drawing, `Delete` removes the selected one. The view bar on the slide
 zooms to 2.5–40×, shows the overview map (`O`), toggles the scale bar and saves a snapshot; the footer shows frames
 per second. Click an object for its card, right-click for a radial menu, `?` for every shortcut.
 

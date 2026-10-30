@@ -4,6 +4,8 @@ catalogue and runner, and the Layers / Analyze / Measure / Draw page with its ov
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -223,7 +225,7 @@ def test_inspector_in_the_browser(session):
             pg.wait_for_function(f'() => ({g})().panes.every(p => p.slide && p.slide.info)')
             pg.wait_for_selector('#l-list .lcard[data-layer="cells"]')
             # tools: number keys light the slot
-            pg.keyboard.press('8')
+            pg.keyboard.press('9')
             assert pg.evaluate(f'() => ({g})().tool') == 'sam' and pg.is_visible('#tools .slot.on[data-tool=sam]')
             pg.keyboard.press('1')
             # layer eye, solo, class toggle, colour by
@@ -278,3 +280,162 @@ def test_inspector_in_the_browser(session):
     finally:
         srv.stop()
     assert not errors, errors
+
+
+# ------------------------------------------------------------------------------------------------ drawing and measuring
+def test_drawing_measuring_undo_delete_in_the_browser(session):
+    """Shapes keep their size (µm), Shift makes squares, the measure tools show a length / area that Enter keeps,
+    Backspace removes a point, ⌘Z / Ctrl+Z undoes, Delete removes the selected drawing and undo puts it back; the
+    tools have tooltips and an on-slide hint."""
+    pytest.importorskip('playwright')
+    from playwright.sync_api import sync_playwright
+
+    from wissi_viz import desktop as D
+
+    s, sid = session
+    srv = D._Server(s.app())
+    url = srv.start()
+    errors = []
+    try:
+        with sync_playwright() as pw:
+            try:
+                b = pw.chromium.launch(args=['--enable-unsafe-swiftshader'])
+            except Exception as e:
+                pytest.skip(f'no Chromium: {e}')
+            pg = b.new_page(viewport={'width': 1440, 'height': 900})
+            pg.on('pageerror', lambda e: errors.append(str(e)))
+            pg.on('console', lambda m: errors.append(m.text) if m.type == 'error' else None)
+            pg.on('response', lambda r: errors.append(f'{r.status} {r.url}') if r.status >= 400 else None)
+            pg.goto(url + '/app')
+            g = '() => document.getElementById("grid")'
+            pg.wait_for_function(f'() => ({g})().panes.every(p => p.slide && p.slide.info)')
+            pg.evaluate(f'() => ({g})().fit(0, false)')
+            pg.wait_for_timeout(300)
+
+            def at(x, y):
+                return pg.evaluate(
+                    f"""([x, y]) => {{ const e = ({g})(), p = e.panes[0], r = e.getBoundingClientRect(), v = p.view;
+                    return [r.left + p.rect.x + p.rect.w / 2 + (x - v.cx) * v.scale,
+                            r.top + p.rect.y + p.rect.h / 2 + (y - v.cy) * v.scale]; }}""",
+                    [x, y],
+                )
+
+            def drag(a, z, shift=False):
+                pg.mouse.move(*at(*a))
+                if shift:
+                    pg.keyboard.down('Shift')
+                pg.mouse.down()
+                pg.mouse.move(*at(*z), steps=6)
+                pg.mouse.up()
+                if shift:
+                    pg.keyboard.up('Shift')
+
+            def layer(name):
+                return s.registry.layers(sid).get(name)
+
+            shots = os.environ.get('WISSI_SWEEP_SHOTS')  # a folder: save what the steps look like
+
+            def shot(name):
+                if shots:
+                    pg.screenshot(path=str(Path(shots) / f'draw-{name}.png'))
+
+            def wait_n(name, n):
+                pg.wait_for_function(
+                    f'([n, k]) => {{ const L = ({g})().panes[0].slide.layers.get(n); return k ? L && L.meta.count === k && L.state === "ready" : !L; }}',
+                    arg=[name, n],
+                )
+
+            # tooltip and hint
+            pg.hover('#tools .slot[data-tool=measure]')
+            pg.wait_for_selector('#ttip', state='visible')
+            assert 'Measure length' in pg.inner_text('#ttip') and 'Enter keeps it' in pg.inner_text('#ttip')
+            shot('tooltip')
+            # a rectangle keeps its size in µm; Shift makes a square
+            pg.keyboard.press('3')
+            assert pg.is_visible('#toolhint') and 'Rectangle' in pg.inner_text('#toolhint')
+            pg.mouse.move(*at(1000, 1000))
+            pg.mouse.down()
+            pg.mouse.move(*at(1400, 1200), steps=6)
+            shot('rect-live')
+            pg.mouse.up()
+            wait_n('Annotations', 1)
+            props = layer('Annotations').properties(0)
+            assert props['area_um2'] == pytest.approx(400 * 200 * MPP**2, rel=0.03), props
+            assert props['width_um'] == pytest.approx(400 * MPP, rel=0.03)
+            drag((1800, 1000), (2100, 1150), shift=True)
+            wait_n('Annotations', 2)
+            sq = layer('Annotations').properties(1)
+            assert sq['width_um'] == pytest.approx(sq['height_um'], rel=0.01), sq
+            # undo: the square, then the rectangle (the empty layer goes)
+            pg.keyboard.press('ControlOrMeta+z')  # ⌘Z on macOS
+            wait_n('Annotations', 1)
+            pg.keyboard.press('ControlOrMeta+z')  # ⌘Z on macOS
+            wait_n('Annotations', 0)
+            # measure a length by dragging; Enter keeps it with its length
+            pg.keyboard.press('7')
+            drag((500, 500), (500, 1500))
+            m = pg.evaluate(f'() => ({g})()._measured')
+            assert m['kind'] == 'measure' and len(m['pts']) == 2
+            shot('length')
+            pg.keyboard.press('Enter')
+            wait_n('Measurements', 1)
+            assert layer('Measurements').properties(0)['length_um'] == pytest.approx(1000 * MPP, rel=0.03)
+            # measure an area by clicking points; Backspace removes the last one; Esc clears
+            pg.keyboard.press('8')
+            for q in ((2000, 2000), (2400, 2000), (2400, 2300), (2600, 2600)):
+                pg.mouse.click(*at(*q))
+            pg.keyboard.press('Backspace')
+            assert len(pg.evaluate(f'() => ({g})()._drawing.pts')) == 3
+            pg.keyboard.press('Enter')
+            m = pg.evaluate(f'() => ({g})()._measured')
+            assert m['kind'] == 'area' and len(m['pts']) == 3
+            shot('area')
+            pg.keyboard.press('Escape')
+            assert pg.evaluate(f'() => ({g})()._measured') is None
+            # a polygon, selected with a click and deleted; undo puts it back
+            pg.keyboard.press('5')
+            for q in ((1000, 2000), (1500, 2000), (1500, 2400), (1000, 2400)):
+                pg.mouse.click(*at(*q))
+            pg.keyboard.press('Enter')
+            wait_n('Annotations', 1)
+            pg.keyboard.press('1')
+            assert not pg.is_visible('#toolhint')
+            pg.mouse.click(*at(1250, 2200))
+            pg.wait_for_function(f'() => ({g})().panes[0].selection?.layer === "Annotations"')
+            pg.wait_for_selector('#card', state='visible')  # its sizes: the object card
+            assert 'area_um2' in pg.inner_text('#card')
+            pg.keyboard.press('Escape')
+            pg.keyboard.press('Delete')
+            wait_n('Annotations', 0)
+            pg.keyboard.press('ControlOrMeta+z')  # ⌘Z on macOS
+            wait_n('Annotations', 1)
+            assert layer('Annotations').properties(0)['area_um2'] == pytest.approx(500 * 400 * MPP**2, rel=0.03)
+            b.close()
+    finally:
+        srv.stop()
+    # undo can empty (and so remove) a layer while the inspector still asks for its summary: a 404 nobody sees
+    gone = [e for e in errors if '/annotations/summary?layer=Annotations' in e]
+    errors = [
+        e for e in errors if e not in gone and not (gone and e.startswith('Failed to load resource') and '404' in e)
+    ]
+    assert not errors, errors
+
+
+def test_remove_and_geometry_endpoints(session):
+    s, sid = session
+    c = _client(s)
+    base = f'/wissi-viz/slides/{sid}/annotations'
+    feats = [{'type': 'Feature', 'geometry': {'type': 'Polygon', 'coordinates': [[[0, 0], [k, 0], [k, k], [0, 0]]]},
+              'properties': {'classification': {'name': f'c{k}'}}} for k in (10, 20, 30)]  # fmt: skip
+    r = c.post(base + '/add', params={'layer': 'D'}, json={'type': 'FeatureCollection', 'features': feats}).json()
+    assert r['indices'] == [0, 1, 2]
+    f = c.get(base + '/feature/1', params={'layer': 'D', 'geometry': 1}).json()
+    assert f['geometry']['coordinates'][0][1] == [20, 0] and f['properties']['classification']['name'] == 'c20'
+    assert c.post(base + '/remove', params={'layer': 'D', 'index': 1}).json()['left'] == 2
+    assert s.registry.layer(sid, 'D').class_of(1) == 'c30'
+    assert c.post(base + '/remove', params={'layer': 'D', 'index': 9}).status_code == 400
+    # an object table is not edited one object at a time
+    assert c.post(base + '/remove', params={'layer': 'cells', 'index': 0}).status_code == 400
+    c.post(base + '/remove', params={'layer': 'D', 'index': 0})
+    c.post(base + '/remove', params={'layer': 'D', 'index': 0})
+    assert 'D' not in s.registry.layers(sid)

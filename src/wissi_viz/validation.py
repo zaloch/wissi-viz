@@ -738,6 +738,55 @@ def fetch_published(d: Path, log=print) -> None:
             raise SystemExit(f'{name}: checksum mismatch (try again)')
 
 
+# ------------------------------------------------------------------------------------------------ measured evidence
+#: which analysis tool each validated method belongs to (the tools an agent or a person chooses between)
+TOOL_OF_METHOD = {'grounding': 'find_by_text', 'sam3': 'find_by_text', 'dino-sam3': 'find_by_text',
+                  'cellpose': 'find_cells', 'classic': 'find_cells', 'segment': 'segment_everything',
+                  'areas': 'find_areas'}  # fmt: skip
+#: what each case tests, in a few words
+CASE_TEXT = {'nuinsseg': 'H&E nuclei (brightfield, dense, ~8 µm)',
+             'drg': 'neuron cell bodies (fluorescence, one channel, 20-60 µm)',
+             'camelyon': 'tumour areas in an H&E lymph node',
+             'xenium': 'nuclei (fluorescence, DAPI)'}  # fmt: skip
+METHOD_NAMES = {'grounding': 'Grounding DINO + SAM 2.1', 'sam3': 'SAM 3', 'dino-sam3': 'Grounding DINO → SAM 3',
+                'cellpose': 'Cellpose-SAM', 'classic': 'classic threshold', 'segment': 'segment everything',
+                'areas': 'areas from brushed examples'}  # fmt: skip
+
+
+def evidence(results: dict) -> dict[str, str]:
+    """What the validation measured, one sentence per tool: for each case, the tool's best method and its score
+    (F1 at IoU ≥ 0.5 for objects, Dice for areas), or that it found nothing. ``results``: validation.json."""
+    per: dict[str, list[str]] = {}
+    for case, r in (results.get('cases') or {}).items():
+        best: dict[str, tuple[float, str]] = {}
+        for m, v in (r.get('methods') or {}).items():
+            tool = TOOL_OF_METHOD.get(m)
+            if tool is None:
+                continue
+            if 'error' in v:
+                score, txt = 0.0, f'{METHOD_NAMES.get(m, m)} found nothing'
+            elif 'dice' in v:
+                score, txt = float(v['dice']), f'Dice {v["dice"]:.2f} ({METHOD_NAMES.get(m, m)})'
+            else:
+                slow = f', ~{v["seconds"] / 60:.0f} min on a CPU' if v.get('seconds', 0) > 900 else ''
+                score = float(v.get('f1', 0))
+                txt = (f'F1 {v["f1"]:.2f}, recall {v.get("recall", 0):.2f} ({METHOD_NAMES.get(m, m)}{slow})'
+                       if v.get('found') else f'{METHOD_NAMES.get(m, m)} found nothing')  # fmt: skip
+            if tool not in best or score > best[tool][0]:
+                best[tool] = (score, txt)
+        for tool, (_, txt) in best.items():
+            per.setdefault(tool, []).append(f'{CASE_TEXT.get(case, case)}: {txt}')
+    return {t: 'Measured: ' + '; '.join(v) + '.' for t, v in per.items()}
+
+
+def published_results(timeout: float = 60) -> dict | None:
+    """validation.json of the latest validate run (None when it cannot be fetched)."""
+    try:
+        return json.loads(urllib.request.urlopen(f'{RELEASE}/validation.json', timeout=timeout).read().decode())
+    except Exception:  # noqa: BLE001  (offline, or not published yet)
+        return None
+
+
 def publish_list(d: Path) -> list[Path]:
     """What the workflow publishes (and SHA256SUMS for them)."""
     files = sorted((d / 'layers').glob('*.parquet')) + [p for p in (d / 'nuinsseg-mosaic.ome.tif',

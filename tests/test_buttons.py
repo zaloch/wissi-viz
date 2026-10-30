@@ -314,7 +314,7 @@ def _brightfield(w, data, s):
     pg.wait_for_selector('#l-list .lcard[data-layer="cells"]')
     vis = f'(n) => {{ const p = ({G})().panes[0]; const L = p.slide.layers.get(n); return !!L && p.layerVisible(L); }}'
     view = f'() => ({G})().panes[0].view'
-    # ---- toolbar tools 1–8
+    # ---- toolbar tools 1–9
     w.cover(
         '#tools .slot',
         '#vtools [data-v=mag]',
@@ -324,7 +324,7 @@ def _brightfield(w, data, s):
         '.lcard .nm',
         '.ghead .tw',
     )
-    for t in ('point', 'rect', 'ellipse', 'polygon', 'freehand', 'line', 'sam', 'pan'):
+    for t in ('point', 'rect', 'ellipse', 'polygon', 'freehand', 'measure', 'area', 'sam', 'pan'):
         w.check(f'#tools .slot[data-tool={t}]', f'() => ({G})().tool === "{t}"')
     # ---- view tools on the slide
     sc0 = pg.evaluate(f'() => ({view})().scale')

@@ -13,6 +13,37 @@ export const MAX_PANES = 32;   // one WebGL2 context, scissored per pane
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const now = () => performance.now();
 
+// ---------------------------------------------------------------- measuring (image px → µm when the slide is calibrated)
+const pathLen = (pts, closed = false) => {
+  let L = 0;
+  for (let i = 1; i < pts.length; i++) L += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+  if (closed && pts.length > 2) L += Math.hypot(pts[0][0] - pts[pts.length - 1][0], pts[0][1] - pts[pts.length - 1][1]);
+  return L;
+};
+const ringArea = (pts) => {
+  let a = 0;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) a += (pts[j][0] + pts[i][0]) * (pts[j][1] - pts[i][1]);
+  return Math.abs(a) / 2;
+};
+/** Sizes of a drawn shape: {length} for lines, {area, perimeter, width, height} for shapes — µm (µm²) with ``mpp``. */
+export function shapeSizes(kind, pts, mpp = null) {
+  const k = mpp ? (mpp[0] + mpp[1]) / 2 : 1, u = mpp ? 'um' : 'px';
+  if (kind === 'line' || kind === 'measure') return { [`length_${u}`]: pathLen(pts) * k };
+  const xs = pts.map((q) => q[0]), ys = pts.map((q) => q[1]);
+  return { [`area_${u}2`]: ringArea(pts) * k * k, [`perimeter_${u}`]: pathLen(pts, true) * k,
+    [`width_${u}`]: (Math.max(...xs) - Math.min(...xs)) * k, [`height_${u}`]: (Math.max(...ys) - Math.min(...ys)) * k };
+}
+const fmtLen = (v, cal) => !cal ? `${v.toFixed(0)} px` : v >= 1000 ? `${(v / 1000).toFixed(v >= 10000 ? 1 : 2)} mm` : v >= 10 ? `${v.toFixed(0)} µm` : `${v.toFixed(1)} µm`;
+const fmtArea = (v, cal) => !cal ? `${Math.round(v).toLocaleString('en-US')} px²` : v >= 1e5 ? `${(v / 1e6).toFixed(v >= 1e7 ? 2 : 3)} mm²` : `${Math.round(v).toLocaleString('en-US')} µm²`;
+/** The readout shown next to a shape being drawn or measured. */
+function sizeText(kind, pts, mpp) {
+  const z = shapeSizes(kind, pts, mpp), cal = !!mpp, u = cal ? 'um' : 'px';
+  if (z[`length_${u}`] != null) return fmtLen(z[`length_${u}`], cal);
+  const parts = [`${fmtLen(z[`width_${u}`], cal).replace(/ (µm|px|mm)$/, '')} × ${fmtLen(z[`height_${u}`], cal)}`, fmtArea(z[`area_${u}2`], cal)];
+  if (kind === 'polygon' || kind === 'freehand' || kind === 'area') parts.push(`perimeter ${fmtLen(z[`perimeter_${u}`], cal)}`);
+  return parts.join(' · ');
+}
+
 // Level of detail.
 //  motionBias  while a pane moves, fetch the level whose texels are up to this many device px (2 = one 2× level
 //              coarser); the full-resolution level is fetched in the background and swapped in when it is ready
@@ -1068,6 +1099,8 @@ export class WsiGrid extends HTMLElement {
     this.budget = Math.min(1024, ((navigator.deviceMemory || 8) * 96)) * 2 ** 20; // GPU texture budget (bytes)
     this._raf = 0;
     this._drawing = null;
+    this._measured = null;   // a measurement shown on the slide: {p, kind, pts}
+    this._undo = [];   // drawings / deletes made here, newest last: {op, slide, layer, index | feature}
   }
 
   // ---------------------------------------------------------------- lifecycle
@@ -1323,12 +1356,14 @@ export class WsiGrid extends HTMLElement {
   setDrawLayer(name) { this.drawLayer = name || null; }
   setDrawClass(name, color = null) { this.drawClass = name || null; this.drawColor = color || null; }
 
-  /** 'pan' | 'point' | 'rect' | 'ellipse' | 'polygon' | 'line' | 'freehand' | 'sam'
-   *  sam: click = include, shift/alt-click = exclude, drag = box; Enter or double-click accepts, Esc discards. */
+  /** 'pan' | 'point' | 'rect' | 'ellipse' | 'polygon' | 'line' | 'freehand' | 'measure' | 'area' | 'sam'
+   *  sam: click = include, shift/alt-click = exclude, drag = box; Enter or double-click accepts, Esc discards.
+   *  measure / area: a measurement shown on the slide, not saved (Enter keeps it in the "Measurements" layer). */
   setTool(tool) {
     if (this.tool === 'sam' && tool !== 'sam') this.panes.forEach((p) => { p.sam = null; });
     this.tool = tool || 'pan';
     this._drawing = null;
+    this._measured = null;
     this.panes.forEach((p) => p.el?.classList.toggle('tool', this.tool !== 'pan'));
     this._drawOverlay();
   }
@@ -1708,8 +1743,15 @@ export class WsiGrid extends HTMLElement {
       if (!p?.view) return;
       const step = 120 / p.view.scale;
       const k = e.key;
-      if (k === 'Escape') { this._drawing = null; if (this.tool === 'sam') this.samClear(); this._drawOverlay(); if (this.tool !== 'pan') return; }
+      if (k === 'Escape') { this._drawing = null; this._measured = null; if (this.tool === 'sam') this.samClear(); this._drawOverlay(); if (this.tool !== 'pan') return; }
       if (k === 'Enter') { this._drawFinish(); return; }
+      if (k === 'Backspace' && this._drawing && !this._drawing.dragging && this._drawing.kind !== 'sam') {
+        e.preventDefault();   // the last point of a polygon / path being drawn
+        const d = this._drawing;
+        if (d.pts.length > 1) d.pts.pop(); else this._drawing = null;
+        this._drawOverlay();
+        return;
+      }
       if (k === 'ArrowLeft') this._panBy(p, -step, 0);
       else if (k === 'ArrowRight') this._panBy(p, step, 0);
       else if (k === 'ArrowUp') this._panBy(p, 0, -step);
@@ -1864,22 +1906,56 @@ export class WsiGrid extends HTMLElement {
       return;
     }
     if (t === 'point') { this._drawEmit(p, { type: 'Point', coordinates: pt }); return; }
+    if (t === 'measure' || t === 'area') {
+      // drag: a straight line (measure) / a freehand outline (area); clicks: a path / polygon, finished with a
+      // double-click or Enter
+      if (!this._drawing || this._drawing.p !== p) {
+        this._measured = null;
+        this._drawing = { p, pts: [pt], cur: pt, kind: t, dragging: true, sx: hit.sx, sy: hit.sy };
+      } else this._drawing.pts.push(e.shiftKey ? this._drawing.cur : pt);
+      this._drawOverlay();
+      return;
+    }
     if (t === 'polygon' || t === 'line') {
       if (!this._drawing || this._drawing.p !== p) this._drawing = { p, pts: [pt], cur: pt, kind: t };
-      else this._drawing.pts.push(pt);
+      else this._drawing.pts.push(e.shiftKey ? this._drawing.cur : pt);   // with Shift: the snapped point shown
     } else this._drawing = { p, pts: [pt], cur: pt, kind: t, dragging: true };
     this._drawOverlay();
   }
-  _drawMove(hit) {
+  _drawMove(hit, e) {
     const d = this._drawing;
-    d.cur = this._toImage(hit.p, hit.sx, hit.sy);
-    if (d.kind === 'freehand' && d.dragging) d.pts.push(d.cur);
+    let cur = this._toImage(hit.p, hit.sx, hit.sy);
+    const a = d.pts[d.pts.length - 1];
+    if (e?.shiftKey && a && d.kind !== 'freehand' && !(d.kind === 'area' && d.dragging) && d.kind !== 'sam') {
+      const dx = cur[0] - a[0], dy = cur[1] - a[1];
+      if (d.kind === 'rect' || d.kind === 'ellipse') {   // a square / circle
+        const m = Math.max(Math.abs(dx), Math.abs(dy));
+        cur = [a[0] + Math.sign(dx || 1) * m, a[1] + Math.sign(dy || 1) * m];
+      } else {   // lines and polygon edges: steps of 45°
+        const r = Math.hypot(dx, dy), t = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
+        cur = [a[0] + r * Math.cos(t), a[1] + r * Math.sin(t)];
+      }
+    }
+    d.cur = cur;
+    if ((d.kind === 'freehand' || d.kind === 'area') && d.dragging) d.pts.push(d.cur);
     this._drawOverlay();
   }
-  _drawUp() {
+  _drawUp(e) {
     const d = this._drawing;
     if (!d || !d.dragging) return;
     const [a, b] = [d.pts[0], d.cur];
+    if (d.kind === 'measure' || d.kind === 'area') {
+      const hit = e && this._paneAt(e.clientX, e.clientY);
+      const moved = hit ? Math.hypot(hit.sx - d.sx, hit.sy - d.sy) : 0;
+      d.dragging = false;
+      if (moved > 5) {   // a drag: done
+        this._drawing = null;
+        const pts = d.kind === 'measure' ? [a, b] : d.pts;
+        if (d.kind === 'measure' || pts.length > 2) this._measured = { p: d.p, kind: d.kind, pts };
+      } else if (d.kind === 'area') d.pts = [a];   // a click: the first point of a polygon
+      this._drawOverlay();
+      return;
+    }
     if (d.kind === 'sam') {
       this._drawing = null;
       const px = Math.hypot(b[0] - a[0], b[1] - a[1]) * d.p.view.scale;
@@ -1908,24 +1984,92 @@ export class WsiGrid extends HTMLElement {
   _drawFinish() {
     if (this.tool === 'sam') { this.samAccept(); return; }
     const d = this._drawing;
-    if (!d || (d.kind !== 'polygon' && d.kind !== 'line')) return;
+    if (!d && this._measured) { this.keepMeasurement(); return; }
+    if (!d || !['polygon', 'line', 'measure', 'area'].includes(d.kind)) return;
     const pts = d.pts.filter((q, i) => i === 0 || q[0] !== d.pts[i - 1][0] || q[1] !== d.pts[i - 1][1]);
     this._drawing = null;
+    if (d.kind === 'measure' || d.kind === 'area') {
+      if (pts.length >= (d.kind === 'area' ? 3 : 2)) this._measured = { p: d.p, kind: d.kind, pts };
+      this._drawOverlay();
+      return;
+    }
     if (d.kind === 'polygon' && pts.length >= 3) this._drawEmit(d.p, { type: 'Polygon', coordinates: [[...pts, pts[0]]] });
     if (d.kind === 'line' && pts.length >= 2) this._drawEmit(d.p, { type: 'LineString', coordinates: pts });
     this._drawOverlay();
   }
-  async _drawEmit(p, geometry, extra = null) {
-    this._emit('draw', { pane: p.index, slide: p.slide?.info?.id, url: p.slide?.url, tool: this.tool, geometry, class: this.drawClass || this.drawLayer, properties: extra });
-    if (this.drawLayer && p.slide) {
+  async _drawEmit(p, geometry, extra = null, opts = {}) {
+    const layer = opts.layer || this.drawLayer, cls = opts.cls || this.drawClass || layer;
+    // drawn shapes carry their sizes (area, perimeter, width, height or length; µm when calibrated): the object card
+    // shows them and every export keeps them
+    const ring = geometry.type === 'Polygon' ? geometry.coordinates[0].slice(0, -1) : geometry.type === 'LineString' ? geometry.coordinates : null;
+    const sizes = ring ? Object.fromEntries(Object.entries(shapeSizes(geometry.type === 'LineString' ? 'line' : 'polygon', ring, p.slide?.info?.mpp))
+      .map(([k, v]) => [k, Math.round(v * 100) / 100])) : {};
+    const properties = { classification: { name: cls, ...(this.drawColor && !opts.layer ? { color: this.drawColor } : {}) }, ...sizes, ...(extra || {}) };
+    this._emit('draw', { pane: p.index, slide: p.slide?.info?.id, url: p.slide?.url, tool: this.tool, geometry, class: cls, layer, properties });
+    if (layer && p.slide) {
       try {
-        await fetch(`${p.slide.url}/annotations/add?layer=${encodeURIComponent(this.drawLayer)}`, {
+        const r = await fetch(`${p.slide.url}/annotations/add?layer=${encodeURIComponent(layer)}`, {
           method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ type: 'Feature', geometry, properties: { classification: { name: this.drawClass || this.drawLayer, ...(this.drawColor ? { color: this.drawColor } : {}) }, ...(extra || {}) } }),
+          body: JSON.stringify({ type: 'Feature', geometry, properties }),
         });
+        const j = r.ok ? await r.json() : {};
+        for (const i of j.indices || []) this._undo.push({ op: 'add', slide: p.slide, layer, index: i });
+        if (this._undo.length > 100) this._undo.splice(0, this._undo.length - 100);
         await p.slide.refreshAnnotations();
       } catch (_) { /* surfaced through the draw event */ }
     }
+  }
+
+  /** Keep the measurement shown on the slide: a feature of the "Measurements" layer with its sizes. */
+  keepMeasurement(layer = 'Measurements') {
+    const m = this._measured;
+    if (!m) return;
+    this._measured = null;
+    const geometry = m.kind === 'measure' ? { type: 'LineString', coordinates: m.pts } : { type: 'Polygon', coordinates: [[...m.pts, m.pts[0]]] };
+    this._drawEmit(m.p, geometry, { source: 'drawn', measurement: m.kind === 'measure' ? 'length' : 'area' }, { layer, cls: m.kind === 'measure' ? 'Length' : 'Area' });
+    this._emit('measurekept', { layer, kind: m.kind });
+    this._drawOverlay();
+  }
+
+  async _removeFeature(slide, layer, index) {
+    const r = await fetch(`${slide.url}/annotations/remove?layer=${encodeURIComponent(layer)}&index=${index}`, { method: 'POST', credentials: 'same-origin' });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
+    // later indices move down by one
+    for (const u of this._undo) if (u.slide === slide && u.layer === layer && u.op === 'add' && u.index > index) u.index--;
+    const j = await r.json();
+    await slide.refreshAnnotations();
+    return j;
+  }
+
+  /** Undo the last drawing (or delete) made in this viewer. Returns what was undone, or null. */
+  async undo() {
+    const u = this._undo.pop();
+    if (!u) return null;
+    if (u.op === 'add') await this._removeFeature(u.slide, u.layer, u.index);
+    else {   // a deleted shape: put it back (at the end of the layer)
+      const r = await fetch(`${u.slide.url}/annotations/add?layer=${encodeURIComponent(u.layer)}`, {
+        method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(u.feature) });
+      const j = r.ok ? await r.json() : {};
+      await u.slide.refreshAnnotations();
+      if (j.indices?.length) this.panes.forEach((p) => { if (p.slide === u.slide) p.selection = null; });
+    }
+    this.requestRender();
+    return u;
+  }
+
+  /** Delete the selected object (click it first) from its layer; undo puts it back. */
+  async deleteSelected(pane = this.active) {
+    const p = this._pane(pane);
+    const sel = p?.selection;
+    if (!sel || !p.slide) return null;
+    const r = await fetch(`${p.slide.url}/annotations/feature/${sel.f}?layer=${encodeURIComponent(sel.layer)}&geometry=1`, { credentials: 'same-origin' });
+    const feat = r.ok ? await r.json() : null;
+    await this._removeFeature(p.slide, sel.layer, sel.f);
+    p.selection = null;
+    if (feat?.geometry) this._undo.push({ op: 'delete', slide: p.slide, layer: sel.layer, feature: { type: 'Feature', geometry: feat.geometry, properties: feat.properties || {} } });
+    this._emit('objectdeleted', { pane: p.index, layer: sel.layer, index: sel.f });
+    this.requestRender();
+    return sel;
   }
 
   // ---------------------------------------------------------------- SAM (segment from clicks / boxes)
@@ -2650,12 +2794,32 @@ export class WsiGrid extends HTMLElement {
     }
   }
 
+  _label(c, text, x, y, dpr, sub = '', box = null) {
+    c.save();
+    c.font = `600 ${12 * dpr}px system-ui, -apple-system, Segoe UI, sans-serif`;
+    const w1 = c.measureText(text).width;
+    c.font = `${11 * dpr}px system-ui, -apple-system, Segoe UI, sans-serif`;
+    const w2 = sub ? c.measureText(sub).width : 0;
+    const pad = 6 * dpr, w = Math.max(w1, w2) + 2 * pad, hh = (sub ? 34 : 20) * dpr;
+    // keep the label inside the pane, clear of the view bar on its right
+    const [bx0, by0, bx1, by1] = box || [0, 0, this.$ov.width, this.$ov.height];
+    x = Math.max(bx0 + 4 * dpr, Math.min(x, bx1 - w - 64 * dpr));
+    y = Math.max(by0 + 4 * dpr, Math.min(y, by1 - hh - 40 * dpr));
+    c.fillStyle = 'rgba(10,12,16,.82)';
+    c.beginPath(); c.roundRect ? c.roundRect(x, y, w, hh, 6 * dpr) : c.rect(x, y, w, hh); c.fill();
+    c.fillStyle = '#fff'; c.textBaseline = 'middle';
+    c.font = `600 ${12 * dpr}px system-ui, -apple-system, Segoe UI, sans-serif`;
+    c.fillText(text, x + pad, y + 10 * dpr);
+    if (sub) { c.fillStyle = 'rgba(255,255,255,.62)'; c.font = `${11 * dpr}px system-ui, -apple-system, Segoe UI, sans-serif`; c.fillText(sub, x + pad, y + 25 * dpr); }
+    c.restore();
+  }
+
   _drawOverlay() {
     const c = this.ctx2d;
     if (!c) return;
     // nothing selected and nothing being drawn: leave the (already clear) 2-D layer alone — clearing it every frame
     // made the compositor re-upload a full-screen canvas per frame
-    const need = !!this._drawing || this.panes.some((p) => (p.selection && p.selection.cx != null) || p.sam);
+    const need = !!this._drawing || !!this._measured || this.panes.some((p) => (p.selection && p.selection.cx != null) || p.sam);
     if (!need && !this._ovDirty) return;
     this._ovDirty = need;
     const dpr = this.dpr || 1;
@@ -2701,27 +2865,57 @@ export class WsiGrid extends HTMLElement {
           c.beginPath(); c.arc(x, y, 5 * dpr, 0, Math.PI * 2); c.fill(); c.stroke();
         });
       }
+      const paneBox = [p.rect.x * dpr, p.rect.y * dpr, (p.rect.x + p.rect.w) * dpr, (p.rect.y + p.rect.h) * dpr];
       const d = this._drawing;
       if (d && d.kind === 'sam' && d.p === p) {
         const [x0, y0] = toS(...d.pts[0]), [x1, y1] = toS(...d.cur);
         c.lineWidth = 1.5 * dpr; c.setLineDash([6 * dpr, 4 * dpr]); c.strokeStyle = '#ffeb3b';
         c.strokeRect(x0, y0, x1 - x0, y1 - y0); c.setLineDash([]);
       } else if (d && d.p === p) {
+        const meas = d.kind === 'measure' || d.kind === 'area';
         c.lineWidth = 2 * dpr;
-        c.strokeStyle = '#ffeb3b';
-        c.fillStyle = 'rgba(255,235,59,.12)';
+        c.strokeStyle = meas ? '#7fe3ff' : '#ffeb3b';
+        c.fillStyle = meas ? 'rgba(127,227,255,.12)' : 'rgba(255,235,59,.12)';
         c.beginPath();
         const a = d.pts[0], b = d.cur;
+        const free = d.kind === 'freehand' || (d.kind === 'area' && d.dragging);
         if (d.kind === 'rect') { const [x0, y0] = toS(...a), [x1, y1] = toS(...b); c.rect(x0, y0, x1 - x0, y1 - y0); }
         else if (d.kind === 'ellipse') {
           const [x0, y0] = toS(...a), [x1, y1] = toS(...b);
           c.ellipse((x0 + x1) / 2, (y0 + y1) / 2, Math.abs(x1 - x0) / 2, Math.abs(y1 - y0) / 2, 0, 0, Math.PI * 2);
         } else {
-          d.pts.forEach((q, i) => { const [x, y] = toS(...q); i ? c.lineTo(x, y) : c.moveTo(x, y); });
-          if (d.kind !== 'freehand') { const [x, y] = toS(...b); c.lineTo(x, y); }
+          const pts = d.kind === 'measure' && d.dragging ? [a] : d.pts;
+          pts.forEach((q, i) => { const [x, y] = toS(...q); i ? c.lineTo(x, y) : c.moveTo(x, y); });
+          if (!free) { const [x, y] = toS(...b); c.lineTo(x, y); }
         }
-        if (d.kind !== 'line') c.fill();
+        if (d.kind !== 'line' && d.kind !== 'measure') c.fill();
         c.stroke();
+        // the live size, next to the cursor
+        let shape;
+        if (d.kind === 'rect') shape = [a, [b[0], a[1]], b, [a[0], b[1]]];
+        else if (d.kind === 'ellipse') {
+          const cx = (a[0] + b[0]) / 2, cy = (a[1] + b[1]) / 2, rx = Math.abs(b[0] - a[0]) / 2, ry = Math.abs(b[1] - a[1]) / 2;
+          shape = Array.from({ length: 64 }, (_, i) => [cx + rx * Math.cos(i * Math.PI / 32), cy + ry * Math.sin(i * Math.PI / 32)]);
+        } else if (d.kind === 'measure' && d.dragging) shape = [a, b];
+        else shape = free ? d.pts : [...d.pts, b];
+        const kind = d.kind === 'rect' || d.kind === 'ellipse' ? 'rect' : d.kind;
+        if (shape.length >= 2 && (kind === 'measure' || kind === 'line' || shape.length >= 3)) {
+          const [x, y] = toS(...b);
+          this._label(c, sizeText(kind, shape, p.slide?.info?.mpp), x + 14 * dpr, y + 14 * dpr, dpr, '', paneBox);
+        }
+      }
+      const m = this._measured;
+      if (m && m.p === p) {
+        c.lineWidth = 2 * dpr; c.strokeStyle = '#7fe3ff'; c.fillStyle = 'rgba(127,227,255,.14)';
+        c.beginPath();
+        m.pts.forEach((q, i) => { const [x, y] = toS(...q); i ? c.lineTo(x, y) : c.moveTo(x, y); });
+        if (m.kind === 'area') { c.closePath(); c.fill(); }
+        c.stroke();
+        c.fillStyle = '#7fe3ff';
+        for (const q of m.kind === 'measure' ? m.pts : []) { const [x, y] = toS(...q); c.beginPath(); c.arc(x, y, 3 * dpr, 0, Math.PI * 2); c.fill(); }
+        const at = m.pts[m.pts.length - 1];
+        const [x, y] = toS(...at);
+        this._label(c, sizeText(m.kind, m.pts, p.slide?.info?.mpp), x + 12 * dpr, y + 12 * dpr, dpr, 'Enter keeps it · Esc clears', paneBox);
       }
       c.restore();
     }

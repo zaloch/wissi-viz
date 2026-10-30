@@ -200,6 +200,37 @@ class AnnotationLayer:
         t = np.linspace(0, 2 * np.pi, n, endpoint=False)
         return self.add_polygon(np.stack([cx + rx * np.cos(t), cy + ry * np.sin(t)], 1), **kw)
 
+    def geometry(self, index: int) -> dict | None:
+        """One drawn / imported feature as a GeoJSON geometry (None for the columnar objects of a table)."""
+        c = self.compiled()
+        if not 0 <= index < len(self._kinds):
+            return None
+        r0, r1 = c.feat_ring_off[index], c.feat_ring_off[index + 1]
+        rings = [c.coords[c.ring_off[r] : c.ring_off[r + 1]].tolist() for r in range(r0, r1)]
+        k = self._kinds[index]
+        if k == POINT:
+            return {'type': 'Point', 'coordinates': rings[0][0]}
+        if k == POLYLINE:
+            return {'type': 'LineString', 'coordinates': rings[0]}
+        return {'type': 'Polygon', 'coordinates': [r + r[:1] for r in rings]}
+
+    def remove(self, index: int) -> None:
+        """Remove one feature (e.g. a drawing undone or deleted in the viewer); later features move down by one.
+        Layers with measurement columns (object tables) are not edited feature by feature: ValueError."""
+        with self._lock:
+            self._materialize()
+            if self._columns:
+                raise ValueError(f'{self.name} holds a measurement table: its objects are not removed one by one')
+            if not 0 <= index < len(self._kinds):
+                raise IndexError(f'{self.name} has no feature {index}')
+            start = sum(self._feat_nrings[:index])
+            del self._rings[start : start + self._feat_nrings[index]]
+            for lst in (self._kinds, self._cls, self._radius, self._feat_nrings, self._props):
+                del lst[index]
+            if self._values is not None and len(self._values) > index:
+                self._values = np.delete(self._values, index)
+            self._dirty = True
+
     def clear(self) -> None:
         with self._lock:
             v = self.version

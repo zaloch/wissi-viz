@@ -310,3 +310,16 @@ def test_sam3_old_int8_copies_are_remade_on_x86(tmp_path, monkeypatch):
     for note in (f'{sam3.QUANT_TAG} (quantized on this computer)', 'float32 (install the onnx package…)'):
         (d / '.complete').write_text(note, encoding='utf-8')
         assert sam3.folder() == d
+
+
+def test_coreml_option_is_explicit(tmp_path):
+    """Core ML: ML Program, fixed sizes, a model cache; asking for it where ONNX Runtime has none says so."""
+    import onnxruntime as ort
+
+    from wissi_viz import weights
+
+    o = weights.coreml_options(tmp_path / 'c', 'CPUAndGPU')
+    assert o['ModelFormat'] == 'MLProgram' and o['MLComputeUnits'] == 'CPUAndGPU' and (tmp_path / 'c').is_dir()
+    if 'CoreMLExecutionProvider' not in ort.get_available_providers():
+        with pytest.raises(RuntimeError, match='Core ML'):
+            weights.ort_session(tmp_path / 'x.onnx', 'coreml')

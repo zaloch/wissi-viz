@@ -161,17 +161,45 @@ def published(release: str, timeout: float = 4.0) -> bool | None:
     return v
 
 
-def ort_session(path: Path | bytes, device: str | None = None):
+def coreml_options(cache: Path | None = None, units: str = 'ALL') -> dict:
+    """ONNX Runtime's Core ML backend for a graph with fixed input sizes: ML Program format, the compiled model kept in
+    ``cache`` (the first run compiles; later ones reuse it), ``units``: ALL (GPU and Neural Engine) | CPUAndGPU |
+    CPUAndNeuralEngine | CPUOnly."""
+    opts = {'ModelFormat': 'MLProgram', 'MLComputeUnits': units, 'RequireStaticInputShapes': '1'}
+    if cache is not None:
+        Path(cache).mkdir(parents=True, exist_ok=True)
+        opts['ModelCacheDirectory'] = str(cache)
+    return opts
+
+
+def ort_session(path: Path | bytes, device: str | None = None, coreml: dict | None = None, log_level: int = 3):
     """An ONNX Runtime session on the best available device (``device``: auto | cuda | dml | cpu). Not CoreML: it
     handles the dynamic shapes of these graphs poorly, and ONNX Runtime's CPU kernels are fast on Apple silicon.
-    ``path`` may also be a serialized model (bytes)."""
+    ``path`` may also be a serialized model (bytes). ``device='coreml'`` (macOS): the Core ML backend with ``coreml``
+    options (:func:`coreml_options`), what it cannot run on the CPU."""
     import onnxruntime as ort
 
     avail = ort.get_available_providers()
+    if device == 'coreml':
+        if 'CoreMLExecutionProvider' not in avail:
+            raise RuntimeError('this ONNX Runtime has no Core ML backend (macOS only)')
+        so = ort.SessionOptions()
+        so.log_severity_level = log_level
+        model = path if isinstance(path, bytes) else str(path)
+        opts = coreml or coreml_options()
+        try:
+            return ort.InferenceSession(
+                model, so, providers=[('CoreMLExecutionProvider', opts), 'CPUExecutionProvider']
+            )
+        except Exception:  # noqa: BLE001  (an older ONNX Runtime without the model cache option)
+            opts = {k: v for k, v in opts.items() if k != 'ModelCacheDirectory'}
+            return ort.InferenceSession(
+                model, so, providers=[('CoreMLExecutionProvider', opts), 'CPUExecutionProvider']
+            )
     want = {'cuda': ['CUDAExecutionProvider'], 'dml': ['DmlExecutionProvider'], 'cpu': []}.get(device or 'auto')
     if want is None:  # auto: best available
         want = [p for p in ('CUDAExecutionProvider', 'DmlExecutionProvider') if p in avail]
     so = ort.SessionOptions()
-    so.log_severity_level = 3  # errors only (int8 graphs log harmless shape-merge warnings)
+    so.log_severity_level = log_level  # 3: errors only (int8 graphs log harmless shape-merge warnings)
     model = path if isinstance(path, bytes) else str(path)
     return ort.InferenceSession(model, so, providers=[p for p in want if p in avail] + ['CPUExecutionProvider'])

@@ -283,7 +283,18 @@ class Sam3:
                     return self.folder / n
             raise FileNotFoundError(f'no SAM 3 {part.replace("_", " ")} in {self.folder} ({" or ".join(GRAPHS[part])})')
 
-        self.enc = weights.ort_session(path('image_encoder'), device)
+        if device == 'coreml':  # the image step on Core ML (GPU / Neural Engine): the float32 graph (Core ML cannot
+            # run int8 matrix products), fixed 1008 × 1008 input; text and decoder stay on the CPU
+            enc = encoder_fp32()
+            if enc is None:
+                raise FileNotFoundError('SAM 3 on Core ML needs the float32 image step: run '
+                                        'python -c "from wissi_viz import sam3; sam3.encoder_fp32(fetch=True)" once')  # fmt: skip
+            units = os.environ.get('WISSI_SAM3_COREML_UNITS', 'ALL')  # ALL | CPUAndGPU | CPUAndNeuralEngine
+            self.enc = weights.ort_session(enc, 'coreml', weights.coreml_options(weights.cache_dir('sam3-coreml') / units,
+                                                                                 units))  # fmt: skip
+            device = 'cpu'
+        else:
+            self.enc = weights.ort_session(path('image_encoder'), device)
         self.lang = weights.ort_session(path('language_encoder'), device)
         dpath = path('decoder')
         lowered = lower_score_cut(dpath)  # an export with Sam3Processor's fixed 0.5 cut: lowered, so strictness works
@@ -384,6 +395,33 @@ def _stale(note: str) -> bool:
     return (
         note.startswith('int8') and QUANT_TAG not in note and platform.machine().lower() in ('x86_64', 'amd64', 'i686')
     )
+
+
+def encoder_fp32(fetch: bool = False, progress=None) -> Path | None:
+    """The float32 image step (for Core ML), kept on its own; with ``fetch``, taken from the public export (downloaded
+    again, ~3.3 GB, only the image step kept, ~1.7 GB)."""
+    d = weights.cache_dir('sam3-fp32-encoder')
+    g = d / 'sam3_image_encoder.onnx'
+    if (d / '.complete').exists() and g.exists():
+        return g
+    if not fetch:
+        return None
+    if not accepted():
+        raise PermissionError('SAM 3 is under the SAM License (Meta): accept it first (in the app, or '
+                              'WISSI_SAM3_ACCEPT_LICENSE=1)')  # fmt: skip
+    d.mkdir(parents=True, exist_ok=True)
+    say = progress or (lambda f, m: print(m, flush=True))
+    z = weights.download(HF_URL, d / HF_FILE, HF_SHA256, say, 'SAM 3 from Hugging Face (for the float32 image step)')
+    with zipfile.ZipFile(z) as zf:
+        for info in zf.infolist():
+            base = Path(info.filename).name
+            if base.startswith('sam3_image_encoder'):
+                with zf.open(info) as r, open(d / base, 'wb') as f:
+                    shutil.copyfileobj(r, f, 1 << 24)
+    z.unlink()
+    shutil.copy(LICENSE_FILE, d / 'LICENSE-SAM.txt')
+    (d / '.complete').write_text('float32 image encoder', encoding='utf-8')
+    return g
 
 
 def _graph_bytes(graph: Path) -> int:

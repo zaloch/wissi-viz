@@ -887,7 +887,7 @@ findall.find_by_text(registry, 'case1', prompt='blood vessel', model='sam3', obj
 |---|---|
 | `WISSI_GROUNDING_MODEL` | `int8` (default) · `fp32` |
 | `WISSI_GROUNDING_DIR` · `WISSI_SAM3_DIR` | files you already have (offline machines): `model.onnx` + `vocab.txt`; the three `sam3_*.onnx` + `bpe_simple_vocab_16e6.txt.gz` |
-| `WISSI_GROUNDING_DEVICE` · `WISSI_SAM3_DEVICE` | auto · cuda · dml · cpu |
+| `WISSI_GROUNDING_DEVICE` · `WISSI_SAM3_DEVICE` | auto · cuda · dml · cpu; SAM 3 also `coreml` (Apple silicon, opt-in: its image step on the GPU / Neural Engine through Core ML, from the float32 graph; `WISSI_SAM3_COREML_UNITS` = ALL · CPUAndGPU · CPUAndNeuralEngine; `scripts/sam3_mac_bench.py` measures whether it is faster) |
 | `WISSI_SAM3_ACCEPT_LICENSE` | `1`: accept the SAM License without the app |
 
 Endpoints: `POST …/slides/{id}/find` with `{mode: 'text', prompt, model: 'grounding' | 'sam3', object_um, scope,

@@ -79,16 +79,19 @@ CHECK = {
     }
 }
 
+SEG = {'segment_everything'}  # what the validation measured to work for DRG neurons (text detectors found ~none)
 GOALS = {
     1: ('Outline every neuron cell body and count them, leaving out the satellite glia and Schwann cells around them.',
-        {'tool': {'find_by_text', 'segment_everything'}, 'size': {'20_60um'}, 'exclude_neighbours': True,
-         'needs_missing_marker': False, 'feasible': {'all'}}),
-    2: ('Measure the size of each neuron and report how many are large (more than 40 µm across).',
-        {'tool': {'find_by_text', 'segment_everything'}, 'size': {'20_60um'}, 'needs_missing_marker': False,
+        {'tool': SEG, 'size': {'20_60um'}, 'exclude_neighbours': True, 'needs_missing_marker': False,
          'feasible': {'all'}}),
+    2: ('Measure the size of each neuron and report how many are large (more than 40 µm across).',
+        {'tool': SEG, 'size': {'20_60um'}, 'needs_missing_marker': False, 'feasible': {'all'}}),
     3: ('Count the neurons and report what fraction of them are CGRP-positive nociceptors.',
-        {'tool': {'find_by_text', 'segment_everything'}, 'size': {'20_60um'}, 'needs_missing_marker': True,
-         'feasible': {'part'}}),
+        {'tool': SEG, 'size': {'20_60um'}, 'needs_missing_marker': True, 'feasible': {'part'}}),
+    4: ('Count every nucleus in this section.',
+        {'tool': {'find_cells'}, 'size': {'under_10um', '10_20um'}, 'needs_missing_marker': False, 'feasible': {'all'}},
+        'Sample: an H&E stained tissue section (brightfield). Pixel size 0.25 µm.',
+        'Brightfield H&E: pink tissue with many dense, dark purple round and oval nuclei 5-12 µm across.'),
 }  # fmt: skip
 CONTEXT = ('Sample: a section of rat dorsal root ganglion. One fluorescence channel: Neurofilament (an antibody '
            'marking neurons). Pixel size about 1 µm.')  # fmt: skip
@@ -151,7 +154,23 @@ def main(argv=None) -> int:
     p.add_argument('--host', default=os.environ.get('OLLAMA_HOST_URL', 'http://localhost:11434'))
     p.add_argument('--looks', default='', help="a folder of the vision probe's JSON answers (its descriptions)")
     p.add_argument('--out', default='nimble-probe')
+    p.add_argument('--evidence', default='published',
+                   help="'published' (the latest validation run's scores in the tool descriptions), 'none', or a "
+                        'validation.json')  # fmt: skip
+    p.add_argument('--no-checks', action='store_true', help='only the planning decisions')
     a = p.parse_args(argv)
+    plan = json.loads(json.dumps(PLAN))
+    ev = {}
+    if a.evidence != 'none':
+        from wissi_viz import validation
+
+        res = (validation.published_results() if a.evidence == 'published'
+               else json.loads(Path(a.evidence).read_text(encoding='utf-8')))  # fmt: skip
+        ev = validation.evidence(res or {})
+        for tool, text in ev.items():
+            if tool in plan['tool']['criteria']:
+                plan['tool']['criteria'][tool] += f'. {text}'
+    mode = 'with measured evidence' if ev else 'without evidence'
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     looks = {}
@@ -164,13 +183,14 @@ def main(argv=None) -> int:
                         f'{lk.get("tissue")}; visible: {", ".join(lk.get("structures") or [])}; about '
                         f'{lk.get("approx_object_count")} cells. {lk.get("notes") or ""}')  # fmt: skip
     bad = 0
-    rec = {'model': a.model, 'plans': {}, 'checks': []}
+    rec = {'model': a.model, 'plans': {}, 'checks': [], 'evidence': ev}
     short = []  # one line per decision, for the summary notice
     src = next(iter(looks.values()), '').split(' described it')[0] or 'no vision model'
-    for k, (goal, expect) in GOALS.items():
-        look = looks.get(k) or f'(no vision model description; a fixed one) {FALLBACK_LOOK}'
-        state = f'{CONTEXT}\nWhat the image shows: {look}\nGoal: {goal}'
-        ans, sec = decide(a.host, a.model, state, PLAN)
+    for k, (goal, expect, *own) in GOALS.items():
+        ctx, fixed = own if own else (CONTEXT, FALLBACK_LOOK)
+        look = looks.get(k) or f'(a fixed description) {fixed}'
+        state = f'{ctx}\nWhat the image shows: {look}\nGoal: {goal}'
+        ans, sec = decide(a.host, a.model, state, plan)
         wrong = []
         for q, want in expect.items():
             v = value(ans.get(q))
@@ -182,7 +202,7 @@ def main(argv=None) -> int:
                      + ', '.join(f'{q}={shown(ans.get(q))}' for q in PLAN))  # fmt: skip
         notice(f'nimble plan {k}', f'{"OK" if not wrong else "WRONG: " + ", ".join(wrong)} · {sec} s · '
                + ' · '.join(f'{q}: {shown(ans.get(q))}' for q in PLAN) + f' · from: {look[:300]}')  # fmt: skip
-    for j, (result, right) in enumerate(RESULTS, 1):
+    for j, (result, right) in enumerate([] if a.no_checks else RESULTS, 1):
         ans, sec = decide(a.host, a.model, result, CHECK)
         got = value(ans.get('next'))
         bad += got != right
@@ -190,7 +210,7 @@ def main(argv=None) -> int:
         short.append(f'check {j} {"OK" if got == right else "WRONG"} (right {right}): {shown(ans.get("next"))}')
         notice(f'nimble check {j}', f'{"OK" if got == right else "WRONG"} (right: {right}) · {sec} s · '
                f'{shown(ans.get("next"))} · {result[:160]}')  # fmt: skip
-    notice(f'nimble from {src}', ' | '.join(short), annotate=True)
+    notice(f'nimble from {src}, {mode}', ' | '.join(short), annotate=True)
     (out / 'nimble.json').write_text(json.dumps(rec, indent=2, ensure_ascii=False), encoding='utf-8')
     return 0 if not bad else 1
 

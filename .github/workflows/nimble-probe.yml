@@ -35,13 +35,13 @@ jobs:
           ollama pull nimble
           echo "::notice title=nimble licence::$(ollama show nimble --license 2>/dev/null | head -3 | tr '\n' ' ')"
           ollama show nimble | head -20
-      - name: Decisions from each vision model's descriptions
+      - name: Decisions from Qwen3-VL 8B's descriptions, without and with the validation's measured scores
         run: |
+          uv venv -p 3.12 && uv pip install -e ".[analysis]"
+          d=$(grep -l '8b-instruct' "$RUNNER_TEMP"/looks/vlm-probe-*/*.json | head -1 | xargs dirname)
           rc=0
-          for d in "$RUNNER_TEMP"/looks/vlm-probe-*; do
-            m=$(jq -r .model "$d"/*.json 2>/dev/null | head -1)
-            echo "== descriptions from $m"
-            uv run -p 3.12 --no-project python scripts/nimble_probe.py --looks "$d" --out "$RUNNER_TEMP/nimble/$(basename "$d")" || rc=1
+          for ev in none published; do
+            uv run --no-sync python scripts/nimble_probe.py --looks "$d" --evidence $ev --no-checks --out "$RUNNER_TEMP/nimble/$ev" || rc=1
           done
           exit $rc
       - name: Ollama's log

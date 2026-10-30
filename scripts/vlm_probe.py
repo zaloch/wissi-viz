@@ -16,6 +16,7 @@ import io
 import json
 import os
 import sys
+import time
 import urllib.request
 from pathlib import Path
 
@@ -114,28 +115,61 @@ def png_b64(rgb: np.ndarray, side: int = 512) -> str:
     return base64.b64encode(b.getvalue()).decode()
 
 
-def chat(host: str, model: str, messages: list[dict], schema: dict, timeout: float = 900) -> tuple[dict, dict]:
+def notice(title: str, text: str) -> None:
+    print(f'{title}: {text}', flush=True)
+    if os.environ.get('GITHUB_ACTIONS'):
+        print(f'::notice title={title}::{" ".join(text.split())[:3500]}', flush=True)
+
+
+def chat(host: str, model: str, messages: list[dict], schema: dict | None, limit: int, budget: float = 600) -> tuple:
+    """One streamed chat: (the answer, parsed if a schema was given; stats). Stops at ``limit`` tokens (thinking
+    included) or after ``budget`` seconds; an unparsable answer comes back as {'_raw': its end}."""
     body = {
         'model': model,
         'messages': messages,
-        'format': schema,
-        'stream': False,
-        'options': {'temperature': 0, 'num_ctx': 8192},
+        'stream': True,
+        'options': {'temperature': 0, 'num_ctx': 8192, 'num_predict': limit},
     }
+    if schema:
+        body['format'] = schema
     req = urllib.request.Request(
         f'{host}/api/chat', data=json.dumps(body).encode(), headers={'Content-Type': 'application/json'}
     )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        out = json.load(r)
-    msg = out.get('message', {})
-    stats = {
-        'seconds': round(out.get('total_duration', 0) / 1e9, 1),
-        'prompt_tokens': out.get('prompt_eval_count'),
-        'answer_tokens': out.get('eval_count'),
+    t0, first, content, thinking, n, last, stats = time.time(), None, [], [], 0, {}, {}
+    with urllib.request.urlopen(req, timeout=budget + 60) as r:
+        for line in r:
+            if not line.strip():
+                continue
+            last = json.loads(line)
+            if 'error' in last:
+                stats['error'] = last['error']
+                break
+            m = last.get('message', {})
+            if first is None and (m.get('content') or m.get('thinking')):
+                first = time.time() - t0
+            content.append(m.get('content') or '')
+            thinking.append(m.get('thinking') or '')
+            n += 1
+            if time.time() - t0 > budget:
+                stats['stopped'] = f'over {budget:.0f} s'
+                break
+    rate = last['eval_count'] / (last['eval_duration'] / 1e9) if last.get('eval_duration') else None
+    stats |= {
+        'seconds': round(time.time() - t0, 1),
+        'first_token_s': round(first, 1) if first is not None else None,
+        'prompt_tokens': last.get('prompt_eval_count'),
+        'answer_tokens': last.get('eval_count', n),
+        'tokens_per_s': round(rate, 1) if rate else None,
+        'done_reason': last.get('done_reason'),
+        'thinking_chars': len(''.join(thinking)),
     }
-    if msg.get('thinking'):
-        stats['thinking_chars'] = len(msg['thinking'])
-    return json.loads(msg.get('content') or '{}'), stats
+    text = ''.join(content)
+    if not schema:
+        return text, stats
+    try:
+        return json.loads(text), stats
+    except ValueError:
+        return {'_raw': text[-1500:]}, stats
 
 
 def check(look: dict, plan: dict, expect: dict) -> list[str]:
@@ -160,12 +194,24 @@ def main(argv=None) -> int:
     p.add_argument('--model', default=os.environ.get('WISSI_VLM_MODEL', 'qwen3-vl:4b'))
     p.add_argument('--host', default=os.environ.get('OLLAMA_HOST_URL', 'http://localhost:11434'))
     p.add_argument('--out', default='vlm-probe')
+    p.add_argument('--limit', type=int, default=0, help='most tokens per answer (default 1024; 4096 if thinking)')
     a = p.parse_args(argv)
+    limit = a.limit or (4096 if 'thinking' in a.model else 1024)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     tools = '\n'.join(f'- {k}: {v}' for k, v in TOOLS.items())
+    sample = samples()
+
+    # speed first (plain text, then one image without the JSON format), so a slow or stuck answer can be told apart
+    _, t = chat(a.host, a.model, [{'role': 'user', 'content': 'Reply with one word: ready.'}], None, 200)
+    notice('vlm speed', f'{a.model} text: {t}')
+    img = png_b64(sample[0]['image'])
+    q = [{'role': 'user', 'content': 'In two sentences, what is this image?', 'images': [img]}]
+    text, t = chat(a.host, a.model, q, None, min(limit, 1024))
+    notice('vlm image', f'{a.model} {t} · {text[-1500:]}')
+
     failed = 0
-    for s in samples():
+    for s in sample:
         img = png_b64(s['image'])
         Image.open(io.BytesIO(base64.b64decode(img))).save(out / f'{s["name"]}.png')
         look_q = (
@@ -173,34 +219,39 @@ def main(argv=None) -> int:
             'or sample? Which structures are visible? Roughly how many cells or nuclei are visible?'
         )
         msgs = [{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': look_q, 'images': [img]}]
-        look, t1 = chat(a.host, a.model, msgs, LOOK)
-        plan_q = (
-            f'Goal: {s["goal"]}\nTools available:\n{tools}\nPlan the analysis as steps using only these tools. For '
-            'each step give the tool, what it applies to (a short name), sizes in µm where relevant, the marker for '
-            'split_by_marker, and why. Say what the result will be, and the risks (what could go wrong). If the goal '
-            'does not fit this image, set feasible to false and give no steps.'
-        )
-        msgs += [
-            {'role': 'assistant', 'content': json.dumps(look)},
-            {'role': 'user', 'content': plan_q},
-        ]
-        plan, t2 = chat(a.host, a.model, msgs, PLAN)
-        problems = check(look, plan, s['expect'])
+        plan, t2 = {}, {}
+        try:
+            look, t1 = chat(a.host, a.model, msgs, LOOK, limit)
+            if '_raw' not in look:
+                plan_q = (
+                    f'Goal: {s["goal"]}\nTools available:\n{tools}\nPlan the analysis as steps using only these '
+                    'tools. For each step give the tool, what it applies to (a short name), sizes in µm where relevant, '
+                    'the marker for split_by_marker, and why. Say what the result will be, and the risks (what could '
+                    'go wrong). If the goal does not fit this image, set feasible to false and give no steps.'
+                )
+                msgs += [{'role': 'assistant', 'content': json.dumps(look)}, {'role': 'user', 'content': plan_q}]
+                plan, t2 = chat(a.host, a.model, msgs, PLAN, limit)
+        except Exception as e:  # noqa: BLE001 - report it and go on to the next image
+            failed += 1
+            notice(f'vlm {s["name"]}', f'{a.model} ERROR {type(e).__name__}: {e}')
+            continue
+        raw = look.get('_raw') or plan.get('_raw')
+        problems = ['answer unparsable'] if raw else check(look, plan, s['expect'])
         failed += bool(problems)
         rec = {'model': a.model, 'name': s['name'], 'goal': s['goal'], 'look': look, 'plan': plan,
                'timing': {'look': t1, 'plan': t2}, 'problems': problems}  # fmt: skip
         (out / f'{s["name"]}.json').write_text(json.dumps(rec, indent=2), encoding='utf-8')
         steps = ' → '.join(f'{st.get("tool")}({st.get("what")})' for st in plan.get('steps', []))
-        line = (
-            f'{s["name"]} [{a.model}] {"OK" if not problems else "PROBLEMS: " + "; ".join(problems)} · '
-            f'look {t1["seconds"]} s, plan {t2["seconds"]} s · {look.get("modality")}, stain "{look.get("stain")}", '
-            f'tissue "{look.get("tissue")}", ~{look.get("approx_object_count")} objects · '
-            f'feasible={plan.get("feasible")} · {steps or "no steps"} · result: {plan.get("result")} · '
-            f'risks: {"; ".join(plan.get("risks", []))}'
+        notice(
+            f'vlm {s["name"]}',
+            f'{a.model} {"OK" if not problems else "PROBLEMS: " + "; ".join(problems)} · '
+            f'look {t1.get("seconds")} s ({t1.get("answer_tokens")} tok, {t1.get("done_reason")}), '
+            f'plan {t2.get("seconds")} s ({t2.get("answer_tokens")} tok, {t2.get("done_reason")}) · '
+            f'{look.get("modality")}, stain "{look.get("stain")}", tissue "{look.get("tissue")}", '
+            f'~{look.get("approx_object_count")} objects · feasible={plan.get("feasible")} · {steps or "no steps"} · '
+            f'result: {plan.get("result")} · risks: {"; ".join(plan.get("risks", []))}'
+            + (f' · raw: {raw}' if raw else ''),
         )
-        print(line, flush=True)
-        if os.environ.get('GITHUB_ACTIONS'):
-            print(f'::notice title=vlm {s["name"]}::{line[:3500]}', flush=True)
     return 0 if not failed else 1
 
 

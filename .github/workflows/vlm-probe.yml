@@ -4,7 +4,7 @@ name: vlm-probe
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, 'lab/**']
     paths: [scripts/vlm_probe.py, .github/workflows/vlm-probe.yml]
 
 permissions:
@@ -35,6 +35,12 @@ jobs:
         run: |
           uv run -p 3.12 --no-project --with numpy --with pillow --with scikit-image --with pooch \
             python scripts/vlm_probe.py --out "$RUNNER_TEMP/vlm-probe"
+      - name: Ollama's log
+        if: always()
+        run: |
+          { sudo journalctl -u ollama --no-pager 2>/dev/null || cat "$RUNNER_TEMP/ollama.log"; } > "$RUNNER_TEMP/ollama-all.log" || true
+          grep -iE 'error|panic|fail|out of memory|offload|inference compute|load_tensors|vision' "$RUNNER_TEMP/ollama-all.log" | tail -15 | cut -c1-600 | sed 's/^/::notice title=ollama::/'
+          free -g; nproc
       - uses: actions/upload-artifact@v4
         if: always()
         with:

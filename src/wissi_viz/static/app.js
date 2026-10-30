@@ -61,6 +61,8 @@ const ICONS = {
   polygon: 'p M5 8l7-4 7 5-2 9H7z',
   freehand: 'p M4 16c3-6 5 2 8-3s4-6 8-3',
   line: 'p M5 19L19 5|c 5,19,1.6,1|c 19,5,1.6,1',
+  measure: 'p M3.5 15.5l12-12 5 5-12 12z|p M7 12l2 2M10 9l1.5 1.5M13 6l2 2',
+  area: 'p M5 18l1.5-11L17 5l2 13z|c 5,18,1.5,1|c 19,18,1.5,1|c 17,5,1.5,1|c 6.5,7,1.5,1',
   sam: 'p M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2z',
   eye: 'p M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z|c 12,12,3',
   eyeOff: 'p M3 3l18 18M10.6 5.1A10 10 0 0112 5c6.4 0 10 7 10 7a17 17 0 01-3.2 4M6.6 6.6A17 17 0 002 12s3.6 7 10 7a10 10 0 005.4-1.6',
@@ -512,22 +514,59 @@ function renderEntries() {
 }
 
 // ------------------------------------------------------------------------------------------------ toolbar
-const TOOLS = [['pan', 'Pan'], ['point', 'Point'], ['rect', 'Rectangle'], ['ellipse', 'Ellipse'], ['polygon', 'Polygon'],
-  ['freehand', 'Freehand'], ['line', 'Ruler'], ['sam', 'SAM: click an object']];
+// [tool, name, how to use it]; drawings are saved to the layer and class set in Annotate, measurements are not
+const SAVED = 'Saved to the layer and class set in Annotate; ⌘Z undoes.'.replace('⌘', isMac ? '⌘' : 'Ctrl+');
+const TOOLS = [
+  ['pan', 'Pan', 'Drag to move, scroll to zoom. Click an object for its details; Delete removes a selected drawing.'],
+  ['point', 'Point', `Click to place a point. ${SAVED}`],
+  ['rect', 'Rectangle', `Drag to draw; hold Shift for a square. The size shows while you draw. ${SAVED}`],
+  ['ellipse', 'Ellipse', `Drag to draw; hold Shift for a circle. The size shows while you draw. ${SAVED}`],
+  ['polygon', 'Polygon', `Click to add points; double-click or Enter finishes, Backspace removes the last point, Shift keeps edges at 45° steps. ${SAVED}`],
+  ['freehand', 'Freehand', `Drag to draw an outline; it closes when you release. ${SAVED}`],
+  ['measure', 'Measure length', 'Drag for a straight line, or click points for a path (double-click or Enter finishes); Shift keeps 45° steps. Not saved: Enter keeps it in the Measurements layer, Esc clears it.'],
+  ['area', 'Measure area', 'Drag to outline freehand, or click points (double-click or Enter finishes): area, perimeter, width and height. Not saved: Enter keeps it in the Measurements layer, Esc clears it.'],
+  ['sam', 'SAM: click an object', 'Click an object to outline it; Shift-click excludes a part, drag draws a box. Enter accepts, Esc discards.'],
+];
 function buildTools() {
   const nav = $('tools');
-  TOOLS.forEach(([t, label], i) => {
-    const b = h('button', { class: 'slot' + (t === 'pan' ? ' on' : ''), title: `${label} (${i + 1})`, 'aria-label': label, dataset: { tool: t } },
+  TOOLS.forEach(([t, label, how], i) => {
+    const b = h('button', { class: 'slot' + (t === 'pan' ? ' on' : ''), 'aria-label': `${label} (${i + 1})`, dataset: { tool: t, tip: label, key: String(i + 1), how } },
       icon(t, 18), h('i', {}, String(i + 1)));
     b.onclick = () => setTool(t);
     nav.append(b);
   });
+  // tooltips: at once, with the name, the key and how to use the tool (the browser's own come late and say little)
+  let tipT = 0;
+  const show = (b) => {
+    const tt = $('ttip'), r = b.getBoundingClientRect(), m = $('main').getBoundingClientRect();
+    tt.replaceChildren(h('div', { class: 'row' }, h('b', {}, b.dataset.tip), h('span', { class: 'grow' }), h('span', { class: 'kc' }, b.dataset.key)),
+      h('div', { class: 'dim' }, b.dataset.how));
+    tt.style.display = 'block';
+    tt.style.left = `${Math.max(8, Math.min(m.width - 300, r.left - m.left))}px`;
+    tt.style.top = `${Math.max(8, r.bottom - m.top + 8)}px`;
+  };
+  const hide = () => { clearTimeout(tipT); $('ttip').style.display = 'none'; };
+  for (const b of nav.children) {
+    b.addEventListener('pointerenter', () => { clearTimeout(tipT); tipT = setTimeout(() => show(b), 250); });
+    b.addEventListener('pointerleave', hide);
+    b.addEventListener('pointerdown', hide);
+    b.addEventListener('focus', () => show(b));
+    b.addEventListener('blur', hide);
+  }
 }
 function setTool(t) {
   grid.setTool(t);
   for (const b of $('tools').children) b.classList.toggle('on', b.dataset.tool === t);
   $('a-sam').classList.toggle('on', t === 'sam');
   if (t === 'sam') samStatus();
+  // the tool's how-to on the slide while it is in use
+  const tool = TOOLS.find((x) => x[0] === t), hint = $('toolhint');
+  if (t === 'pan' || !tool) hint.style.display = 'none';
+  else {   // the first sentence (the tooltip has the rest); measurements also say how to keep or clear them
+    const first = tool[2].split(/(?<=\.) /)[0] + (t === 'measure' || t === 'area' ? ' Enter keeps it, Esc clears it.' : '');
+    hint.replaceChildren(h('b', {}, tool[1]), h('span', { class: 'dim' }, first));
+    hint.style.display = 'block';
+  }
 }
 
 // ------------------------------------------------------------------------------------------------ HUD: toasts, key hints
@@ -1459,9 +1498,30 @@ grid.addEventListener('sam', (e) => {
   if (tab === 'draw') samStatus();
 });
 grid.addEventListener('draw', (e) => {
-  toast({ kind: 'good', title: `Saved to ${e.detail?.layer || $('a-layer').value || 'Annotations'}`, sub: $('a-class').value || '', ms: 3000 });
+  const d = e.detail || {}, layer = d.layer || $('a-layer').value || 'Annotations';
+  const sz = Object.entries(d.properties || {}).filter(([k]) => /^(area|length)_/.test(k))
+    .map(([k, v]) => k.startsWith('area') ? (k.endsWith('um2') ? (v >= 1e5 ? `${(v / 1e6).toFixed(3)} mm²` : `${Math.round(v).toLocaleString('en-US')} µm²`) : `${Math.round(v)} px²`)
+      : (k.endsWith('um') ? (v >= 1000 ? `${(v / 1000).toFixed(2)} mm` : `${v.toFixed(1)} µm`) : `${Math.round(v)} px`));
+  toast({ kind: 'good', title: `Saved to ${layer}`, sub: [d.class || '', ...sz].filter(Boolean).join(' · '), ms: 3000,
+    action: { label: 'Undo', fn: undoDrawing } });
   setTimeout(() => { scheduleInspector(); renderDraw(); }, 400);
 });
+async function undoDrawing() {
+  try {
+    const u = await grid.undo();
+    if (!u) { toast({ title: 'Nothing to undo', ms: 2000 }); return; }
+    toast({ title: u.op === 'add' ? `Removed from ${u.layer}` : `Put back in ${u.layer}`, ms: 2500 });
+    setTimeout(() => { scheduleInspector(); renderDraw(); }, 300);
+  } catch (err) { toast({ kind: 'bad', title: 'Could not undo', sub: err.message || String(err) }); }
+}
+async function deleteSelected() {
+  hideCard();
+  try {
+    const sel = await grid.deleteSelected();
+    if (sel) toast({ title: `Deleted from ${sel.layer}`, ms: 5000, action: { label: 'Undo', fn: undoDrawing } });
+    setTimeout(() => { scheduleInspector(); renderDraw(); }, 300);
+  } catch (err) { toast({ kind: 'bad', title: 'Could not delete', sub: err.message || String(err) }); }
+}
 
 // ---- picking objects as examples
 let picking = false;
@@ -1804,6 +1864,8 @@ grid.addEventListener('objectclick', async (e) => {
   const sid = slides.find((x) => x.id === d.slide) ? d.slide : panes[d.pane];
   let f = null;
   try { f = await api(`/slides/${enc(sid)}/annotations/feature/${d.index}?layer=${enc(d.layer)}&pct=1`); } catch (_) { f = { properties: d.properties || {}, percentiles: {}, order: [] }; }
+  const sel = grid.panes[d.pane]?.selection;
+  if (!sel || sel.layer !== d.layer || sel.f !== d.index) return;   // deleted or deselected meanwhile
   showCard(d, f);
 });
 function hideCard() { $('card').style.display = 'none'; }
@@ -1894,10 +1956,12 @@ document.addEventListener('keydown', (e) => {
   const mod = isMac ? e.metaKey : e.ctrlKey;
   if (mod && e.key.toLowerCase() === 'o') { e.preventDefault(); e.shiftKey ? openFolder() : openSlides(); return; }
   if (mod && e.key.toLowerCase() === 'l') { e.preventDefault(); addLayer(); return; }
+  if (mod && e.key.toLowerCase() === 'z' && !e.shiftKey && !typing(e.target)) { e.preventDefault(); undoDrawing(); return; }
   if (e.key === 'Escape') { hideCard(); closeRadial(); closeMenu(); if (picking) setPicking(false); if ($('picker').classList.contains('on') && !typing(e.target)) closePicker(); return; }
   if (mod || e.altKey || typing(e.target) || document.querySelector('dialog[open]')) return;
   const k = e.key;
-  if (k >= '1' && k <= '8' && !e.repeat) { const [t, label] = TOOLS[+k - 1]; setTool(t); keyFlash(k, label); return; }
+  if (k >= '1' && k <= '9' && !e.repeat) { const [t, label] = TOOLS[+k - 1]; setTool(t); keyFlash(k, label); return; }
+  if ((k === 'Delete' || k === 'Backspace') && !e.defaultPrevented && grid.panes[grid.active]?.selection && !grid._drawing) { e.preventDefault(); deleteSelected(); return; }
   const tabs = { l: ['layers', 'Layers'], i: ['image', 'Image'], a: ['analyze', 'Analyze'], m: ['measure', 'Measure'], d: ['draw', 'Annotate'] };
   const lk = k.toLowerCase();
   if (tabs[lk] && !e.shiftKey) { setTab(tabs[lk][0]); keyFlash(k.toUpperCase(), tabs[lk][1]); return; }

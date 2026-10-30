@@ -102,6 +102,11 @@
   .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
   .bar > span { display: block; height: 6px; border-radius: 3px; }
   #tip { display: none; pointer-events: none; padding: 5px 9px; font-size: 12px; border-radius: 8px; }
+  #ttip { display: none; pointer-events: none; z-index: 8; width: 290px; padding: 8px 10px; font-size: 12px; line-height: 1.4; border-radius: 10px; }
+  #ttip b { font-weight: 600; } #ttip .dim { margin-top: 4px; }
+  #toolhint { display: none; pointer-events: none; left: 50%; bottom: 64px; transform: translateX(-50%); max-width: min(560px, calc(100% - 160px));
+              padding: 6px 12px; font-size: 12px; line-height: 1.4; border-radius: 10px; text-align: center; }
+  #toolhint b { font-weight: 600; margin-right: 8px; }
   #toasts { position: absolute; right: 12px; top: 12px; z-index: 6; display: flex; flex-direction: column; gap: 8px; width: 290px; pointer-events: none; }
   .toast { pointer-events: auto; display: flex; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 12px;
            background: rgba(17,20,25,.96); border: 1px solid var(--line2); box-shadow: 0 8px 24px rgba(0,0,0,.4); }
@@ -425,6 +430,8 @@
   <wissi-viz id="grid" api="__API__" controls="false" draw-layer="Annotations"></wissi-viz>
   <div id="card" class="hud" role="dialog" aria-label="Object"></div>
   <div id="tip" class="hud"></div>
+  <div id="ttip" class="hud" role="tooltip"></div>
+  <div id="toolhint" class="hud" aria-live="polite"></div>
   <div id="toasts" aria-live="polite"></div>
   <div id="radial" role="menu" aria-label="Actions at this point">
     <span class="ring"></span><span class="dot"></span>
@@ -566,7 +573,7 @@
         <input type="color" id="a-color" value="#ff4d6d" title="Class colour"></span></div>
       <datalist id="a-layers"></datalist><datalist id="a-classes"></datalist>
       <div class="row" style="flex-wrap: wrap">
-        <button id="a-sam" class="btn" title="SAM: click an object to include it, Shift-click to exclude, drag to draw a box (8)">SAM <span class="kc">8</span></button>
+        <button id="a-sam" class="btn" title="SAM: click an object to include it, Shift-click to exclude, drag to draw a box (9)">SAM <span class="kc">9</span></button>
         <button id="a-pick" class="btn" title="Pick objects of a layer as examples: click to mark as similar, Shift-click as dissimilar (P)">Pick objects <span class="kc">P</span></button>
         <button id="a-accept" class="btn primary" title="Save the SAM mask (Enter / double-click)">Accept <span class="kc">↵</span></button>
         <button id="a-discard" class="btn" title="Discard the SAM mask (Esc)">Discard <span class="kc">Esc</span></button></div>
@@ -670,7 +677,12 @@
 <dialog id="help">
   <h2>Keyboard</h2>
   <div class="keys">
-    <span>Tools: pan, point, rect, ellipse, polygon, freehand, ruler, SAM <span class="mono dim">1 – 8</span></span>
+    <span>Tools: pan, point, rectangle, ellipse, polygon, freehand, measure length, measure area, SAM <span class="mono dim">1 – 9</span></span>
+    <span>Square / circle · 45° steps while drawing <span class="mono dim">Shift</span></span>
+    <span>Remove the last point of a polygon or path <span class="mono dim">⌫</span></span>
+    <span>Keep a measurement (Measurements layer) <span class="mono dim">↵</span></span>
+    <span>Undo the last drawing or delete <span class="mono dim">⌘/Ctrl Z</span></span>
+    <span>Delete the selected drawing (click it first) <span class="mono dim">Delete</span></span>
     <span>Layers / Image / Annotate / Analyze / Measure <span class="mono dim">L I D A M</span></span>
     <span>Pick objects as examples <span class="mono dim">P · shift = not like</span></span>
     <span>Solo the hovered layer <span class="mono dim">S</span></span>

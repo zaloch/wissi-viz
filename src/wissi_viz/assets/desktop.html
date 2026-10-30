@@ -426,7 +426,7 @@
   <div id="card" class="hud" role="dialog" aria-label="Object"></div>
   <div id="tip" class="hud"></div>
   <div id="toasts" aria-live="polite"></div>
-  <div id="radial" role="menu" aria-label="Actions here">
+  <div id="radial" role="menu" aria-label="Actions at this point">
     <span class="ring"></span><span class="dot"></span>
     <button data-r="solo" style="left: 79px; top: 6px">Solo <span class="kc">S</span></button>
     <button data-r="sam" style="left: 164px; top: 58px">SAM tool <span class="kc">8</span></button>
@@ -566,8 +566,8 @@
         <input type="color" id="a-color" value="#ff4d6d" title="Class colour"></span></div>
       <datalist id="a-layers"></datalist><datalist id="a-classes"></datalist>
       <div class="row" style="flex-wrap: wrap">
-        <button id="a-sam" class="btn" title="SAM: click an object = include, shift-click = exclude, drag = box (8)">SAM <span class="kc">8</span></button>
-        <button id="a-pick" class="btn" title="Pick objects of a layer as examples: click = like this, shift-click = not like this (P)">Pick objects <span class="kc">P</span></button>
+        <button id="a-sam" class="btn" title="SAM: click an object to include it, Shift-click to exclude, drag to draw a box (8)">SAM <span class="kc">8</span></button>
+        <button id="a-pick" class="btn" title="Pick objects of a layer as examples: click to mark as similar, Shift-click as dissimilar (P)">Pick objects <span class="kc">P</span></button>
         <button id="a-accept" class="btn primary" title="Save the SAM mask (Enter / double-click)">Accept <span class="kc">↵</span></button>
         <button id="a-discard" class="btn" title="Discard the SAM mask (Esc)">Discard <span class="kc">Esc</span></button></div>
       <div class="ex-chips" id="ex-picks"></div>
@@ -578,10 +578,10 @@
     <div class="step find" id="st-find">
       <div class="sh"><span class="num">2</span><b id="f-head">Find all like them</b></div>
       <div class="modes" id="f-modes" role="group" aria-label="How to find">
-        <button class="mode" data-mode="objects" aria-pressed="true" title="Score every object of a layer (e.g. detected cells) against the examples"><b>Similar objects</b><span>in a layer of detected cells</span></button>
-        <button class="mode" data-mode="segment" aria-pressed="false" title="SAM (or the classic fill) outlines every object, keeping those like the examples"><b>Segment everything</b><span>outline every object, keep similar</span></button>
+        <button class="mode" data-mode="objects" aria-pressed="true" title="Score every object of a layer, such as detected cells, against the examples"><b>Similar objects</b><span>in a layer of detected cells</span></button>
+        <button class="mode" data-mode="segment" aria-pressed="false" title="SAM (or the classic fill) outlines every object, keeping those like the examples"><b>Segment everything</b><span>outlines every object, keeps similar ones</span></button>
         <button class="mode" data-mode="areas" aria-pressed="false" title="Train a pixel classifier on shapes of two or more classes and map those areas"><b>Areas</b><span>two or more classes, from brushed shapes</span></button>
-        <button class="mode" data-mode="text" aria-pressed="false" title="Name what to find (nucleus, gland…): a text-prompted detector finds them and SAM outlines them; or pick a cell model (Cellpose-SAM, classic, Classpose) to outline every nucleus"><b>By text</b><span>nucleus, gland… or a cell model</span></button>
+        <button class="mode" data-mode="text" aria-pressed="false" title="Name what to find (nucleus, gland…): a text-prompted detector finds them and SAM outlines them; or select a cell model (Cellpose-SAM, classic, Classpose) to outline every nucleus"><b>By text</b><span>nucleus, gland… or a cell model</span></button>
       </div>
       <div class="f2" id="f-model-row" hidden>Model <select id="f-model" aria-label="Model">
         <optgroup label="Name it (text prompt)">
@@ -603,7 +603,7 @@
       <div class="f2" id="f-excl-row" hidden>Exclude <input type="text" id="f-exclude" placeholder="objects to exclude (optional)" aria-label="What not to find (one phrase each, separated by full stops)" title="Matches mostly covered by one of these are left out" spellcheck="false"></div>
       <div class="f2" id="f-detail-row" hidden>Detail <select id="f-detail" aria-label="Detail"><option value="coarse">coarse · 8 µm/px</option><option value="medium" selected>medium · 4 µm/px</option><option value="fine">fine · 2 µm/px</option></select></div>
       <div class="f2">Where <select id="f-where" aria-label="Where"><option value="view">this view</option><option value="slide">the whole slide</option></select></div>
-      <div class="f2">Not inside <select id="f-notin" aria-label="Leave out the regions of a layer" title="Leave out the regions (polygons) of this layer, e.g. areas to ignore"><option value="">—</option></select></div>
+      <div class="f2">Not inside <select id="f-notin" aria-label="Exclude the regions of a layer" title="Exclude the regions (polygons) of this layer, such as areas to ignore"><option value="">—</option></select></div>
       <div class="f2" id="f-strict-row">Strictness <span class="row"><input type="range" id="f-strict" min="0" max="1" step="0.05" value="0.5" aria-label="Strictness"><output id="f-strict-o" class="mono" style="width: 52px; text-align: right">0.50</output></span></div>
       <div class="panel-note" id="f-hint"></div>
       <button class="run find" id="f-run">Find all</button>
@@ -654,7 +654,7 @@
     <li>Free to use, change and share, for research and commercial work.</li>
     <li>Anything you share that includes it carries a copy of this licence.</li>
     <li>Publications using results from it must acknowledge SAM 3.</li>
-    <li>Not for military or warfare uses, nuclear applications, espionage, or guns and illegal weapons; you follow trade controls.</li>
+    <li>Not for military or warfare uses, nuclear applications, espionage, or guns and illegal weapons; trade controls apply.</li>
     <li>No warranty; California law; Meta may update the terms.</li>
   </ul>
   <pre id="lic-text">Loading…</pre>

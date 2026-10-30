@@ -306,7 +306,7 @@ function renderList() {
       ['Show in panes', '', () => showSlides(items.map((x) => x.id))],
       ['Rename', '', () => { renaming = g.label; renderList(); }],
       'hr',
-      ['Delete project', '', () => { projects = projects.filter((x) => x !== g.project); saveProjects(); }, 'danger', 'The slides stay open'],
+      ['Delete project', '', () => { projects = projects.filter((x) => x !== g.project); saveProjects(); }, 'danger', 'The slides remain open'],
     ] : [
       ['Show in panes', '', () => showSlides(items.map((x) => x.id))],
       ['Make a project of these', '', () => newProject(items)],
@@ -314,7 +314,7 @@ function renderList() {
     sec.append(h('div', { class: 'ghead' }, tw, gn, h('span', { class: 'gk' }, g.kind === 'project' ? 'project' : g.kind), h('span', { class: 'chip' }, String(items.length)), more));
     const ul = h('ul', {});
     for (const sl of items) ul.append(slideItem(sl, g));
-    if (g.kind === 'project' && !items.length) ul.append(h('li', { class: 'dim', style: 'font-size: 12px; cursor: default; padding: 6px 8px' }, 'Drag slides here, or use a slide’s ⋯ menu'));
+    if (g.kind === 'project' && !items.length) ul.append(h('li', { class: 'dim', style: 'font-size: 12px; cursor: default; padding: 6px 8px' }, 'Drag slides here, or use a slide’s ⋯ menu.'));
     sec.append(ul);
     if (g.kind === 'project') {   // drop slides on a project
       sec.ondragover = (e) => { if (e.dataTransfer.types.includes('text/wissi-slide')) { e.preventDefault(); e.stopPropagation(); sec.classList.add('drop'); } };
@@ -416,9 +416,9 @@ function showPathBox(why) {
   $('pk-open').textContent = pk.mode === 'layer' ? 'Add to the slide' : 'Open selected';
   if (CAPS.browse) { $('picker').classList.add('on'); browse(pk.dir || ''); setTimeout(() => $('pk-filter').focus(), 50); }
   else $('paths').focus();
-  log(pk.mode === 'folder' ? 'Pick a folder: go into it, then “Open this folder”'
-    : pk.mode === 'layer' ? 'Pick cell tables or annotation files for the active slide'
-      : SERVER ? 'Pick slides on the server' : 'Pick slides: click to select, double-click to open (native dialogs need the desktop window)');
+  log(pk.mode === 'folder' ? 'Select a folder: open it, then choose “Open this folder”.'
+    : pk.mode === 'layer' ? 'Select cell tables or annotation files for the active slide.'
+      : SERVER ? 'Select slides on the server.' : 'Select slides: click to select, double-click to open. System file dialogs require the desktop app.');
 }
 function closePicker() {
   $('picker').classList.remove('on');
@@ -508,7 +508,7 @@ function renderEntries() {
   $('pk-open').disabled = !pk.sel.size;
   if (pk.sel.size) $('pk-open').textContent = `${pk.mode === 'layer' ? 'Add' : 'Open'} ${pk.sel.size} selected`;
   else $('pk-open').textContent = pk.mode === 'layer' ? 'Add to the slide' : 'Open selected';
-  $('pk-info').textContent = pk.mode === 'folder' ? 'Go into the folder, then open it' : pk.sel.size ? 'Shift / ⌘-click to select more' : 'Click to select · double-click to open';
+  $('pk-info').textContent = pk.mode === 'folder' ? 'Open the folder first, then its slides' : pk.sel.size ? 'Shift / ⌘-click to select more' : 'Click to select · double-click to open';
 }
 
 // ------------------------------------------------------------------------------------------------ toolbar
@@ -696,7 +696,7 @@ function channelCard(p, sid, i, c, hh) {
   vis.onchange = () => { grid.setChannel(panesOf(sid), i, { visible: vis.checked }); renderImage(); };
   const col = h('input', { type: 'color', value: toHex(c.color), 'aria-label': `${c.name} colour` });
   col.oninput = () => { grid.setChannel(panesOf(sid), i, { color: col.value }); draw(); };
-  const soloB = h('button', { class: 'solo-b', title: 'Show only this channel (again: show all)' }, 'S');
+  const soloB = h('button', { class: 'solo-b', title: 'Show only this channel (click again to show all)' }, 'S');
   soloB.onclick = () => {
     const only = p.channels.every((x, k) => x.visible === (k === i));
     p.channels.forEach((_, k) => grid.setChannel(panesOf(sid), k, { visible: only || k === i }));
@@ -799,7 +799,7 @@ const ORIGINS = {
   found: ['Found', 'found'], detected: ['Detected', 'detected'], analysis: ['Analysis', 'analysis'], imported: ['Imported', 'imported'],
 };
 const SOURCE_GROUPS = [['manual', 'Annotations (drawn & SAM)'], ['found', 'Found from examples'], ['detected', 'Detected by algorithms'],
-  ['analysis', 'Analysis results'], ['imported', 'Imported files & tables']];
+  ['analysis', 'Analysis results'], ['imported', 'Imported files and tables']];
 const originOf = (L) => (ORIGINS[L.meta.style?.origin] ? L.meta.style.origin : 'imported');
 const groupOf = (L) => ORIGINS[originOf(L)][1];
 const srcBadge = (L) => h('span', { class: `src ${originOf(L)}`, title: `Source: ${ORIGINS[originOf(L)][0]}` }, ORIGINS[originOf(L)][0]);
@@ -875,7 +875,7 @@ function layerCard(p, sid, L, q) {
   const classes = L.meta.classes || [];
   const sw = cm ? h('span', { class: 'swg', style: `background: linear-gradient(90deg, ${(cm.lut || []).filter((_, i) => i % 64 === 0).concat([cm.lut?.[255]]).filter(Boolean).join(',') || '#444,#ccc'})` })
     : h('span', { style: 'display: inline-flex; gap: 2px' }, ...classes.slice(0, 3).map((c) => h('span', { class: 'sw', style: `background: ${c.color}` })));
-  const nm = h('span', { class: 'nm', title: `${L.name} — click for style and classes`, role: 'button', tabindex: 0 }, L.name);
+  const nm = h('span', { class: 'nm', title: `${L.name}: click for style and classes`, role: 'button', tabindex: 0 }, L.name);
   const key = `${sid}|${L.name}`;
   nm.onclick = () => { expanded.has(key) ? expanded.delete(key) : expanded.add(key); renderLayers(); };
   nm.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); nm.onclick(); } };
@@ -1020,7 +1020,7 @@ function chainDialog(mode, sid, L) {
   let collect;
   if (mode === 'regions') {
     $('lo-h').textContent = `Make regions from ${L.name}`;
-    $('lo-p').textContent = 'Objects closer than the joining distance merge into one region (gaps and small holes close); regions smaller than the minimum are dropped. The result is a region layer: analyse or measure the cells inside it.';
+    $('lo-p').textContent = 'Objects closer than the joining distance are merged into one region, closing gaps and small holes; regions smaller than the minimum area are removed. The result is a region layer, inside which cells can be analysed or measured.';
     const cs = clsSel(classes);
     const join = h('input', { type: 'range', min: 0, max: 200, step: 5, value: 20, 'aria-label': 'Join objects closer than' });
     const jo = h('output', { class: 'mono' }, '20 µm');
@@ -1039,7 +1039,7 @@ function chainDialog(mode, sid, L) {
     rs.onchange = fill;
     fill();
     body.replaceChildren(field('Regions', rs), field('Only class', rc));
-    if (!regs.length) $('lo-msg').textContent = 'No region layer on this slide: find areas, make regions, or draw some first.';
+    if (!regs.length) $('lo-msg').textContent = 'This slide has no region layer. Create one first with Areas, Make regions or the drawing tools.';
     $('lo-run').textContent = 'Keep inside';
     collect = () => ['/layers/inside', { objects: L.name, regions: rs.value, classes: rc.value ? [rc.value] : null }];
   }
@@ -1093,7 +1093,7 @@ async function renderAnalyze() {
   const box = $('an-catalog');
   box.replaceChildren();
   if (catalogError) { box.append(h('div', { class: 'panel-note' }, catalogError)); return; }
-  if (!cells.length) { box.append(h('div', { class: 'panel-note' }, 'Add a cell table (or segment the slide) to run spatial analyses.')); $('an-form').hidden = true; return; }
+  if (!cells.length) { box.append(h('div', { class: 'panel-note' }, 'Spatial analyses require cells. Add a cell table, or find cells in the Annotate tab.')); $('an-form').hidden = true; return; }
   const hasRegions = regionLayers(p, objSel.value).length > 0;
   const groups = {};
   for (const a of catalog) (groups[a.group] ||= []).push(a);
@@ -1365,7 +1365,7 @@ async function renderMeasure() {
   const tiles = h('div', { class: 'tiles' }, tile('Objects', sm.n.toLocaleString('en-US')));
   if (sm.per_mm2 != null) tiles.append(tile('per mm² tissue', fmt(sm.per_mm2)), tile('Tissue mm²', fmt(sm.tissue_mm2, 3)));
   else if (sm.area_mm2 != null) tiles.append(tile('Area mm²', fmt(sm.area_mm2, 3)), tile('Classes', String(sm.classes.length)));
-  else tiles.append(tile('Classes', String(sm.classes.length)), tile('per mm²', '–', 'needs µm per pixel and scikit-image for the tissue area'));
+  else tiles.append(tile('Classes', String(sm.classes.length)), tile('per mm²', '–', 'tissue area requires the pixel size and scikit-image'));
   const stack = h('div', { class: 'stack' }, ...sm.classes.map((c) => h('span', { style: `width: ${c.pct}%; background: ${c.color}`, title: `${c.name} ${c.pct}%` })));
   const legend = h('div', { class: 'row', style: 'flex-wrap: wrap; gap: 4px 12px; font-size: 11px; color: var(--dim)' },
     ...sm.classes.slice(0, 10).map((c) => h('span', {}, h('span', { class: 'sw', style: `background: ${c.color}; width: 8px; height: 8px; margin-right: 4px` }), `${c.name} ${c.pct}%`)));
@@ -1472,7 +1472,7 @@ function setPicking(on) {
   $('a-pick').classList.toggle('on', on);
   $('a-pick').setAttribute('aria-pressed', String(on));
   document.body.classList.toggle('picking', on);
-  if (on) { setTool('pan'); log('Pick objects: click = like this, shift-click = not like this · P or Esc to stop'); }
+  if (on) { setTool('pan'); log('Pick objects: click to mark as similar, Shift-click to mark as dissimilar. Press P or Esc to stop.'); }
 }
 $('a-pick').onclick = () => setPicking(!picking);
 function addPick(d) {
@@ -1546,7 +1546,7 @@ async function setLicense(accept) {
     await api('/models/sam3/license', { accept });
     findCaps = null;
     $('sam3-lic').close();
-    toast({ title: accept ? 'SAM License accepted' : 'SAM License acceptance withdrawn', sub: accept ? 'SAM 3 downloads on its first run (about 3.3 GB, from Hugging Face, once).' : 'By text uses Grounding DINO + SAM 2.1.' });
+    toast({ title: accept ? 'SAM License accepted' : 'SAM License acceptance withdrawn', sub: accept ? 'SAM 3 is downloaded on first use (about 3.3 GB, from Hugging Face).' : 'By text uses Grounding DINO + SAM 2.1.' });
     if (!accept) $('f-model').value = 'grounding';
     renderDraw();
   } catch (e) { toast({ kind: 'bad', title: 'Could not save', sub: e.message }); }
@@ -1606,8 +1606,8 @@ async function renderDraw() {
   $('f-text-row').hidden = $('f-expand-row').hidden = $('f-excl-row').hidden = findMode !== 'text' || cellModel;
   $('f-lic-row').hidden = findMode !== 'text' || (model !== 'sam3' && model !== 'dino-sam3');
   $('f-s3name-row').hidden = findMode !== 'text' || model !== 'dino-sam3';
-  $('f-lic-msg').textContent = s3.accepted ? `SAM License accepted${s3.downloaded ? '' : ' · downloads ~3.3 GB from Hugging Face on the first run'}.`
-    : 'SAM 3 needs its licence accepted first.';
+  $('f-lic-msg').textContent = s3.accepted ? `SAM License accepted${s3.downloaded ? '' : ' · about 3.3 GB is downloaded from Hugging Face on first use'}.`
+    : 'SAM 3 requires accepting its licence.';
   $('f-lic').textContent = s3.accepted ? 'Licence' : 'Read the licence…';
   $('f-head').textContent = findMode === 'text' ? (cellModel ? 'Find every cell' : 'Find all by name') : findMode === 'areas' ? 'Map the areas' : 'Find all like them';
   $('f-detail-row').hidden = findMode !== 'areas';
@@ -2161,7 +2161,7 @@ async function start() {
     document.querySelector('#side .hint').textContent = 'Click a slide to show it in the active pane; double-click to add a pane.'
       + (CAPS.open || CAPS.connect ? ' The list is shared by everyone using this server.' : '');
     log(`${slides.length} slide${slides.length === 1 ? '' : 's'} on this server · press ? for shortcuts`);
-  } else if (!(await nativeReady)) log('Browser window: paste paths to open files · press ? for shortcuts');
+  } else if (!(await nativeReady)) log('Browser window: paste paths to open files. Press ? for keyboard shortcuts.');
   else log('Press ? for keyboard shortcuts');
 }
 start();

@@ -73,9 +73,10 @@ def test_text_size_range_and_excluded_phrases(session):  # noqa: F811
     d, _ = _diameters_um(reg, sid, nobig['layer'])
     assert len(d) and (d < 7.5).all() and 'like "big" left out' in nobig['note']
     assert abs(nobig['count'] - small['count']) <= 2
-    with pytest.raises(ValueError, match='left out'):
-        findall.find_by_text(reg, sid, prompt='big', exclude='', scope=scope, object_um=1, object_um_max=2,
-                             detector=_Phrases())  # fmt: skip
+    none = findall.find_by_text(reg, sid, prompt='big', exclude='', scope=scope, object_um=1, object_um_max=2,
+                                detector=_Phrases())  # fmt: skip
+    assert none['count'] == 0 and 'were left out' in none['why'] and len(reg.layer(sid, none['companions']['matches']))
+    assert len(reg.layer(sid, none['layer'])) == 0
 
 
 def test_regions_left_out(session, monkeypatch):  # noqa: F811

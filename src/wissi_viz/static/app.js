@@ -1628,10 +1628,12 @@ async function renderDraw() {
       const words = $('f-prompt').value.split(/[.,;\n]+/).map((w) => w.trim()).filter(Boolean);
       const g = tx.grounding || {};
       const dl = model === 'sam3' ? (s3.downloaded ? '' : ' Downloads SAM 3 once (~3.3 GB from Hugging Face).') : (g.downloaded ? '' : ` Downloads Grounding DINO once (~${g.size_mb || 250} MB).`);
+      const longs = [...words, ...$('f-exclude').value.split(/[.,;\n]+/).map((w) => w.trim()).filter(Boolean)].filter((w) => w.split(/\s+/).length > 3);
+      const short = longs.length && model === 'sam3' ? ` ⚠ SAM 3 knows short names (1–3 words, e.g. “neuron”, “nucleus”): “${longs[0]}” will likely find nothing; describe it in Grounding DINO instead, or shorten it.` : '';
       if (model === 'sam3' && !s3.accepted) { msg = 'Accept the SAM License to use SAM 3, or pick Grounding DINO + SAM 2.1.'; ok = false; }
       else if (!words.length) { msg = 'Type what to find, e.g. “nucleus”, or “gland. vessel” (one class per phrase).'; ok = false; }
-      else if ($('f-expand').checked && words.length === 1) msg = `${model === 'sam3' ? 'SAM 3' : 'Grounding DINO + SAM 2.1'} finds ${words[0]} ${sizeText()} across; the best matches then become examples and SAM outlines everything like them.${exNote}${dl} The whole slide can take long without a GPU.`;
-      else msg = `${model === 'sam3' ? 'SAM 3' : 'Grounding DINO + SAM 2.1'} finds every ${words.join(', ')} ${sizeText()} across${$('f-exclude').value.trim() ? `, not ${$('f-exclude').value.trim()}` : ''}.${exNote}${dl} ${model === 'sam3' ? 'SAM 3 handles dense small objects well.' : 'Grounding DINO finds larger structures (glands, vessels, fat, folds) far better than dense nuclei: for those, use Segment everything with examples, or SAM 3.'} The whole slide can take long without a GPU.`;
+      else if ($('f-expand').checked && words.length === 1) msg = `${model === 'sam3' ? 'SAM 3' : 'Grounding DINO + SAM 2.1'} finds ${words[0]} ${sizeText()} across; the best matches then become examples and SAM outlines everything like them.${short}${exNote}${dl} The whole slide can take long without a GPU.`;
+      else msg = `${model === 'sam3' ? 'SAM 3' : 'Grounding DINO + SAM 2.1'} finds every ${words.join(', ')} ${sizeText()} across${$('f-exclude').value.trim() ? `, not ${$('f-exclude').value.trim()}` : ''}.${short}${exNote}${dl} ${model === 'sam3' ? 'SAM 3 handles dense small objects well.' : 'Grounding DINO finds larger structures (glands, vessels, fat, folds) far better than dense nuclei: for those, use Segment everything with examples, or SAM 3.'} The whole slide can take long without a GPU.`;
     } else {
       const k = classes.filter((c) => c.n > 0);
       msg = k.length >= 2 ? `Train on ${k.map((c) => `${c.name} (${c.n})`).join(', ')} in ${drawLayer} → map those areas.`

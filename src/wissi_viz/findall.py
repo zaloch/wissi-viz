@@ -1069,7 +1069,11 @@ def find_by_text(
     if prov in registry.layers(sid):
         registry.remove_annotations(sid, prov)
     if not polys:
-        raise ValueError(f'nothing matching "{", ".join(names)}" in {where} (try other words or a larger object size)')
+        long = [n for n in names if len(n.split()) > 3]
+        tip = ('SAM 3 knows short names: try 1–3 words, e.g. "neuron" or "nucleus"' if long and model == 'sam3'
+               else 'try a shorter name' if long else 'try other words or another object size')  # fmt: skip
+        raise ValueError(f'{label} found nothing named "{", ".join(names)}" in {where} ({len(tiles)} tile'
+                         f'{"s" if len(tiles) != 1 else ""} searched): {tip}')  # fmt: skip
     upd(0.95, f'{len(polys):,} matches: removing duplicates…')
     keep = _box_nms(np.asarray(boxes, float), np.asarray(scores, float))
     every = _polys_features([polys[i] for i in keep], 'match', {'score': np.round(np.asarray(scores)[keep], 3)})
@@ -1084,11 +1088,17 @@ def find_by_text(
         n_excl = int((hit & ok).sum())
         ok &= ~hit
     keep = np.asarray(keep)[ok]
-    if not len(keep):
-        _companions(registry, sid, name, every, tiles)
+    if not len(keep):  # matches, but all left out: a result of 0 that still shows them (All matches, Tiles searched)
         why = ' and '.join(w for w, n in ((f'{n_size} outside {d_lo * mpp:.3g}–{d_hi * mpp:.3g} µm', n_size),
                                           (f'{n_excl} like "{", ".join(ex_names)}"', n_excl)) if n)  # fmt: skip
-        raise ValueError(f'every match of "{", ".join(names)}" in {where} was left out ({why})')
+        lname, _ = _publish(registry, sid, every, np.zeros(len(every)), strictness, name, names[0],
+                            PHRASE_COLORS[0])  # fmt: skip
+        return _summary(
+            None, lname, 0, len(every), strictness, where, t0, 'text', note=f'{label}; {why} left out',
+            kpis=[['found', '0'], ['matches', f'{len(every):,}'], ['tiles', str(len(tiles))]],
+            companions=_companions(registry, sid, lname, every, tiles),
+            why=f'all {len(every):,} matches were left out ({why}): widen the size range or shorten Exclude',
+        )  # fmt: skip
     polys = [polys[i] for i in keep]
     score = np.asarray(scores, float)[keep]
     lab = np.asarray(labels, np.int64)[keep]

@@ -8,7 +8,7 @@ on:
     - cron: '17 6 * * 1'   # weekly: notice if the public file changes or disappears
   push:
     branches: [main]
-    paths: [src/wissi_viz/sam3.py, scripts/sam3_inspect.py, scripts/sam3_quant_probe.py, .github/workflows/sam3-onnx.yml]
+    paths: [src/wissi_viz/sam3.py, src/wissi_viz/grounding.py, scripts/sam3_inspect.py, scripts/sam3_quant_probe.py, .github/workflows/sam3-onnx.yml]
 
 permissions:
   contents: read

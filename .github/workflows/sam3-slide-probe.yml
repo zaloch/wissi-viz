@@ -1,0 +1,45 @@
+# Why SAM 3 finds nothing on slides: its raw scores for short names on NuInsSeg H&E nuclei and rat DRG neurons (CC BY
+# 4.0) at several scales, against the reference outlines, with the cat photo as control. SAM 3 comes straight from the
+# public export on Hugging Face (as in the app); nothing of it is published. Pictures go to lab/sam3-probe-out.
+name: sam3-slide-probe
+on:
+  workflow_dispatch:
+  push:
+    branches: ['lab/**', '!lab/*-out']
+    paths: [scripts/sam3_slide_probe.py, .github/workflows/sam3-slide-probe.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - name: Room (disk, swap)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          sudo swapoff -a || true
+          sudo fallocate -l 16G /mnt/swapfile && sudo chmod 600 /mnt/swapfile && sudo mkswap /mnt/swapfile && sudo swapon /mnt/swapfile
+          sudo mkdir -p /mnt/cache /mnt/work && sudo chown "$USER" /mnt/cache /mnt/work
+          sudo apt-get update -qq && sudo apt-get install -y -qq 7zip libarchive-tools >/dev/null
+      - name: Install
+        run: |
+          uv venv -p 3.12
+          uv pip install -e ".[sam3,analysis,io]" pooch
+      - name: Probe
+        env:
+          WISSI_SAM3_ACCEPT_LICENSE: '1'
+          XDG_CACHE_HOME: /mnt/cache
+        run: uv run --no-sync python scripts/sam3_slide_probe.py --out "$RUNNER_TEMP/out" --work /mnt/work
+      - name: To the lab/sam3-probe-out branch
+        if: always()
+        run: |
+          cd "$RUNNER_TEMP/out" 2>/dev/null || exit 0
+          printf 'SAM 3 on microscopy: the images given and its detections. NuInsSeg (Mahbod et al., CC BY 4.0) and rat DRG (Schulte, Troidl et al. 2023, CC BY 4.0) images.\n' > README.md
+          git init -q -b lab/sam3-probe-out
+          git -c user.name=github-actions -c user.email=github-actions@users.noreply.github.com add -A
+          git -c user.name=github-actions -c user.email=github-actions@users.noreply.github.com commit -qm "sam3 probe for ${GITHUB_SHA::7}"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" lab/sam3-probe-out

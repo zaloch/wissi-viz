@@ -22,9 +22,8 @@ def main() -> None:
     files = meta.get('files') or []
     for f in files:
         print(f'DRG file: {f.get("key")} {int(f.get("size", 0)) / 2**20:.0f} MB', flush=True)
-    small = sorted(files, key=lambda f: int(f.get('size', 0)))
     rar = next((f for f in files if str(f.get('key', '')).lower().endswith('.rar')), None)
-    for f in [x for x in (rar, small[0]) if x]:
+    for f in [x for x in (rar,) if x]:
         dest = w / f['key']
         if not dest.exists():
             urllib.request.urlretrieve(f['links']['self'], dest)
@@ -37,8 +36,12 @@ def main() -> None:
             cmd = [tool, 'l', '-ba', str(dest)] if 'bsdtar' not in tool else [tool, '-tf', str(dest)]
             names = subprocess.run(cmd, capture_output=True, text=True).stdout.splitlines()
         print(f'DRG {f["key"]}: {len(names)} entries', flush=True)
-        for n in names[:60]:
-            print('DRG   ', n.strip()[-160:], flush=True)
+        dirs: dict = {}
+        for n in names:
+            n = n.strip().split()[-1] if n.strip() else ''
+            dirs.setdefault(str(Path(n).parent), []).append(Path(n).name)
+        for k, v in sorted(dirs.items()):
+            print(f'DRG   {k}: {len(v)} · {", ".join(sorted(v)[:4])}', flush=True)
     if rar:
         out = w / 'gt'
         out.mkdir(exist_ok=True)
@@ -51,9 +54,10 @@ def main() -> None:
         import tifffile
         from PIL import Image
 
-        shown = 0
+        shown, seen_dirs = 0, set()
         for p in sorted(out.rglob('*')):
-            if p.suffix.lower() in ('.tif', '.tiff', '.png') and shown < 8:
+            if p.suffix.lower() in ('.tif', '.tiff', '.png') and p.parent not in seen_dirs and shown < 16:
+                seen_dirs.add(p.parent)
                 try:
                     if p.suffix.lower() == '.png':
                         a = np.asarray(Image.open(p))

@@ -1512,6 +1512,7 @@ $('f-strict').oninput = () => { $('f-strict-o').textContent = (+$('f-strict').va
 const sizeText = () => { const lo = +$('f-size').value, hi = +$('f-size-max').value; return hi && hi !== lo ? `${Math.min(lo, hi)}–${Math.max(lo, hi)} µm` : `about ${lo} µm`; };
 ['f-size', 'f-size-max', 'f-exclude'].forEach((id) => { $(id).oninput = () => renderDraw(); });
 $('f-notin').onchange = () => renderDraw();
+$('ex-use').onchange = () => renderDraw();
 $('f-prompt').oninput = () => renderDraw();
 $('f-prompt').onkeydown = (e) => { if (e.key === 'Enter' && !$('f-run').disabled) { e.preventDefault(); $('f-run').click(); } };
 $('f-model').onchange = () => renderDraw();
@@ -1603,16 +1604,20 @@ async function renderDraw() {
   const mine = picks.filter((x) => x.slide === sid);
   const hint = $('f-hint'), run = $('f-run');
   exampleCount(sid, ({ n, classes }) => {
-    const pos = n + mine.filter((x) => !x.neg).length;
-    $('ex-count').textContent = `${n} outline${n === 1 ? '' : 's'} · ${mine.length} picked`;
+    const use = $('ex-use').checked;
+    const pos = use ? n + mine.filter((x) => !x.neg).length : 0;
+    const exLabel = `${n} outline${n === 1 ? '' : 's'} in ${drawLayer} · ${$('a-class').value.trim() || 'any class'}${mine.length ? ` + ${mine.length} picked` : ''}`;
+    $('ex-count').textContent = use ? exLabel : `${exLabel} · not used`;
+    $('ex-count').title = use && (n || mine.length) ? 'These are used as examples: only objects like them are found' : '';
+    const exNote = pos ? ` Only matches like your ${pos} example${pos === 1 ? '' : 's'} (${drawLayer} · ${$('a-class').value.trim() || 'any class'}${mine.length ? ', picked objects' : ''}) are kept, and their size replaces the object size; untick “use as examples” to find without them.` : '';
     let msg = '', ok = !!sid && !caps.error && !findJob;
     if (caps.error) msg = caps.error;
     else if (findMode === 'objects') {
       if (!cands.length) { msg = 'No object layer to search: add a cell table, or use “Segment everything”.'; ok = false; }
-      else if (!pos) { msg = `Mark at least one example of “${$('a-class').value || 'a class'}” (SAM, draw, or pick objects).`; ok = false; }
+      else if (!pos) { msg = $('ex-use').checked ? `Mark at least one example of “${$('a-class').value || 'a class'}” (SAM, draw, or pick objects).` : 'Similar objects needs examples: tick “use as examples”.'; ok = false; }
       else msg = `${pos} example${pos === 1 ? '' : 's'} → every similar object of ${cs.value}.`;
     } else if (findMode === 'segment') {
-      msg = pos ? `${caps.sam || 'SAM'} outlines every object, keeping those like your ${pos} example${pos === 1 ? '' : 's'}.`
+      msg = pos ? `${caps.sam || 'SAM'} outlines every object.${exNote}`
         : `${caps.sam || 'SAM'} outlines every object ${sizeText()} across (no examples: keeps all). The whole slide can take long without a GPU.`;
     } else if (findMode === 'text' && cellModel) {
       const where = $('f-where').selectedOptions[0]?.textContent || 'this view';
@@ -1625,8 +1630,8 @@ async function renderDraw() {
       const dl = model === 'sam3' ? (s3.downloaded ? '' : ' Downloads SAM 3 once (~3.3 GB from Hugging Face).') : (g.downloaded ? '' : ` Downloads Grounding DINO once (~${g.size_mb || 250} MB).`);
       if (model === 'sam3' && !s3.accepted) { msg = 'Accept the SAM License to use SAM 3, or pick Grounding DINO + SAM 2.1.'; ok = false; }
       else if (!words.length) { msg = 'Type what to find, e.g. “nucleus”, or “gland. vessel” (one class per phrase).'; ok = false; }
-      else if ($('f-expand').checked && words.length === 1) msg = `${model === 'sam3' ? 'SAM 3' : 'Grounding DINO + SAM 2.1'} finds ${words[0]} ${sizeText()} across; the best matches then become examples and SAM outlines everything like them.${dl} The whole slide can take long without a GPU.`;
-      else msg = `${model === 'sam3' ? 'SAM 3' : 'Grounding DINO + SAM 2.1'} finds every ${words.join(', ')} ${sizeText()} across${$('f-exclude').value.trim() ? `, not ${$('f-exclude').value.trim()}` : ''}${pos ? `, keeping those like your ${pos} example${pos === 1 ? '' : 's'}` : ''}.${dl} ${model === 'sam3' ? 'SAM 3 handles dense small objects well.' : 'Grounding DINO finds larger structures (glands, vessels, fat, folds) far better than dense nuclei: for those, use Segment everything with examples, or SAM 3.'} The whole slide can take long without a GPU.`;
+      else if ($('f-expand').checked && words.length === 1) msg = `${model === 'sam3' ? 'SAM 3' : 'Grounding DINO + SAM 2.1'} finds ${words[0]} ${sizeText()} across; the best matches then become examples and SAM outlines everything like them.${exNote}${dl} The whole slide can take long without a GPU.`;
+      else msg = `${model === 'sam3' ? 'SAM 3' : 'Grounding DINO + SAM 2.1'} finds every ${words.join(', ')} ${sizeText()} across${$('f-exclude').value.trim() ? `, not ${$('f-exclude').value.trim()}` : ''}.${exNote}${dl} ${model === 'sam3' ? 'SAM 3 handles dense small objects well.' : 'Grounding DINO finds larger structures (glands, vessels, fat, folds) far better than dense nuclei: for those, use Segment everything with examples, or SAM 3.'} The whole slide can take long without a GPU.`;
     } else {
       const k = classes.filter((c) => c.n > 0);
       msg = k.length >= 2 ? `Train on ${k.map((c) => `${c.name} (${c.n})`).join(', ')} in ${drawLayer} → map those areas.`
@@ -1663,6 +1668,7 @@ $('f-run').onclick = async () => {
   };
   if (findMode === 'text') findCaps = null;   // the model may download: show it as downloaded afterwards
   if (!(await layerExists(drawLayer))) body.examples.layer = null;
+  if (!$('ex-use').checked && findMode !== 'areas') body.examples = null;
   try {
     const job = await api(`/slides/${enc(sid)}/find`, body);
     trackJob(job, sid);
@@ -1736,11 +1742,22 @@ function renderFindResults(fresh = false) {
       };
       card.append(h('label', { class: 'field' }, 'Strictness', sl, out));
     }
+    if (r.why) card.append(h('div', { class: 'panel-note warn' }, `Why 0: ${r.why}.`));
+    const parts = [['found', r.layer], ...Object.entries(r.companions || {})];
+    if (parts.length > 1) {   // what to draw on the slide: the result, every match before filtering, the tiles searched
+      r.vis = r.vis || { found: true };
+      const labels = { found: 'Found', matches: 'All matches', tiles: 'Tiles searched' };
+      card.append(h('div', { class: 'row', style: 'gap: 12px; flex-wrap: wrap; font-size: 12px' }, ...parts.map(([k, name]) => {
+        const cb = h('input', { type: 'checkbox', checked: !!r.vis[k], 'aria-label': `Show ${labels[k] || k} of ${r.layer}`, disabled: activeSlide() !== r.slide });
+        cb.onchange = () => { r.vis[k] = cb.checked; grid.setLayerVisible(active, name, cb.checked); if (cb.checked) grid.flashLayer(active, name, 800); };
+        return h('label', { style: 'display: inline-flex; gap: 4px; align-items: center' }, cb, labels[k] || k);
+      })));
+    }
     if (r.note) card.append(h('div', { class: 'panel-note' }, r.note));
     const show = h('button', { class: 'btn grow' }, 'Show');
     show.onclick = () => showFound(r.layer, r.slide);
     const rm = h('button', { class: 'btn', title: 'Remove this layer from the slide' }, 'Remove');
-    rm.onclick = () => api(`/slides/${enc(r.slide)}/annotations?layer=${enc(r.layer)}`, null, 'DELETE')
+    rm.onclick = () => Promise.all([r.layer, ...Object.values(r.companions || {})].map((n) => api(`/slides/${enc(r.slide)}/annotations?layer=${enc(n)}`, null, 'DELETE').catch((e) => { if (n === r.layer) throw e; })))
       .then(() => { findResults.splice(findResults.indexOf(r), 1); grid.refreshAnnotations(r.slide); renderFindResults(); toast({ title: `Removed ${r.layer}` }); })
       .catch((e) => log(`remove: ${e.message}`, true));
     card.append(h('div', { class: 'row' }, show, rm));

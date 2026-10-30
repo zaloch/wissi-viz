@@ -106,3 +106,25 @@ def test_regions_left_out(session, monkeypatch):  # noqa: F811
         findall.scope_geometry(reg, sid, {'kind': 'slide', 'exclude': {'layer': 'Nope'}})
     with pytest.raises(ValueError, match='outside Ignore'):
         findall.scope_geometry(reg, sid, {'kind': 'view', 'rect': [400, 400, 700, 700], 'exclude': {'layer': 'Ignore'}})
+
+
+def test_matches_and_tiles_beside_the_result(session):  # noqa: F811
+    """Every match before filtering and the tiles searched come as hidden layers; 0 found says why."""
+    from wissi_viz import annio, findall
+
+    s, sid = session
+    reg = s.registry
+    out = findall.find_by_text(reg, sid, prompt='nucleus', scope={'kind': 'view', 'rect': RECT}, object_um=4,
+                               object_um_max=6, strictness=0.0, detector=_Phrases())  # fmt: skip
+    comp = out['companions']
+    assert set(comp) == {'matches', 'tiles'} and comp['matches'] == f'{out["layer"]} · matches'
+    M, T = reg.layer(sid, comp['matches']), reg.layer(sid, comp['tiles'])
+    assert not M.visible and not T.visible and M.origin == 'found'
+    assert len(M) > out['count'] and len(T) == int(dict(out['kpis'])['tiles']) and out['why'] == ''
+    assert 'score' in annio.from_layer(M).props
+    # examples nothing is like: 0 found, and the reason
+    L = annio.from_layer(reg.layer(sid, 'cells'))
+    big = [{'layer': 'cells', 'index': int(i)} for i in range(len(L))][:2]
+    zero = findall.find_by_text(reg, sid, prompt='nucleus', scope={'kind': 'view', 'rect': RECT}, strictness=1.0,
+                                examples={'picks': big}, detector=_Phrases())  # fmt: skip
+    assert zero['count'] == 0 and 'like your examples' in zero['why']

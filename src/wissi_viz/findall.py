@@ -461,8 +461,37 @@ def rethreshold(registry, rid: str, strictness: float) -> dict:
     return {'layer': name, 'count': n, 'strictness': strictness, 'of': int(len(r['F']))}
 
 
-def _summary(rid, name, n, total, strictness, where, t0, mode, note='', kpis=None) -> dict:
+def _companions(registry, sid: str, lname: str, matches: annio.Features | None = None, tiles=None) -> dict:
+    """Hidden layers beside a result, to toggle on its card: every match before filtering (``· matches``) and the
+    tiles that were searched (``· tiles``, level-0 ``(x0, y0, x1, y1)``)."""
+    out = {}
+    if matches is not None and len(matches):
+        G = copy.copy(matches)
+        G.cls = np.zeros(len(G), np.int32)
+        G.class_names, G.class_colors = ['match'], {'match': '#c7ccd4'}
+        out['matches'] = _hidden(registry, sid, annio.to_layer(G, name=f'{lname} · matches'), 'match', '#c7ccd4')
+    if tiles is not None and len(tiles):
+        rects = [np.array([[a, b], [c, b], [c, d], [a, d]], float) for a, b, c, d in tiles]
+        out['tiles'] = _hidden(registry, sid, annio.to_layer(_polys_features(rects, 'tile'), name=f'{lname} · tiles'),
+                               'tile', '#5ac8fa')  # fmt: skip
+    return out
+
+
+def _hidden(registry, sid: str, L: AnnotationLayer, cls: str, color: str) -> str:
+    L.classes = {cls: color}
+    L.origin = ORIGIN
+    L.visible = False
+    L.fill_opacity = 0.0
+    L.line_width = 1.0
+    L.detail_min_px = 2.0
+    registry.add_annotations(sid, L)
+    return L.name
+
+
+def _summary(rid, name, n, total, strictness, where, t0, mode, note='', kpis=None, companions=None, why='') -> dict:
     return {
+        'companions': companions or {},
+        'why': why,
         'result': rid,
         'mode': mode,
         'layer': name,
@@ -635,9 +664,13 @@ def segment_everything(
     lname, n = _publish(registry, sid, F, sim, strictness, name, cls, color)
     if sim is not None:
         _remember(rid, slide=sid, F=F, sim=sim, name=lname, cls=cls, color=color, extra={}, strictness=strictness)
+    why = (f'none of the {len(polys):,} outlines is like your examples: lower the strictness, or run without them'
+           if n == 0 and ex else '')  # fmt: skip
+    rects = [(x * f, y * f, (x + w) * f, (y + h) * f) for x, y, w, h in tiles]
     return _summary(
         rid if sim is not None else None, lname, n, len(polys), strictness, where, t0, 'segment', note=note,
         kpis=[['found', f'{n:,}'], ['outlined', f'{len(polys):,}'], ['tiles', str(len(tiles))]],
+        companions=_companions(registry, sid, lname, F if sim is not None else None, rects), why=why,
     )  # fmt: skip
 
 
@@ -871,6 +904,7 @@ def _expand(registry, sid, polys, boxes, keep, score, tsim, d0, scope, strictnes
     _remember(rid, slide=sid, F=G, sim=sim, name=lname, cls=cls, color=color, extra={}, strictness=strictness)
     return _summary(
         rid, lname, n, len(F), strictness, seg['where'], time.perf_counter(), 'text',
+        companions=_companions(registry, sid, lname, F),
         note=f'{len(idx)} {label} {how} as examples{f", {len(nidx)} excluded ones as counter-examples" if len(nidx) else ""} among {len(F):,} outlines ({seg["note"]}); compared on {", ".join(keys)}',
         kpis=[['found', f'{n:,}'], ['outlined', f'{len(F):,}'], ['examples', str(len(idx))]],
     )  # fmt: skip
@@ -1038,6 +1072,7 @@ def find_by_text(
         raise ValueError(f'nothing matching "{", ".join(names)}" in {where} (try other words or a larger object size)')
     upd(0.95, f'{len(polys):,} matches: removing duplicates…')
     keep = _box_nms(np.asarray(boxes, float), np.asarray(scores, float))
+    every = _polys_features([polys[i] for i in keep], 'match', {'score': np.round(np.asarray(scores)[keep], 3)})
     ok = np.ones(len(keep), bool)
     n_size = n_excl = 0
     if ranged:
@@ -1050,6 +1085,7 @@ def find_by_text(
         ok &= ~hit
     keep = np.asarray(keep)[ok]
     if not len(keep):
+        _companions(registry, sid, name, every, tiles)
         why = ' and '.join(w for w, n in ((f'{n_size} outside {d_lo * mpp:.3g}–{d_hi * mpp:.3g} µm', n_size),
                                           (f'{n_excl} like "{", ".join(ex_names)}"', n_excl)) if n)  # fmt: skip
         raise ValueError(f'every match of "{", ".join(names)}" in {where} was left out ({why})')
@@ -1079,6 +1115,7 @@ def find_by_text(
                       classes[0][1], label, job, size=(d_lo, d_hi) if ranged else None,
                       ex_boxes=np.asarray(ex_boxes, float).reshape(-1, 4))  # fmt: skip
         if out is not None:
+            out['companions'] = {**out['companions'], **_companions(registry, sid, out['layer'], tiles=tiles)}
             out.update(seconds=round(time.perf_counter() - t0, 1))
             out['kpis'] = [*out['kpis'], ['text matches', f'{len(polys):,}']]
             return out
@@ -1088,9 +1125,15 @@ def find_by_text(
     rid = uuid.uuid4().hex[:10]
     _remember(rid, slide=sid, F=F, sim=sim, name=lname, cls=names[0], color=classes[0][1], extra=extra,
               strictness=strictness, classes=classes, labels=lab)  # fmt: skip
+    why = ''
+    if n == 0:
+        why = (f'none of the {len(polys):,} matches is like your examples: lower the strictness, or run without them '
+               '(untick "Use as examples")') if ex else (
+               f'none of the {len(polys):,} matches scores above this strictness: lower it')  # fmt: skip
     return _summary(
         rid, lname, n, len(polys), strictness, where, t0, 'text', note=note,
         kpis=[['found', f'{n:,}'], ['matches', f'{len(polys):,}'], ['tiles', str(len(tiles))]],
+        companions=_companions(registry, sid, lname, every, tiles), why=why,
     )  # fmt: skip
 
 

@@ -4,6 +4,7 @@ The native window itself needs a GUI; its wiring is checked against a stand-in p
 from __future__ import annotations
 
 import json
+import os
 import sys
 import types
 import urllib.request
@@ -310,6 +311,9 @@ def test_page_in_browser_mode(files, tmp_path):
             except Exception as e:
                 pytest.skip(f'no Chromium: {e}')
             pg = b.new_page(viewport={'width': 1200, 'height': 800})
+            slow = float(os.environ.get('WISSI_SWEEP_CPU_SLOWDOWN', '0') or 0)
+            if slow > 1:  # a slow machine
+                pg.context.new_cdp_session(pg).send('Emulation.setCPUThrottlingRate', {'rate': slow})
             errors = []
             pg.on('pageerror', lambda e: errors.append(str(e)))
             pg.goto(url + '/app')
@@ -326,8 +330,12 @@ def test_page_in_browser_mode(files, tmp_path):
             except Exception as e:  # say what the page shows
                 state = pg.evaluate('() => ({slides: document.querySelectorAll("#slides li").length, '
                                     'log: document.getElementById("log").textContent, '
-                                    'paths: document.getElementById("paths").value})')  # fmt: skip
-                raise AssertionError(f'slides did not open: {state}; page errors {errors}') from e
+                                    'paths: document.getElementById("paths").value, '
+                                    'toasts: [...document.querySelectorAll(".toast")].map((t) => t.textContent)})')  # fmt: skip
+                raise AssertionError(
+                    f'slides did not open: {state}; page errors {errors}; server has '
+                    f'{s.registry.layers and list(s.registry._entries)}'
+                ) from e
             assert pg.is_hidden('#empty')
             assert pg.eval_on_selector('#n', 'e => e.value') == '2'
             pg.wait_for_function('() => document.getElementById("grid").panes.every(p => p.slide && p.slide.info)')

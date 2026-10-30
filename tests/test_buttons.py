@@ -588,6 +588,21 @@ def _brightfield(w, data, s):
     n_before = pg.locator('#f-results .result').count()
     w.check('#f-run', f'() => document.querySelectorAll("#f-results .result").length > {n_before}', timeout=60000)
     assert pg.locator('#f-results .result >> nth=0').get_attribute('data-layer').startswith('Text · nucleus, gland')
+    # the result card: toggle every match and the tiles searched on the slide
+    text_layer = pg.locator('#f-results .result >> nth=0').get_attribute('data-layer')
+    vis_of = f'(n) => ({G})().panes[0].layerVis.get(n)'
+    w.check('#f-results .result >> nth=0 >> input[aria-label^="Show All matches"]',
+            f'() => ({vis_of})({json.dumps(text_layer + " · matches")}) === true')  # fmt: skip
+    w.check('#f-results .result >> nth=0 >> input[aria-label^="Show Tiles searched"]',
+            f'() => ({vis_of})({json.dumps(text_layer + " · tiles")}) === true')  # fmt: skip
+    w.check('#f-results .result >> nth=0 >> input[aria-label^="Show Found"]',
+            f'() => ({vis_of})({json.dumps(text_layer)}) === false')  # fmt: skip
+    if os.environ.get('WISSI_SWEEP_SHOTS'):  # pictures of the panel, to look at
+        pg.locator('#p-draw').screenshot(path=os.path.join(os.environ['WISSI_SWEEP_SHOTS'], 'find-result.png'))
+        pg.screenshot(path=os.path.join(os.environ['WISSI_SWEEP_SHOTS'], 'find-slide.png'))
+    # use as examples: off → the hint says so
+    w.check('#ex-use', '() => /not used/.test(document.getElementById("ex-count").textContent)')
+    w.check('#ex-use', '() => !/not used/.test(document.getElementById("ex-count").textContent)')
     # exclude by name and the size range: shown for text models, sent with the run
     assert pg.is_visible('#f-excl-row') and pg.is_visible('#f-size-max') and pg.is_visible('#f-notin')
     pg.fill('#f-exclude', 'fold')

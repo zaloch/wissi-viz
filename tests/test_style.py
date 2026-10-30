@@ -43,8 +43,22 @@ EXTRA_AT_TOP = {
     'nicegui.py': {'nicegui'},
     'findall.py': {'scipy', 'shapely', 'skimage', 'pandas'},
     'layerops.py': {'shapely'},
+    'evaluate.py': {'shapely'},
+    'validation.py': {'shapely'},
 }
-FEATURE_MODULES = {'metrics', 'spatial', 'segment', 'sam', 'nicegui', 'plots', 'analyses', 'findall', 'layerops'}
+FEATURE_MODULES = {
+    'metrics',
+    'spatial',
+    'segment',
+    'sam',
+    'nicegui',
+    'plots',
+    'analyses',
+    'findall',
+    'layerops',
+    'evaluate',
+    'validation',
+}
 CYCLES = {('annotations', 'annio'), ('annotations', 'objects')}
 
 

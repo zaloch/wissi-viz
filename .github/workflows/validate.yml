@@ -1,0 +1,54 @@
+# Find all against reference outlines (wissi-viz validate): NuInsSeg H&E nuclei (hand-drawn), CAMELYON16 metastases
+# (pathologists' outlines) and Xenium nuclei (10x, DAPI). Publishes the layers, the NuInsSeg mosaic, the scores and
+# pictures as the GitHub release `validation` (replaced on every run), which `wissi-viz validate open` shows in the app.
+name: validate
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '41 7 * * 2'   # weekly
+  push:
+    branches: [main]
+    paths: [src/wissi_viz/validation.py, src/wissi_viz/evaluate.py, .github/workflows/validate.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      WISSI_SAM3_ACCEPT_LICENSE: '1'   # the repository owner accepted the SAM License; SAM 3 itself is not published
+      XDG_CACHE_HOME: /mnt/cache
+      WISSI_PACK_DIR: /mnt/pack
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - name: Room (disk, swap)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          sudo swapoff -a || true
+          sudo fallocate -l 16G /mnt/swapfile && sudo chmod 600 /mnt/swapfile && sudo mkswap /mnt/swapfile && sudo swapon /mnt/swapfile
+          sudo mkdir -p /mnt/cache /mnt/pack && sudo chown "$USER" /mnt/cache /mnt/pack
+          df -h / /mnt; free -g
+      - name: Install
+        run: |
+          uv venv -p 3.12 -q
+          uv pip install -q torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          uv pip install -q -e ".[analysis,io,sam3,cells]" pyarrow
+      - name: Run
+        run: |
+          set -o pipefail
+          uv run --no-sync wissi-viz validate run --yes 2>&1 | grep -v -E "pci_bus_id|unauthenticated|quantization" | tail -60
+          echo "::notice::$(tr '\n' ' ' < /mnt/pack/validation/validation.md | head -c 3800)"
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files=$(uv run --no-sync wissi-viz validate publish-list)
+          [ -n "$files" ] || exit 0
+          gh release view validation >/dev/null 2>&1 || gh release create validation --prerelease --title "Find all against reference outlines (latest run)" \
+            --notes "Layers, the NuInsSeg mosaic (CC BY 4.0, see NUINSSEG-ATTRIBUTION.md), scores (validation.md) and pictures from the latest run of .github/workflows/validate.yml. Open them in the app with: wissi-viz validate open. No model weights are published here."
+          # shellcheck disable=SC2086
+          gh release upload validation $files --clobber

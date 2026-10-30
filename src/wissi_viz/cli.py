@@ -40,6 +40,11 @@ def main(argv: list[str] | None = None) -> None:
     if argv[:1] == ['pack']:  # the public sample pack, step by step
         pack_main(argv[1:])
         return
+    if argv[:1] == ['validate']:  # find all against reference outlines: run, open
+        from . import validation
+
+        validation.main(argv[1:])
+        return
     if argv[:1] == ['segment']:  # cells of a whole slide → GeoParquet
         from .segment import main as seg_main
 

@@ -190,7 +190,11 @@ def main(argv=None) -> int:
         ctx, fixed = own if own else (CONTEXT, FALLBACK_LOOK)
         look = looks.get(k) or f'(a fixed description) {fixed}'
         state = f'{ctx}\nWhat the image shows: {look}\nGoal: {goal}'
-        ans, sec = decide(a.host, a.model, state, plan)
+        # the tool with the measured evidence; the other decisions without it (its "found nothing" lines made
+        # Nimble judge the goal itself infeasible)
+        ans, sec = decide(a.host, a.model, state, {k: v for k, v in PLAN.items() if k != 'tool'})
+        t_ans, t_sec = decide(a.host, a.model, state, {'tool': plan['tool']})
+        ans, sec = {**ans, **t_ans}, round(sec + t_sec, 1)
         wrong = []
         for q, want in expect.items():
             v = value(ans.get(q))

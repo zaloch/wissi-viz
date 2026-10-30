@@ -39,7 +39,7 @@ from skimage import measure
 from skimage.color import rgb2lab
 from skimage.feature import multiscale_basic_features, peak_local_max
 
-from . import annio, grounding, sam3, segment
+from . import annio, grounding, layerops, sam3, segment
 from .annotations import AnnotationLayer
 from .jobs import Job
 from .metrics import object_metrics
@@ -69,7 +69,32 @@ def _mpp(src) -> float:
 def scope_geometry(registry, sid: str, scope: dict | None, tissue: bool = False):
     """``{'kind': 'view', 'rect': [x0, y0, x1, y1]}`` | ``{'kind': 'region', 'layer': name, 'index': [i…]}`` |
     ``{'kind': 'slide'}`` → (shapely geometry in level-0 px or None for the whole slide, a label). ``tissue``: the
-    whole slide becomes its tissue (segmenting or classifying glass is wasted time)."""
+    whole slide becomes its tissue (segmenting or classifying glass is wasted time). ``exclude``: ``{'layer': name,
+    'classes': [...]}`` (or a list of them): the regions of that layer are left out of the scope."""
+    g, where = _scope_geometry(registry, sid, scope, tissue)
+    excl = (scope or {}).get('exclude') or []
+    for e in [excl] if isinstance(excl, dict) else excl:
+        if not e or not e.get('layer'):
+            continue
+        try:
+            missing = registry.layer(sid, e['layer']) is None
+        except KeyError:
+            missing = True
+        if missing:
+            raise ValueError(f'no layer {e["layer"]!r} on this slide to leave out')
+        eg = layerops.geometry(registry, sid, e['layer'], e.get('classes') or None)
+        if eg is None:
+            raise ValueError(f'{e["layer"]} has no regions (polygons) to leave out')
+        src = _source(registry, sid)
+        base = g if g is not None else shapely.box(0, 0, src.info.width, src.info.height)
+        g = shapely.make_valid(base.difference(eg))
+        if g.is_empty or g.area < 4:
+            raise ValueError(f'nothing of {where} is outside {e["layer"]}')
+        where = f'{where}, outside {e["layer"]}'
+    return g, where
+
+
+def _scope_geometry(registry, sid: str, scope: dict | None, tissue: bool = False):
     scope = scope or {'kind': 'slide'}
     src = _source(registry, sid)
     W, H = src.info.width, src.info.height
@@ -347,6 +372,24 @@ def threshold(strictness: float) -> float:
     return 0.12 + 0.76 * float(np.clip(strictness, 0, 1))
 
 
+def _size_range(mpp: float, object_um, object_um_max) -> tuple[float, float, bool]:
+    """(smallest, largest object diameter in level-0 px, whether a range was given): ``object_um`` alone is one size."""
+    lo = float(object_um or 10.0)
+    hi = float(object_um_max) if object_um_max not in (None, '', 0) else None
+    if hi is not None and hi < lo:
+        lo, hi = hi, lo
+    return lo / mpp, (hi if hi is not None else lo) / mpp, hi is not None
+
+
+def _in_size(polys: list, lo: float, hi: float) -> np.ndarray:
+    """Which outlines' equivalent diameter (level-0 px) is within the range, with some slack (0.8× – 1.25×)."""
+    if not polys:
+        return np.zeros(0, bool)
+    a = np.abs(shapely.area(shapely.polygons([shapely.linearrings(np.asarray(p, float)) for p in polys])))
+    d = np.sqrt(4 * a / math.pi)
+    return (d >= 0.8 * lo) & (d <= 1.25 * hi)
+
+
 # ================================================================================================ results
 def _publish(
     registry,
@@ -495,9 +538,11 @@ def segment_everything(
     name: str | None = None,
     job: Job | None = None,
     max_tiles: int = 4000,
+    object_um_max: float | None = None,
 ) -> dict:
     """Outline every object in the scope from a grid of single-click prompts (SAM, or the classic colour fill), then
-    keep those like the examples (all of them without examples)."""
+    keep those like the examples (all of them without examples). ``object_um`` – ``object_um_max``: the objects' size
+    range in µm (clicks are as dense as the smallest needs; outlines outside the range are dropped)."""
     t0 = time.perf_counter()
     upd = job.update if job else (lambda *a, **k: None)
     src = _source(registry, sid)
@@ -505,13 +550,17 @@ def segment_everything(
     ex = Examples(registry, sid, examples) if examples else None
     ex = ex if ex else None  # no positive examples: keep every outline
     cls, color = (ex.cls, ex.color) if ex else ('object', '#ffb454')
-    d0 = ex.diameter() if ex else object_um / _mpp(src)  # object diameter, level-0 px
+    d_lo, d_hi, ranged = _size_range(_mpp(src), object_um, object_um_max)
+    ranged = ranged and not ex
+    d0 = ex.diameter() if ex else d_lo  # object diameter, level-0 px (the smallest: clicks dense enough for it)
     geom, where = scope_geometry(registry, sid, scope, tissue=True)
     svc = sam_service()
     impl = svc._load()
     # the model sees each object ~40 px across (SAM outlines objects of a few px badly: on a 0.5 µm/px H&E, nuclei
     # are ~16 px, so tiles are enlarged up to 4×); the classic fill works at the slide's own pixels or coarser
     f = max(1.0, d0 / 28.0) if impl.name == 'classic' else max(0.25, d0 / 40.0)  # level-0 px per model px
+    if ranged:  # the largest still well inside a tile
+        f = max(f, d_hi / (0.45 * (1024 if impl.name != 'classic' else 768)))
     lv = 0
     for i, Lv in enumerate(info.levels):
         if Lv.downsample <= f * 1.0001:
@@ -520,7 +569,7 @@ def segment_everything(
     VW, VH = info.width / f, info.height / f  # the slide in model px
     d_img = d0 / f
     T = 1024 if impl.name != 'classic' else 768
-    O = int(min(T // 4, max(16, 2.5 * d_img)))  # noqa: E741
+    O = int(min(T // 4, max(16, 2.5 * d_img, 1.1 * d_hi / f if ranged else 0)))  # noqa: E741
     step = T - O
     if geom is not None:
         gx0, gy0, gx1, gy1 = geom.bounds
@@ -548,7 +597,9 @@ def segment_everything(
         amin, amax = float(ea.min()) / 4 / f**2, float(ea.max()) * 4 / f**2
     else:
         amin, amax = math.pi / 4 * (0.3 * d_img) ** 2, math.pi / 4 * (3.0 * d_img) ** 2  # 0.3–3× the diameter
-        if impl.name == 'classic':  # its fills can join touching objects: keep those too
+        if ranged:  # the range, with some slack
+            amin, amax = math.pi / 4 * (0.8 * d_lo / f) ** 2, math.pi / 4 * (1.25 * d_hi / f) ** 2
+        elif impl.name == 'classic':  # its fills can join touching objects: keep those too
             amax *= 4
     amin = max(amin, 6.0)
     polys: list[np.ndarray] = []
@@ -572,6 +623,8 @@ def segment_everything(
     rid = uuid.uuid4().hex[:10]
     sim = None
     note = f'{impl.name} at {f:.2g} level-0 px per model px' + (f' (level {lv})' if lv else '')
+    if ranged:
+        note += f'; {d_lo * _mpp(src):.3g}–{d_hi * _mpp(src):.3g} µm across'
     if ex:
         upd(0.95, f'comparing {len(polys):,} outlines with the examples…')
         lvm = _level_for(src, d0)
@@ -738,7 +791,24 @@ class _Sub:
         return self.job.cancelled
 
 
-def _expand(registry, sid, polys, boxes, keep, score, tsim, d0, scope, strictness, name, cls, color, label, job):
+def _excluded(boxes: np.ndarray, scores: np.ndarray, ex_boxes: np.ndarray, ex_scores: np.ndarray) -> np.ndarray:
+    """Which boxes are mostly (≥ 50 %) covered by a box of an excluded phrase scoring at least 0.8× theirs."""
+    out = np.zeros(len(boxes), bool)
+    if not len(boxes) or not len(ex_boxes):
+        return out
+    B = shapely.box(boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3])
+    E = shapely.box(ex_boxes[:, 0], ex_boxes[:, 1], ex_boxes[:, 2], ex_boxes[:, 3])
+    i, j = shapely.STRtree(E).query(B, predicate='intersects')
+    if not len(i):
+        return out
+    cover = shapely.area(shapely.intersection(B[i], E[j])) / np.maximum(shapely.area(B[i]), 1e-9)
+    bad = (cover >= 0.5) & (ex_scores[j] >= 0.8 * scores[i])
+    out[i[bad]] = True
+    return out
+
+
+def _expand(registry, sid, polys, boxes, keep, score, tsim, d0, scope, strictness, name, cls, color, label, job,
+            size=None, ex_boxes=None):  # fmt: skip
     """Find all like the best text matches: segment everything in the scope (no examples), take the outlines at the
     best matches as examples (outlined the same way as everything they are compared with), keep those like them.
 
@@ -747,8 +817,10 @@ def _expand(registry, sid, polys, boxes, keep, score, tsim, d0, scope, strictnes
     None if there is nothing to take examples from."""
     src = _source(registry, sid)
     tmp = _unique(registry, sid, '_expand')
-    seg = segment_everything(registry, sid, scope=scope, object_um=d0 * _mpp(src), name=tmp,
-                             job=_Sub(job, 0.5, 0.9) if job else None)  # fmt: skip
+    mpp = _mpp(src)
+    lo, hi = size if size else (d0, None)
+    seg = segment_everything(registry, sid, scope=scope, object_um=lo * mpp, object_um_max=hi * mpp if hi else None,
+                             name=tmp, job=_Sub(job, 0.5, 0.9) if job else None)  # fmt: skip
     F = annio.from_layer(registry.layer(sid, seg['layer']))
     registry.remove_annotations(sid, seg['layer'])
     if not len(F):
@@ -782,17 +854,24 @@ def _expand(registry, sid, polys, boxes, keep, score, tsim, d0, scope, strictnes
         seeds |= more
     if not seeds:
         return None
+    neg: set[int] = set()
+    for bx in (ex_boxes if ex_boxes is not None else [])[:32]:  # the outlines at excluded matches: "not like these"
+        c = ((bx[0] + bx[2]) / 2, (bx[1] + bx[3]) / 2)
+        neg.update(j for j in tree.query(shapely.Point(*c)) if shapely.contains_xy(shapes[j], *c))
+    neg -= seeds
     lvm = _level_for(src, d0)
     M = _measure(F, src, lvm)
     idx = np.array(sorted(seeds))
-    sim, keys = similarity(M, {k: v[idx] for k, v in M.items()})
+    nidx = np.array(sorted(neg), int)
+    sim, keys = similarity(M, {k: v[idx] for k, v in M.items()},
+                           {k: v[nidx] for k, v in M.items()} if len(nidx) else None)  # fmt: skip
     G = copy.copy(F)
     lname, n = _publish(registry, sid, G, sim, strictness, name, cls, color)
     rid = uuid.uuid4().hex[:10]
     _remember(rid, slide=sid, F=G, sim=sim, name=lname, cls=cls, color=color, extra={}, strictness=strictness)
     return _summary(
         rid, lname, n, len(F), strictness, seg['where'], time.perf_counter(), 'text',
-        note=f'{len(idx)} {label} {how} as examples among {len(F):,} outlines ({seg["note"]}); compared on {", ".join(keys)}',
+        note=f'{len(idx)} {label} {how} as examples{f", {len(nidx)} excluded ones as counter-examples" if len(nidx) else ""} among {len(F):,} outlines ({seg["note"]}); compared on {", ".join(keys)}',
         kpis=[['found', f'{n:,}'], ['outlined', f'{len(F):,}'], ['examples', str(len(idx))]],
     )  # fmt: skip
 
@@ -812,6 +891,8 @@ def find_by_text(
     max_tiles: int = 2000,
     detector=None,
     expand: bool = False,
+    object_um_max: float | None = None,
+    exclude: str = '',
 ) -> dict:
     """Outline everything in the scope that matches the text ``prompt`` (one class per phrase: "nucleus. gland").
 
@@ -821,9 +902,14 @@ def find_by_text(
 
     ``expand`` (one phrase): the confident matches of about the object's size become the examples of
     :func:`segment_everything`, which outlines every object in the scope and keeps those like them. For dense small
-    objects (nuclei) the text model alone marks only a few; this finds the rest."""
+    objects (nuclei) the text model alone marks only a few; this finds the rest.
+
+    ``object_um`` – ``object_um_max``: a size range (µm): the scale fits the smallest, matches outside it are dropped.
+    ``exclude``: phrases not to find ("red blood cell. lymphocyte"): matches mostly covered by a confident match of
+    one of them are dropped (and, with ``expand``, outlines like those are not kept)."""
     t0 = time.perf_counter()
     names = grounding.phrases(prompt)
+    ex_names = [n for n in grounding.phrases(exclude or '') if n not in names]
     expand = bool(expand) and len(names) == 1
     upd = (_Sub(job, 0.0, 0.5) if expand else job).update if job else (lambda *a, **k: None)
     if not names:
@@ -833,20 +919,24 @@ def find_by_text(
     ex = Examples(registry, sid, examples) if examples else None
     ex = ex if ex else None
     mpp = _mpp(src)
-    d0 = ex.diameter() if ex else float(object_um or 10.0) / mpp  # object diameter, level-0 px
+    d_lo, d_hi, ranged = _size_range(mpp, object_um, object_um_max)
+    ranged = ranged and not ex
+    d0 = ex.diameter() if ex else math.sqrt(d_lo * d_hi)  # object diameter, level-0 px (a range: its middle)
     geom, where = scope_geometry(registry, sid, scope, tissue=True)
     if detector is None:
         upd(0.0, 'loading the model…')
         detector = text_detector(model, lambda f, m: upd(0.0, m))
     T = int(getattr(detector, 'tile', 800))
-    f = max(0.5, d0 / 48.0)  # level-0 px per model px (≥ 0.5: at most 2× enlarged)
+    f = max(0.5, (d_lo if ranged else d0) / 48.0)  # level-0 px per model px (≥ 0.5: at most 2× enlarged)
+    if ranged:  # the largest still well inside a tile
+        f = max(f, d_hi / (0.45 * T))
     lv = 0
     for i, Lv in enumerate(info.levels):
         if Lv.downsample <= f * 1.0001:
             lv = i
     ds = info.levels[lv].downsample
     S0 = T * f  # a tile's side, level-0 px
-    O0 = min(S0 / 4, max(32 * f, 2.5 * d0))  # overlap: objects cut by one tile are whole in the next
+    O0 = min(S0 / 4, max(32 * f, 2.5 * d0, 1.1 * d_hi if ranged else 0))  # objects cut by a tile: whole in the next
     step = S0 - O0
     gx0, gy0, gx1, gy1 = geom.bounds if geom is not None else (0, 0, info.width, info.height)
     tiles = []
@@ -871,6 +961,8 @@ def find_by_text(
         svc = sam_service()
         impl = svc._load()
     polys, boxes, scores, labels = [], [], [], []
+    ex_boxes: list = []
+    ex_scores: list = []
     name = _unique(registry, sid, name or f'Text · {", ".join(names)}'[:60])
     prov = f'{name} (searching…)'
     last_pub = time.perf_counter()
@@ -887,7 +979,7 @@ def find_by_text(
         tw, th = max(1, int(round((x1 - x0) / f))), max(1, int(round((y1 - y0) / f)))
         if (tw, th) != (rgb.shape[1], rgb.shape[0]):
             rgb = np.asarray(Image.fromarray(rgb).resize((tw, th), Image.BILINEAR))
-        out = detector.detect(rgb, names, min_score=floor)
+        out = detector.detect(rgb, names + ex_names, min_score=floor)
         b, sc, lab = out[:3]
         masks = out[3] if len(out) > 3 else None
         if not len(b):
@@ -910,6 +1002,10 @@ def find_by_text(
             if job is not None and job.cancelled:
                 job.update()
             bx = b[k]
+            if lab[k] >= len(names):  # an excluded phrase: its box is enough
+                ex_boxes.append([x0 + bx[0] * f, y0 + bx[1] * f, x0 + bx[2] * f, y0 + bx[3] * f])
+                ex_scores.append(float(sc[k]))
+                continue
             if masks is not None:
                 m = np.asarray(masks[k], bool)
             else:
@@ -942,6 +1038,21 @@ def find_by_text(
         raise ValueError(f'nothing matching "{", ".join(names)}" in {where} (try other words or a larger object size)')
     upd(0.95, f'{len(polys):,} matches: removing duplicates…')
     keep = _box_nms(np.asarray(boxes, float), np.asarray(scores, float))
+    ok = np.ones(len(keep), bool)
+    n_size = n_excl = 0
+    if ranged:
+        ok &= _in_size([polys[i] for i in keep], d_lo, d_hi)
+        n_size = int((~ok).sum())
+    if ex_boxes:
+        hit = _excluded(np.asarray(boxes, float)[keep], np.asarray(scores, float)[keep], np.asarray(ex_boxes, float),
+                        np.asarray(ex_scores, float))  # fmt: skip
+        n_excl = int((hit & ok).sum())
+        ok &= ~hit
+    keep = np.asarray(keep)[ok]
+    if not len(keep):
+        why = ' and '.join(w for w, n in ((f'{n_size} outside {d_lo * mpp:.3g}–{d_hi * mpp:.3g} µm', n_size),
+                                          (f'{n_excl} like "{", ".join(ex_names)}"', n_excl)) if n)  # fmt: skip
+        raise ValueError(f'every match of "{", ".join(names)}" in {where} was left out ({why})')
     polys = [polys[i] for i in keep]
     score = np.asarray(scores, float)[keep]
     lab = np.asarray(labels, np.int64)[keep]
@@ -949,6 +1060,10 @@ def find_by_text(
     F = _polys_features(polys, names[0])
     sim = _text_sim(score)
     note = f'{label} at {f:.2g} level-0 px per model px'
+    if n_size:
+        note += f'; {n_size:,} outside {d_lo * mpp:.3g}–{d_hi * mpp:.3g} µm left out'
+    if ex_names:
+        note += f'; {n_excl:,} like "{", ".join(ex_names)}" left out'
     if ex:
         upd(0.97, f'comparing {len(polys):,} matches with the examples…')
         lvm = _level_for(src, d0)
@@ -961,7 +1076,8 @@ def find_by_text(
         note += f'; also like the examples ({", ".join(keys)})'
     if expand:
         out = _expand(registry, sid, polys, boxes, keep, score, sim, d0, scope, strictness, name, names[0],
-                      classes[0][1], label, job)  # fmt: skip
+                      classes[0][1], label, job, size=(d_lo, d_hi) if ranged else None,
+                      ex_boxes=np.asarray(ex_boxes, float).reshape(-1, 4))  # fmt: skip
         if out is not None:
             out.update(seconds=round(time.perf_counter() - t0, 1))
             out['kpis'] = [*out['kpis'], ['text matches', f'{len(polys):,}']]
@@ -1285,7 +1401,8 @@ def run(registry, sid: str, body: dict, job: Job | None = None) -> dict:
             ex = None
         return segment_everything(registry, sid, examples=ex, scope=body.get('scope'),
                                   strictness=float(body.get('strictness', 0.5)),
-                                  object_um=float(body.get('object_um') or 10), name=body.get('name'), job=job)  # fmt: skip
+                                  object_um=float(body.get('object_um') or 10), name=body.get('name'), job=job,
+                                  object_um_max=body.get('object_um_max'))  # fmt: skip
     if mode == 'areas':
         if not body.get('training'):
             raise ValueError('pick the layer with the training shapes')
@@ -1302,5 +1419,6 @@ def run(registry, sid: str, body: dict, job: Job | None = None) -> dict:
         return find_by_text(registry, sid, prompt=body.get('prompt') or '', model=body.get('model') or 'grounding',
                             examples=ex, scope=body.get('scope'), strictness=float(body.get('strictness', 0.5)),
                             object_um=float(body.get('object_um') or 10), name=body.get('name'), job=job,
-                            expand=bool(body.get('expand')))  # fmt: skip
+                            expand=bool(body.get('expand')), object_um_max=body.get('object_um_max'),
+                            exclude=body.get('exclude') or '')  # fmt: skip
     raise ValueError(f'unknown mode {mode!r} (objects | segment | areas | text | cells)')

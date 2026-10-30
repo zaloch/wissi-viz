@@ -588,11 +588,23 @@ def _brightfield(w, data, s):
     n_before = pg.locator('#f-results .result').count()
     w.check('#f-run', f'() => document.querySelectorAll("#f-results .result").length > {n_before}', timeout=60000)
     assert pg.locator('#f-results .result >> nth=0').get_attribute('data-layer').startswith('Text · nucleus, gland')
+    # exclude by name and the size range: shown for text models, sent with the run
+    assert pg.is_visible('#f-excl-row') and pg.is_visible('#f-size-max') and pg.is_visible('#f-notin')
+    pg.fill('#f-exclude', 'fold')
+    pg.dispatch_event('#f-exclude', 'input')
+    pg.wait_for_function('() => /not fold/.test(document.getElementById("f-hint").textContent)')
+    pg.fill('#f-size-max', '30')
+    pg.dispatch_event('#f-size-max', 'input')
+    pg.wait_for_function('() => /[0-9]–30 µm/.test(document.getElementById("f-hint").textContent)')
+    pg.fill('#f-size-max', '')
+    pg.fill('#f-exclude', '')
+    pg.dispatch_event('#f-exclude', 'input')
     # a cell model: no prompt, a detected cell layer
     pg.select_option('#f-model', 'classic')
     pg.wait_for_function(
         '() => document.getElementById("f-text-row").hidden && document.getElementById("f-run").textContent === "Find cells"'
     )
+    assert pg.is_hidden('#f-excl-row') and pg.is_hidden('#f-size-row')
     assert pg.locator('#f-model option[value=classpose]').count() == 1
     n_before = pg.locator('#f-results .result').count()
     w.check('#f-run', f'() => document.querySelectorAll("#f-results .result").length > {n_before}', timeout=60000)

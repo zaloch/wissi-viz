@@ -594,9 +594,12 @@
         <span>Then find all like the best matches: they become examples for <i>segment everything</i> (finds the dense small objects, e.g. nuclei, the text model misses; one phrase)</span></label>
       <div class="panel-note" id="f-lic-row" hidden><span id="f-lic-msg"></span> <button id="f-lic" class="btn" style="margin-left: 4px">Read the licence…</button></div>
       <div class="f2" id="f-cand-row">Search <select id="f-cand" aria-label="Objects to search"></select></div>
-      <div class="f2" id="f-size-row" hidden>Object size <span class="row"><input type="range" id="f-size" min="3" max="60" step="1" value="10" aria-label="Object size"><output id="f-size-o" class="mono" style="width: 52px; text-align: right">10 µm</output></span></div>
+      <div class="f2" id="f-size-row" hidden>Object size <span class="row" style="gap: 6px; align-items: center"><input type="number" id="f-size" min="1" max="1000" step="0.5" value="10" aria-label="Smallest object size (µm)" style="width: 64px">
+        <span class="dim">to</span><input type="number" id="f-size-max" min="1" max="2000" step="0.5" placeholder="any" aria-label="Largest object size (µm); empty: about the smallest" title="Optional: the largest size. Matches outside the range are left out." style="width: 64px"><span class="dim">µm</span></span></div>
+      <div class="f2" id="f-excl-row" hidden>Exclude <input type="text" id="f-exclude" placeholder="what not to find (optional)" aria-label="What not to find (one phrase each, separated by full stops)" title="Matches mostly covered by one of these are left out" spellcheck="false"></div>
       <div class="f2" id="f-detail-row" hidden>Detail <select id="f-detail" aria-label="Detail"><option value="coarse">coarse · 8 µm/px</option><option value="medium" selected>medium · 4 µm/px</option><option value="fine">fine · 2 µm/px</option></select></div>
       <div class="f2">Where <select id="f-where" aria-label="Where"><option value="view">this view</option><option value="slide">the whole slide</option></select></div>
+      <div class="f2">Not inside <select id="f-notin" aria-label="Leave out the regions of a layer" title="Leave out the regions (polygons) of this layer, e.g. areas to ignore"><option value="">—</option></select></div>
       <div class="f2" id="f-strict-row">Strictness <span class="row"><input type="range" id="f-strict" min="0" max="1" step="0.05" value="0.5" aria-label="Strictness"><output id="f-strict-o" class="mono" style="width: 52px; text-align: right">0.50</output></span></div>
       <div class="panel-note" id="f-hint"></div>
       <button class="run find" id="f-run">Find all</button>

@@ -1509,7 +1509,9 @@ let findMode = 'objects', findCaps = null, findJob = null;
 const CELL_MODELS = { cellpose: 'Cellpose-SAM', classic: 'The classic stain threshold', classpose: 'Classpose' };
 for (const b of $('f-modes').children) b.onclick = () => { findMode = b.dataset.mode; renderDraw(); };
 $('f-strict').oninput = () => { $('f-strict-o').textContent = (+$('f-strict').value).toFixed(2); };
-$('f-size').oninput = () => { $('f-size-o').textContent = `${$('f-size').value} µm`; };
+const sizeText = () => { const lo = +$('f-size').value, hi = +$('f-size-max').value; return hi && hi !== lo ? `${Math.min(lo, hi)}–${Math.max(lo, hi)} µm` : `about ${lo} µm`; };
+['f-size', 'f-size-max', 'f-exclude'].forEach((id) => { $(id).oninput = () => renderDraw(); });
+$('f-notin').onchange = () => renderDraw();
 $('f-prompt').oninput = () => renderDraw();
 $('f-prompt').onkeydown = (e) => { if (e.key === 'Enter' && !$('f-run').disabled) { e.preventDefault(); $('f-run').click(); } };
 $('f-model').onchange = () => renderDraw();
@@ -1577,6 +1579,9 @@ async function renderDraw() {
   ws.replaceChildren(h('option', { value: 'view' }, 'this view'), h('option', { value: 'slide' }, 'the whole slide'),
     ...regions.map((L) => h('option', { value: `region:${L.name}` }, `inside ${L.name}`)));
   ws.value = [...ws.options].some((o) => o.value === keepW) ? keepW : 'view';
+  const ns = $('f-notin'), keepN = ns.value;
+  ns.replaceChildren(h('option', { value: '' }, '—'), ...regions.map((L) => h('option', { value: L.name }, L.name)));
+  ns.value = [...ns.options].some((o) => o.value === keepN) ? keepN : '';
   $('f-cand-row').hidden = findMode !== 'objects';
   const tx = caps.text || {}, s3 = tx.sam3 || {}, cellCaps = caps.cells || {};
   for (const o of $('f-model').options) {   // what this server has: a cell model not installed
@@ -1587,7 +1592,7 @@ async function renderDraw() {
   const model = $('f-model').value, cellModel = model in CELL_MODELS;
   $('f-size-row').hidden = findMode !== 'segment' && (findMode !== 'text' || cellModel);
   $('f-model-row').hidden = findMode !== 'text';
-  $('f-text-row').hidden = $('f-expand-row').hidden = findMode !== 'text' || cellModel;
+  $('f-text-row').hidden = $('f-expand-row').hidden = $('f-excl-row').hidden = findMode !== 'text' || cellModel;
   $('f-lic-row').hidden = findMode !== 'text' || model !== 'sam3';
   $('f-lic-msg').textContent = s3.accepted ? `SAM License accepted${s3.downloaded ? '' : ' · downloads ~3.3 GB from Hugging Face on the first run'}.`
     : 'SAM 3 needs its licence accepted first.';
@@ -1608,7 +1613,7 @@ async function renderDraw() {
       else msg = `${pos} example${pos === 1 ? '' : 's'} → every similar object of ${cs.value}.`;
     } else if (findMode === 'segment') {
       msg = pos ? `${caps.sam || 'SAM'} outlines every object, keeping those like your ${pos} example${pos === 1 ? '' : 's'}.`
-        : `${caps.sam || 'SAM'} outlines every object about ${$('f-size').value} µm across (no examples: keeps all). The whole slide can take long without a GPU.`;
+        : `${caps.sam || 'SAM'} outlines every object ${sizeText()} across (no examples: keeps all). The whole slide can take long without a GPU.`;
     } else if (findMode === 'text' && cellModel) {
       const where = $('f-where').selectedOptions[0]?.textContent || 'this view';
       msg = model === 'classpose'
@@ -1620,8 +1625,8 @@ async function renderDraw() {
       const dl = model === 'sam3' ? (s3.downloaded ? '' : ' Downloads SAM 3 once (~3.3 GB from Hugging Face).') : (g.downloaded ? '' : ` Downloads Grounding DINO once (~${g.size_mb || 250} MB).`);
       if (model === 'sam3' && !s3.accepted) { msg = 'Accept the SAM License to use SAM 3, or pick Grounding DINO + SAM 2.1.'; ok = false; }
       else if (!words.length) { msg = 'Type what to find, e.g. “nucleus”, or “gland. vessel” (one class per phrase).'; ok = false; }
-      else if ($('f-expand').checked && words.length === 1) msg = `${model === 'sam3' ? 'SAM 3' : 'Grounding DINO + SAM 2.1'} finds ${words[0]} about ${$('f-size').value} µm across; the best matches then become examples and SAM outlines everything like them.${dl} The whole slide can take long without a GPU.`;
-      else msg = `${model === 'sam3' ? 'SAM 3' : 'Grounding DINO + SAM 2.1'} finds every ${words.join(', ')} about ${$('f-size').value} µm across${pos ? `, keeping those like your ${pos} example${pos === 1 ? '' : 's'}` : ''}.${dl} ${model === 'sam3' ? 'SAM 3 handles dense small objects well.' : 'Grounding DINO finds larger structures (glands, vessels, fat, folds) far better than dense nuclei: for those, use Segment everything with examples, or SAM 3.'} The whole slide can take long without a GPU.`;
+      else if ($('f-expand').checked && words.length === 1) msg = `${model === 'sam3' ? 'SAM 3' : 'Grounding DINO + SAM 2.1'} finds ${words[0]} ${sizeText()} across; the best matches then become examples and SAM outlines everything like them.${dl} The whole slide can take long without a GPU.`;
+      else msg = `${model === 'sam3' ? 'SAM 3' : 'Grounding DINO + SAM 2.1'} finds every ${words.join(', ')} ${sizeText()} across${$('f-exclude').value.trim() ? `, not ${$('f-exclude').value.trim()}` : ''}${pos ? `, keeping those like your ${pos} example${pos === 1 ? '' : 's'}` : ''}.${dl} ${model === 'sam3' ? 'SAM 3 handles dense small objects well.' : 'Grounding DINO finds larger structures (glands, vessels, fat, folds) far better than dense nuclei: for those, use Segment everything with examples, or SAM 3.'} The whole slide can take long without a GPU.`;
     } else {
       const k = classes.filter((c) => c.n > 0);
       msg = k.length >= 2 ? `Train on ${k.map((c) => `${c.name} (${c.n})`).join(', ')} in ${drawLayer} → map those areas.`
@@ -1635,13 +1640,14 @@ async function renderDraw() {
 }
 
 function findScope() {
-  const v = $('f-where').value, p = curPane();
+  const v = $('f-where').value, p = curPane(), notin = $('f-notin').value;
+  const exclude = notin ? { exclude: { layer: notin } } : {};
   if (v === 'view' && p?.view) {
     const hw = p.rect.w / 2 / p.view.scale, hh = p.rect.h / 2 / p.view.scale;
-    return { kind: 'view', rect: [p.view.cx - hw, p.view.cy - hh, p.view.cx + hw, p.view.cy + hh] };
+    return { kind: 'view', rect: [p.view.cx - hw, p.view.cy - hh, p.view.cx + hw, p.view.cy + hh], ...exclude };
   }
-  if (v.startsWith('region:')) return { kind: 'region', layer: v.slice(7) };
-  return { kind: 'slide' };
+  if (v.startsWith('region:')) return { kind: 'region', layer: v.slice(7), ...exclude };
+  return { kind: 'slide', ...exclude };
 }
 $('f-run').onclick = async () => {
   const sid = activeSlide();
@@ -1651,7 +1657,8 @@ $('f-run').onclick = async () => {
   const body = {
     mode: findMode, scope: findScope(), strictness: +$('f-strict').value,
     examples: { layer: drawLayer, classes: cls ? [cls] : null, picks: mine.map(({ layer, index, neg }) => ({ layer, index, neg })), name: cls || null, color: $('a-color').value },
-    candidates: $('f-cand').value || null, object_um: +$('f-size').value, training: drawLayer, detail: $('f-detail').value,
+    candidates: $('f-cand').value || null, object_um: +$('f-size').value, object_um_max: +$('f-size-max').value || null,
+    exclude: $('f-exclude').value, training: drawLayer, detail: $('f-detail').value,
     prompt: $('f-prompt').value, model: $('f-model').value, expand: $('f-expand').checked,
   };
   if (findMode === 'text') findCaps = null;   // the model may download: show it as downloaded afterwards

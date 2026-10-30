@@ -282,7 +282,14 @@ def _brightfield(w, data, s):
     pg = w.pg
     sid = next(x['id'] for x in s.slides() if x['name'] == 'he.svs')
     _open_picker(w, '#b-open')  # the paste box: a path, then Open
-    pg.fill('#paths', str(data / 'he.svs'))
+    for attempt in range(3):  # a slow runner can still wipe what was typed while the picker opens: type again
+        pg.fill('#paths', str(data / 'he.svs'))
+        try:
+            pg.wait_for_function('() => document.getElementById("paths").value.includes("he.svs")', timeout=8000)
+            break
+        except Exception:
+            if attempt == 2:
+                raise
     w.check(
         '#b-paths',
         f'() => ({G})().panes.some((p) => p.slide?.info?.id === {json.dumps(sid)}) && !document.getElementById("picker").classList.contains("on")',

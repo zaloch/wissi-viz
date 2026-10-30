@@ -38,15 +38,17 @@ jobs:
           uv pip install -q -e ".[analysis,io,sam3,cells]" pyarrow
       - name: Run
         run: |
-          set -o pipefail
-          uv run --no-sync wissi-viz validate run --yes 2>&1 | grep -v -E "pci_bus_id|unauthenticated|quantization" | tail -60
+          uv run --no-sync wissi-viz validate run --yes > "$RUNNER_TEMP/run.txt" 2>&1 || {
+            echo "::error::validate run failed :: $(grep -v -E 'pci_bus_id|unauthenticated|quantization' "$RUNNER_TEMP/run.txt" | tail -c 3500 | tr '\n' ' ')"; exit 1; }
+          grep -v -E "pci_bus_id|unauthenticated|quantization" "$RUNNER_TEMP/run.txt" | tail -80
+          echo "::notice::$(grep -E '^  [a-z0-9-]+: ' "$RUNNER_TEMP/run.txt" | tr '\n' '|' | head -c 3800)"
           echo "::notice::$(tr '\n' ' ' < /mnt/pack/validation/validation.md | head -c 3800)"
       - name: Publish
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          files=$(uv run --no-sync wissi-viz validate publish-list)
+          files=$(uv run --no-sync wissi-viz validate publish-list 2>/dev/null) || exit 0
           [ -n "$files" ] || exit 0
           gh release view validation >/dev/null 2>&1 || gh release create validation --prerelease --title "Find all against reference outlines (latest run)" \
             --notes "Layers, the NuInsSeg mosaic (CC BY 4.0, see NUINSSEG-ATTRIBUTION.md), scores (validation.md) and pictures from the latest run of .github/workflows/validate.yml. Open them in the app with: wissi-viz validate open. No model weights are published here."

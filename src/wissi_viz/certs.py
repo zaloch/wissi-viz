@@ -1,12 +1,15 @@
-"""Trust the operating system's certificates for downloads (``--system-certs`` / ``WISSI_VIZ_SYSTEM_CERTS=1``).
+"""Downloads trust the operating system's certificates (the default for the ``wissi-viz`` commands and the app).
 
 Python checks HTTPS against its own certificate list, not the macOS keychain or the Windows certificate store. On a
-network that inspects HTTPS (most corporate networks) every download then fails with ``CERTIFICATE_VERIFY_FAILED``.
-With the flag, wissi-viz verifies certificates with the operating system instead (via ``truststore``), as browsers
-do, so whatever your IT department installed is trusted: sample pack and demo slides, benchmark images, SAM weights
-and tile APIs.
+network that inspects HTTPS (most corporate networks), or with a Python whose certificate list was never installed
+(python.org's macOS installer), every download then fails with ``CERTIFICATE_VERIFY_FAILED``. So wissi-viz verifies
+certificates with the operating system instead (via ``truststore``), as browsers do: whatever the computer trusts,
+including what an IT department installed, is trusted for the sample pack and demo slides, benchmark images, model
+downloads (SAM, Grounding DINO, SAM 3 from Hugging Face) and tile APIs. ``--no-system-certs`` (or
+``WISSI_VIZ_SYSTEM_CERTS=0``) keeps Python's own list.
 
-From Python (NiceGUI apps, notebooks): ``wissi_viz.certs.use_system_certs()`` before the first download.
+From Python (NiceGUI apps, notebooks) nothing changes by itself: ``wissi_viz.certs.use_system_certs()`` before the first
+download.
 """
 
 from __future__ import annotations
@@ -16,11 +19,12 @@ import os
 
 import truststore
 
-FLAG = '--system-certs'
+FLAG = '--system-certs'  # the default now; still accepted
+OFF = '--no-system-certs'
 ENV = 'WISSI_VIZ_SYSTEM_CERTS'
 HELP = (
-    "trust this computer's certificates (macOS keychain, Windows store) for downloads: for networks that "
-    f'inspect HTTPS, e.g. corporate ones (or set {ENV}=1)'
+    f"keep Python's own certificate list for downloads instead of this computer's (macOS keychain, Windows store), "
+    f'which is the default (or set {ENV}=0)'
 )
 _on = False
 
@@ -38,23 +42,31 @@ def enabled() -> bool:
 
 
 def take_flag(argv: list[str]) -> list[str]:
-    """Remove ``--system-certs`` from ``argv`` (anywhere) and switch it on if given or if ``WISSI_VIZ_SYSTEM_CERTS`` is set."""
-    rest = [a for a in argv if a != FLAG]
-    if len(rest) != len(argv) or os.environ.get(ENV, '').strip().lower() in ('1', 'true', 'yes', 'on'):
+    """Remove ``--system-certs`` / ``--no-system-certs`` from ``argv`` (anywhere) and use the system's certificates
+    unless ``--no-system-certs`` is given or ``WISSI_VIZ_SYSTEM_CERTS`` is 0 / false / no / off."""
+    rest = [a for a in argv if a not in (FLAG, OFF)]
+    off = OFF in argv or os.environ.get(ENV, '').strip().lower() in ('0', 'false', 'no', 'off')
+    if not off:
         use_system_certs()
     return rest
 
 
 def add_arg(ap: argparse.ArgumentParser) -> None:
-    """List the flag in a command's ``--help`` (it is taken out of the arguments before parsing)."""
-    ap.add_argument(FLAG, action='store_true', help=HELP)
+    """List the opt-out in a command's ``--help`` (it is taken out of the arguments before parsing)."""
+    ap.add_argument(OFF, action='store_true', help=HELP)
 
 
 def hint(error: object) -> str:
     """A next step for a certificate failure, '' for any other error."""
-    if 'CERTIFICATE_VERIFY_FAILED' not in str(error) or _on:
+    if 'CERTIFICATE_VERIFY_FAILED' not in str(error):
         return ''
+    if _on:
+        return (
+            "\n\nThis computer's certificates do not trust that server either: the network may block it, or its "
+            'certificate is not installed here (ask IT for the certificate of the HTTPS-inspecting proxy).'
+        )
     return (
-        f'\n\nThis network inspects HTTPS (common on corporate networks). Run again with {FLAG} '
-        f'(or set {ENV}=1) to trust the certificates installed on this computer.'
+        f"\n\nPython's own certificate list does not trust that server (common on networks that inspect HTTPS, and with "
+        f"python.org's macOS Python). Run without {OFF} / {ENV}=0, or call wissi_viz.certs.use_system_certs(), to "
+        "trust this computer's certificates."
     )

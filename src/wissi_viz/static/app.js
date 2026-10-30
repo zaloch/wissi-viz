@@ -2126,6 +2126,8 @@ async function start() {
   panes = (asked.length ? asked : st.show && st.show.length ? st.show : slides.slice(0, Math.min(4, slides.length)).map((x) => x.id)).slice(0, MAX_PANES);
   const tabAsked = new URLSearchParams(location.search).get('tab');
   if (tabAsked) setTab(tabAsked);
+  const fallback = new URLSearchParams(location.search).get('fallback');   // the desktop app could not open its own window
+  if (fallback) { toast({ kind: 'bad', title: 'Opened in a browser window instead of the app window', sub: fallback, ms: 20000 }); log(`app window: ${fallback}`, true); }
   apply();
   renderRecent(st.recent);
   if (!CAPS.open) {

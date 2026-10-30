@@ -87,7 +87,8 @@ uv run wissi-viz --benchmark         # report → ./wissi-viz-benchmark.md
 | `lgpl` | opt-in: OpenSlide (MRXS, BIF) and libCZI |
 
 wissi-viz runs on Windows, macOS (Apple silicon and Intel) and Linux (x86_64, ARM), with Python 3.10–3.14. On a
-network that inspects HTTPS (corporate), add `--system-certs` to any command (or set `WISSI_VIZ_SYSTEM_CERTS=1`).
+network that inspects HTTPS (corporate) downloads just work: wissi-viz trusts this computer's certificates, as browsers
+do (`--no-system-certs` or `WISSI_VIZ_SYSTEM_CERTS=0` to use Python's own list).
 
 ## Quick start
 

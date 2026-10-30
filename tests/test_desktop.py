@@ -409,3 +409,15 @@ def test_windows_taskbar_name_and_icon_properties():
         assert D._set_window_props(int(hwnd), props)
     finally:
         user32.DestroyWindow(ctypes.c_void_p(hwnd))
+
+
+def test_browser_fallback_says_why(monkeypatch):
+    """Without the app window, the browser page is told why (it shows it), so the fallback is never silent."""
+    opened = []
+    monkeypatch.setattr(D, '_chromium', lambda: None)
+    monkeypatch.setattr(D.webbrowser, 'open', opened.append)
+    srv = types.SimpleNamespace(thread=types.SimpleNamespace(is_alive=lambda: False))
+    D.run_browser('http://127.0.0.1:9', srv, 'pywebview is not installed here')
+    assert opened == ['http://127.0.0.1:9/app?fallback=pywebview%20is%20not%20installed%20here']
+    D.run_browser('http://127.0.0.1:9', srv)
+    assert opened[-1] == 'http://127.0.0.1:9/app'

@@ -6,7 +6,7 @@ wissi-viz serve /data/slides --port 8010 --cache-dir /var/cache/wissi-viz
 wissi-viz serve --allow-open /data/slides --key s3cret     # visitors open slides from that folder
 wissi-viz serve --connect halolink.json                    # images from a tile API
 wissi-viz info slide.svs
-wissi-viz --demo --system-certs        # on networks that inspect HTTPS (corporate): trust this computer's certificates
+wissi-viz --demo --no-system-certs     # Python's own certificate list instead of this computer's (the default)
 """
 
 from __future__ import annotations

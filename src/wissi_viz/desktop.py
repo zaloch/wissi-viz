@@ -29,6 +29,7 @@ import sys
 import sysconfig
 import threading
 import time
+import urllib.parse
 import uuid
 import webbrowser
 from pathlib import Path
@@ -379,8 +380,8 @@ def _chromium() -> str | None:
     return next((str(c) for c in cands if c.exists()), None)
 
 
-def run_browser(url: str, server: _Server) -> None:
-    page = f'{url}/app'
+def run_browser(url: str, server: _Server, why: str = '') -> None:
+    page = f'{url}/app' + (f'?fallback={urllib.parse.quote(why)}' if why else '')  # the page says why it is not the app
     exe = _chromium()
     if exe:
         prof = user_dir('cache') / 'app-window'
@@ -413,7 +414,10 @@ def _has_native() -> tuple[bool, str]:
     try:
         import webview  # noqa: F401
     except ImportError:
-        return False, 'pywebview is not installed (install "wissi-viz[desktop]")'
+        return False, (
+            'pywebview is not installed here, so there is no app window: install it with uv sync --extra desktop '
+            '(or --extra all), or pip install "wissi-viz[desktop]"'
+        )
     if sys.platform.startswith('linux'):
         if not (importlib.util.find_spec('gi') or importlib.util.find_spec('qtpy')):
             return False, (
@@ -638,10 +642,10 @@ def main(argv: list[str] | None = None) -> None:
                 run_native(url, session, debug=a.debug)
                 return
             except Exception as e:  # noqa: BLE001  (e.g. WebView2 runtime / GTK missing at start)
-                why = f'native window failed: {e}'
+                why = f'native window failed: {e.__class__.__name__}: {e}'
         if not a.browser:
             print(f'wissi-viz: {why}; using a browser window', file=sys.stderr)
-        run_browser(url, server)
+        run_browser(url, server, '' if a.browser else why)
     finally:
         server.stop()
         session.shutdown()

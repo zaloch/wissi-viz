@@ -782,17 +782,27 @@ _STOP = {'and', 'or', 'with', 'without', 'the', 'a', 'an', 'of', 'in', 'on', 'no
          'negative', 'visible', 'small', 'large', 'big'}  # fmt: skip
 
 
+_CUT = {'on', 'in', 'with', 'without', 'near', 'under', 'over', 'at', 'inside', 'around', 'between', 'within', 'from',
+        'that', 'which', 'who', 'where', 'having', 'showing', 'containing'}  # fmt: skip
+
+
 def concept(phrase: str) -> str:
     """A short name for SAM 3 (trained on 1–3 word concepts) from a descriptive phrase: the phrase itself if short,
-    else its last word that is not a filler or a qualifier ("DAB stained and unstained neurons" → "neurons")."""
+    else the main noun: the last word that is not a filler or a qualifier, before the first preposition or -ing verb
+    ("DAB stained and unstained neurons" → "neurons", "a furry animal lying on a couch" → "animal")."""
     words = [w.strip('.,;:()"\'') for w in phrase.split()]
     words = [w for w in words if w]
     if len(words) <= 3:
         return ' '.join(words)
-    for w in reversed(words):
+    head = words
+    for i, w in enumerate(words):
+        if i and (w.lower() in _CUT or (w.lower().endswith('ing') and len(w) >= 5)):
+            head = words[:i]
+            break
+    for w in reversed(head):
         if w.lower() not in _STOP and w.isalpha():
             return w
-    return words[-1]
+    return head[-1]
 
 
 class DinoSam3:

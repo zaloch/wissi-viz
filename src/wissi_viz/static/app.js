@@ -1510,10 +1510,14 @@ const CELL_MODELS = { cellpose: 'Cellpose-SAM', classic: 'The classic stain thre
 for (const b of $('f-modes').children) b.onclick = () => { findMode = b.dataset.mode; renderDraw(); };
 $('f-strict').oninput = () => { $('f-strict-o').textContent = (+$('f-strict').value).toFixed(2); };
 const CONCEPT_STOP = new Set(['and', 'or', 'with', 'without', 'the', 'a', 'an', 'of', 'in', 'on', 'not', 'stained', 'unstained', 'positive', 'negative', 'visible', 'small', 'large', 'big']);
+const CONCEPT_CUT = new Set(['on', 'in', 'with', 'without', 'near', 'under', 'over', 'at', 'inside', 'around', 'between', 'within', 'from', 'that', 'which', 'who', 'where', 'having', 'showing', 'containing']);
 const conceptOf = (phrase) => {   // as findall.concept: a short name for SAM 3 from a description
   const w = phrase.split(/\s+/).map((x) => x.replace(/^[.,;:()"']+|[.,;:()"']+$/g, '')).filter(Boolean);
   if (w.length <= 3) return w.join(' ');
-  return [...w].reverse().find((x) => !CONCEPT_STOP.has(x.toLowerCase()) && /^[A-Za-z]+$/.test(x)) || w[w.length - 1];
+  let head = w;
+  const cut = w.findIndex((x, i) => i > 0 && (CONCEPT_CUT.has(x.toLowerCase()) || (x.toLowerCase().endsWith('ing') && x.length >= 5)));
+  if (cut > 0) head = w.slice(0, cut);
+  return [...head].reverse().find((x) => !CONCEPT_STOP.has(x.toLowerCase()) && /^[A-Za-z]+$/.test(x)) || head[head.length - 1];
 };
 const sizeText = () => { const lo = +$('f-size').value, hi = +$('f-size-max').value; return hi && hi !== lo ? `${Math.min(lo, hi)}–${Math.max(lo, hi)} µm` : `about ${lo} µm`; };
 ['f-size', 'f-size-max', 'f-exclude', 'f-s3name'].forEach((id) => { $(id).oninput = () => renderDraw(); });

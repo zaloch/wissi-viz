@@ -267,7 +267,9 @@ def test_dino_to_sam3_passes_the_best_boxes_as_examples():
 
     assert findall.concept('nucleus') == 'nucleus' and findall.concept('blood vessel') == 'blood vessel'
     assert findall.concept('DAB stained and Unstained Neurons') == 'Neurons'
-    assert findall.concept('cells with visible and not visible nucleus') == 'nucleus'
+    assert findall.concept('cells with visible and not visible nucleus') == 'cells'
+    assert findall.concept('a furry animal lying on a couch') == 'animal'
+    assert findall.concept('large round nuclei in the tumour region') == 'nuclei'
 
     class Dino:
         def detect(self, rgb, names, min_score=0.1):

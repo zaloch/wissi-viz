@@ -1,4 +1,5 @@
-# Find all against reference outlines (wissi-viz validate): NuInsSeg H&E nuclei (hand-drawn), CAMELYON16 metastases
+# Find all against reference outlines (wissi-viz validate): NuInsSeg H&E nuclei (hand-drawn), rat DRG neurons (3 experts),
+# CAMELYON16 metastases
 # (pathologists' outlines) and Xenium nuclei (10x, DAPI). Publishes the layers, the NuInsSeg mosaic, the scores and
 # pictures as the GitHub release `validation` (replaced on every run), which `wissi-viz validate open` shows in the app.
 name: validate
@@ -33,6 +34,7 @@ jobs:
           df -h / /mnt; free -g
       - name: Install
         run: |
+          sudo apt-get install -y -q 7zip libarchive-tools > /dev/null 2>&1 || sudo apt-get install -y -q p7zip-full libarchive-tools > /dev/null 2>&1 || true
           uv venv -p 3.12 -q
           uv pip install -q torch torchvision --index-url https://download.pytorch.org/whl/cpu
           uv pip install -q -e ".[analysis,io,sam3,cells]" pyarrow

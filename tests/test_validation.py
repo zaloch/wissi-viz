@@ -101,3 +101,43 @@ def test_cli_lists_validate(capsys):
     with pytest.raises(SystemExit):
         cli.main(['validate', '--help'])
     assert 'NuInsSeg' in capsys.readouterr().out
+
+
+def test_drg_mosaic_and_a_run(tmp_path, monkeypatch):
+    """The rat DRG case from its archive's layout (NF/images, NF/masks/GT_Estimation): the mosaic, the experts'
+    neurons, the pixel size estimated from them, and a run."""
+    import tifffile
+    from PIL import Image
+
+    from wissi_viz import annio, validation
+    from wissi_viz.session import Session
+
+    d = tmp_path / 'validation'
+    (d / 'layers').mkdir(parents=True)
+    nf = d / 'drg' / 'Annotations_ratDRG' / 'NF'
+    (nf / 'images').mkdir(parents=True)
+    (nf / 'masks' / 'GT_Estimation').mkdir(parents=True)
+    rng = np.random.default_rng(5)
+    yy, xx = np.mgrid[0:400, 0:500]
+    for k in (1, 2):
+        img = rng.normal(300, 30, (400, 500)).clip(0)
+        mask = np.zeros((400, 500), np.uint8)
+        for cx, cy in ((100, 100), (300, 120), (200, 280), (400, 300)):
+            m = (xx - cx) ** 2 + (yy - cy) ** 2 < 40**2
+            img[m] += 3000
+            mask[m] = 255
+        tifffile.imwrite(nf / 'images' / f'000{k}.tif', img.astype(np.uint16))
+        Image.fromarray(mask).save(nf / 'masks' / 'GT_Estimation' / f'000{k}.png')
+    monkeypatch.setattr(validation, '_zenodo_file', lambda *a, **k: pytest.fail('no download expected'))
+    slide, ref, mpp = validation.drg_mosaic(d, log=lambda m: None)
+    R = annio.read_geoparquet(ref)
+    assert len(R) == 8 and mpp == pytest.approx(validation.DRG_NEURON_UM / 80, rel=0.08)
+    s = Session(cache_dir=tmp_path / 'cache', remember=False)
+    try:
+        out = validation.run_drg(s, d, ['nothing-here'], log=lambda m: None)
+        assert out['reference'] == 8 and out['methods'] == {}
+        sid = s.open([slide], trusted=True)['opened'][0]
+        assert s.registry.info(sid)['channels'][0]['name'] == 'Neurofilament'
+    finally:
+        s.shutdown()
+    assert 'drg-mosaic' in validation.session_file(d).read_text(encoding='utf-8')

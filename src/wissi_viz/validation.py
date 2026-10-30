@@ -8,6 +8,10 @@ Three cases, each a slide with the reference and one layer per method:
 * **NuInsSeg** (H&E nuclei outlined by hand, 31 human and mouse organs, CC BY 4.0): a mosaic slide of patches, one or
   two per organ. Methods: Grounding DINO + SAM 2.1, SAM 3, Grounding DINO → SAM 3, segment everything, the cell
   models. Score: nuclei matched one-to-one at IoU ≥ 0.5 (precision, recall, F1).
+* **Rat DRG** (neurofilament immunofluorescence, neurons outlined by three experts and merged into a consensus, CC BY
+  4.0): a mosaic of six fields. Methods: Grounding DINO → SAM 3, SAM 3, Grounding DINO + SAM 2.1, segment everything,
+  sized for neurons (15–60 µm), so that satellite glia and Schwann cells are not counted. Score: neurons matched at
+  IoU ≥ 0.5.
 * **CAMELYON16 test_065** (lymph-node metastases outlined by pathologists, CC0): the region around the lesions.
   Methods: areas (a pixel classifier trained on two small boxes of each kind, as a user would brush them), SAM 3 and
   Grounding DINO → SAM 3 by name. Score: Dice of the tumour area.
@@ -28,6 +32,8 @@ import json
 import math
 import os
 import re
+import shutil
+import subprocess
 import time
 import urllib.request
 import zipfile
@@ -49,7 +55,9 @@ NUINSSEG_RECORD = 'https://zenodo.org/api/records/10518968'  # NuInsSeg (Mahbod 
 NUINSSEG_MPP = 0.25  # µm per pixel (40× objective); approximate: used for object sizes only
 CAMELYON = 'camelyon16-test-065'
 XENIUM = 'xenium-breast'
-CASES = ('nuinsseg', 'camelyon', 'xenium')
+CASES = ('nuinsseg', 'drg', 'camelyon', 'xenium')
+DRG_RECORD = 'https://zenodo.org/api/records/6546069'  # rat DRG, Schulte, Troidl et al. 2023, CC BY 4.0
+DRG_NEURON_UM = 30.0  # typical rat DRG neuron diameter: sets the pixel size (the images carry none)
 COLORS = {'Reference': '#3ddc84', 'Expert': '#3ddc84'}
 METHOD_COLORS = ['#ff5ca8', '#5ac8fa', '#ffb454', '#c38cff', '#ffd166', '#7ee2a8', '#ff7b7b']
 
@@ -202,6 +210,146 @@ def _write_rgb(path: Path, rgb: np.ndarray, mpp: float) -> None:
         for _ in range(nlev - 1):
             lv = lv[::2, ::2]
             tw.write(np.ascontiguousarray(lv), subfiletype=1, **opts)
+
+
+def _zenodo_file(record: str, key: str, d: Path, log) -> Path:
+    """One file of a Zenodo record, after checking the record's licence (CC BY)."""
+    meta = json.loads(urllib.request.urlopen(record, timeout=60).read().decode())
+    lic = str((meta.get('metadata') or {}).get('license', {}).get('id', '')).lower()
+    if not lic.startswith('cc-by') or '-nc' in lic or '-nd' in lic:
+        raise SystemExit(f'{record}: licence is {lic!r}, not CC BY: not used')
+    f = next((f for f in meta.get('files') or [] if f.get('key') == key), None)
+    if f is None:
+        raise SystemExit(f'{key} is not in {record}')
+    return _get(f['links']['self'], d / 'downloads' / key, log)
+
+
+def _unrar(archive: Path, out: Path) -> None:
+    out.mkdir(parents=True, exist_ok=True)
+    for tool in ('7z', '7zz', 'bsdtar', 'unrar'):
+        exe = shutil.which(tool)
+        if not exe:
+            continue
+        cmd = {'bsdtar': [exe, '-xf', str(archive), '-C', str(out)],
+               'unrar': [exe, 'x', '-o+', str(archive), str(out) + os.sep]}.get(tool,
+              [exe, 'x', '-y', f'-o{out}', str(archive)])  # fmt: skip
+        if subprocess.run(cmd, capture_output=True).returncode == 0:
+            return
+    raise SystemExit('the DRG annotations are a RAR archive: install 7-Zip (7z) or bsdtar to unpack them')
+
+
+def _instances(mask: np.ndarray) -> np.ndarray:
+    """A mask → instance labels: labelled already, else its connected parts (touching cells split by distance)."""
+    from scipy import ndimage as ndi
+    from skimage.feature import peak_local_max
+    from skimage.segmentation import watershed
+
+    m = mask[..., 0] if mask.ndim == 3 else mask
+    vals = np.unique(m)
+    if len(vals) > 3:  # one value per cell
+        return m.astype(np.int32)
+    fg = m > 0
+    dist = ndi.distance_transform_edt(fg)
+    lab = ndi.label(fg)[0]
+    peaks = peak_local_max(dist, min_distance=12, threshold_abs=4, labels=lab, exclude_border=False)
+    markers = np.zeros(m.shape, np.int32)
+    markers[tuple(peaks.T)] = np.arange(1, len(peaks) + 1)
+    return watershed(-dist, markers, mask=fg).astype(np.int32)
+
+
+def drg_mosaic(d: Path, n: int = 6, log=print) -> tuple[Path, Path, float]:
+    """A mosaic of ``n`` rat DRG neurofilament images (one fluorescence channel) and the experts' consensus neuron
+    outlines on it. Returns (slide, reference, µm per pixel: estimated from the neurons' size, see DRG_NEURON_UM)."""
+    out = d / 'drg-mosaic.ome.tif'
+    ref = d / 'layers' / 'drg-mosaic.reference.parquet'
+    meta = d / 'drg-mosaic.json'
+    if out.exists() and ref.exists() and meta.exists():
+        return out, ref, json.loads(meta.read_text())['mpp']
+    root = d / 'drg'
+    if not (root / 'Annotations_ratDRG' / 'NF').exists():
+        _unrar(_zenodo_file(DRG_RECORD, 'Annotations_ratDRG.rar', d, log), root)
+    nf = root / 'Annotations_ratDRG' / 'NF'
+    imgs = sorted((nf / 'images').glob('*.tif'))[:n]
+    tiles = []
+    for p in imgs:
+        a = tifffile.imread(p)
+        a = a[0] if a.ndim == 3 else a
+        mp = nf / 'masks' / 'GT_Estimation' / f'{p.stem}.png'
+        lab = _instances(np.asarray(Image.open(mp)))
+        tiles.append((p.stem, a.astype(np.uint16), lab))
+    if not tiles:
+        raise SystemExit(f'no NF images in {nf}')
+    areas = np.concatenate([np.bincount(t[2].ravel())[1:] for t in tiles])
+    areas = areas[areas > 50]
+    px = float(np.median(2 * np.sqrt(areas / math.pi))) if len(areas) else 60.0
+    mpp = round(DRG_NEURON_UM / px, 3)
+    H = max(t[1].shape[0] for t in tiles)
+    W = max(t[1].shape[1] for t in tiles)
+    gap = 64
+    cols = 3 if len(tiles) > 4 else 2
+    rows = math.ceil(len(tiles) / cols)
+    canvas = np.zeros((rows * (H + gap) + gap, cols * (W + gap) + gap), np.uint16)
+    neurons, boxes = [], []
+    for k, (stem, a, lab) in enumerate(tiles):
+        y0, x0 = gap + (k // cols) * (H + gap), gap + (k % cols) * (W + gap)
+        canvas[y0 : y0 + a.shape[0], x0 : x0 + a.shape[1]] = a
+        neurons += _label_polygons(lab, x0, y0)
+        boxes.append((stem, x0, y0, a.shape[1], a.shape[0]))
+    with tifffile.TiffWriter(out, bigtiff=True, ome=True) as tw:
+        opts = {'tile': (512, 512), 'compression': 'zlib', 'photometric': 'minisblack'}
+        data = canvas[None]
+        nlev = max(1, int(np.ceil(np.log2(max(canvas.shape) / 1024))) + 1)
+        tw.write(data, subifds=nlev - 1, metadata={'axes': 'CYX', 'Channel': {'Name': ['Neurofilament']},
+                                                     'PhysicalSizeX': mpp, 'PhysicalSizeY': mpp}, **opts)  # fmt: skip
+        lv = data
+        for _ in range(nlev - 1):
+            lv = lv[:, ::2, ::2]
+            tw.write(np.ascontiguousarray(lv), subfiletype=1, **opts)
+    L = AnnotationLayer(name='Reference · rat DRG neurons (3 experts, consensus)')
+    for q in neurons:
+        L.add_polygon(q, cls='Neuron (expert)', color=COLORS['Reference'])
+    annio.export(L, ref, slide=out.name)
+    meta.write_text(json.dumps({'mpp': mpp, 'images': [b[0] for b in boxes], 'neuron_px': px}), encoding='utf-8')
+    (d / 'DRG-ATTRIBUTION.md').write_text(
+        'drg-mosaic.ome.tif and drg-mosaic.reference.parquet are made from "Data from: Unbiased analysis of cellular '
+        'plasticity in the dorsal root ganglion after peripheral nerve injury" (Zenodo, '
+        'https://doi.org/10.5281/zenodo.6546069), licensed CC BY 4.0: neurofilament images of rat DRG and the '
+        "consensus (GT_Estimation) of three experts' neuron outlines. Images were arranged into a mosaic and the "
+        f'masks converted to outlines. The pixel size ({mpp} µm) is estimated from the neurons (median diameter taken '
+        f'as {DRG_NEURON_UM:g} µm); the files carry none.\n',
+        encoding='utf-8',
+    )
+    log(f'DRG: {len(tiles)} neurofilament images, {len(neurons):,} expert neurons, ~{mpp} µm/px (estimated)')
+    return out, ref, mpp
+
+
+DRG_METHODS = {
+    'dino-sam3': ('Grounding DINO → SAM 3', {'mode': 'text', 'model': 'dino-sam3', 'sam3_name': 'neuron',
+                                             'prompt': 'large round neuron cell bodies'}),
+    'sam3': ('SAM 3', {'mode': 'text', 'model': 'sam3', 'prompt': 'neuron'}),
+    'grounding': ('Grounding DINO + SAM 2.1', {'mode': 'text', 'model': 'grounding', 'prompt': 'neuron'}),
+    'segment': ('Segment everything', {'mode': 'segment'}),
+}  # fmt: skip
+
+
+def run_drg(session, d: Path, methods: list[str], log) -> dict:
+    slide, ref, mpp = drg_mosaic(d, log=log)
+    sid = session.open([slide, ref], trusted=True)['opened'][0]
+    reg = session.registry
+    R = annio.read_geoparquet(ref)
+    out = {'reference': len(R), 'mpp_estimated': mpp, 'methods': {}}
+    for k, key in enumerate(m for m in methods if m in DRG_METHODS):
+        label, body = DRG_METHODS[key]
+
+        def go(body=body, label=label, k=k, key=key):
+            b = {'scope': {'kind': 'slide'}, 'strictness': 0.4, 'object_um': 15, 'object_um_max': 60, **body}
+            r = findall.run(reg, sid, b, None)
+            p = _export(reg, sid, r['layer'], d / 'layers' / f'drg-mosaic.{key}.parquet', f'{label} · neurons',
+                        METHOD_COLORS[k % len(METHOD_COLORS)])  # fmt: skip
+            return evaluate.match(annio.read_geoparquet(p), R)
+
+        _try(out['methods'], key, go, log)
+    return out
 
 
 def xenium_nuclei(d: Path, log) -> Path:
@@ -431,7 +579,8 @@ def run(cases=CASES, methods=None, directory: str | None = None, yes: bool = Fal
     report: dict = {'when': time.strftime('%Y-%m-%d %H:%M'), 'cases': {}}
     s = Session(cache_dir=d / 'cache', remember=False)
     try:
-        for case, fn in (('nuinsseg', run_nuinsseg), ('camelyon', run_camelyon), ('xenium', run_xenium)):
+        for case, fn in (('nuinsseg', run_nuinsseg), ('drg', run_drg), ('camelyon', run_camelyon),
+                         ('xenium', run_xenium)):  # fmt: skip
             if case not in cases:
                 continue
             log(f'{case}:')
@@ -455,10 +604,12 @@ def run(cases=CASES, methods=None, directory: str | None = None, yes: bool = Fal
 # ================================================================================================ report, pictures
 def markdown(rep: dict) -> str:
     lines = [f'# Find all against reference outlines ({rep.get("when", "")})', '']
-    names = {k: v[0] for k, v in NUCLEUS_METHODS.items()} | {'areas': 'Areas (4 brushed boxes)'}
+    names = {k: v[0] for k, v in (NUCLEUS_METHODS | DRG_METHODS).items()} | {'areas': 'Areas (4 brushed boxes)'}
     for case, title, cols in (
         ('nuinsseg', 'NuInsSeg: H&E nuclei, hand-drawn (F1 at IoU ≥ 0.5)', ('f1', 'precision', 'recall', 'mean_iou',
                                                                             'found', 'reference')),
+        ('drg', 'Rat DRG: neurons vs 3 experts\' consensus (F1 at IoU ≥ 0.5)', ('f1', 'precision', 'recall', 'mean_iou',
+                                                                             'found', 'reference')),
         ('camelyon', 'CAMELYON16 test_065: metastasis area (Dice)', ('dice', 'found_mm2')),
         ('xenium', 'Xenium breast: nuclei vs 10x (F1 at IoU ≥ 0.5)', ('f1', 'precision', 'recall', 'mean_iou', 'found',
                                                                      'reference')),
@@ -483,7 +634,10 @@ def markdown(rep: dict) -> str:
 
 def pictures(d: Path, log=print) -> None:
     """For each case and method: a crop with the reference (green) and the method (magenta) outlines."""
-    jobs = [('nuinsseg-mosaic', d / 'nuinsseg-mosaic.ome.tif', d / 'layers' / 'nuinsseg-mosaic.reference.parquet')]
+    jobs = [
+        ('nuinsseg-mosaic', d / 'nuinsseg-mosaic.ome.tif', d / 'layers' / 'nuinsseg-mosaic.reference.parquet'),
+        ('drg-mosaic', d / 'drg-mosaic.ome.tif', d / 'layers' / 'drg-mosaic.reference.parquet'),
+    ]
     pd = pack.pack_dir(_PACK)
     for xid, ref in ((CAMELYON, pd / 'layers' / f'{CAMELYON}.expert.parquet'),
                      (XENIUM, d / 'layers' / f'{XENIUM}.nuclei-10x.parquet')):  # fmt: skip
@@ -503,7 +657,7 @@ def pictures(d: Path, log=print) -> None:
         if not len(c):
             continue
         cx, cy = float(np.median(c[:, 0])), float(np.median(c[:, 1]))
-        side = 1150 if stem == 'nuinsseg-mosaic' else 700  # a few NuInsSeg patches; a field of Xenium nuclei
+        side = {'nuinsseg-mosaic': 1150, 'drg-mosaic': 2000}.get(stem, 700)  # a few patches; a field of nuclei
         if stem == CAMELYON:  # the lesions, whole
             bb = R.bbox()
             ex = [bb[:, 0].min(), bb[:, 1].min(), bb[:, 2].max(), bb[:, 3].max()]
@@ -546,6 +700,11 @@ def session_file(d: Path) -> Path:
         entries.append({'id': 'nuinsseg-mosaic', 'title': 'NuInsSeg mosaic (H&E nuclei, hand-drawn)',
                         'slide': str(mosaic), 'layers': [str(p) for p in sorted((d / 'layers').glob('nuinsseg-mosaic.*.parquet'))],
                         'licence': 'CC-BY-4.0'})  # fmt: skip
+    drg = d / 'drg-mosaic.ome.tif'
+    if drg.exists():
+        entries.append({'id': 'drg-mosaic', 'title': 'Rat DRG neurofilament (neurons, 3 experts)', 'slide': str(drg),
+                        'layers': [str(p) for p in sorted((d / 'layers').glob('drg-mosaic.*.parquet'))],
+                        'licence': 'CC-BY-4.0'})  # fmt: skip
     for xid, extra in ((CAMELYON, [pd / 'layers' / f'{CAMELYON}.expert.parquet']), (XENIUM, [])):
         x = next(i for i in pack.manifest()['items'] if i['id'] == xid)
         slide = pack._slide(x, pd)
@@ -582,7 +741,8 @@ def fetch_published(d: Path, log=print) -> None:
 def publish_list(d: Path) -> list[Path]:
     """What the workflow publishes (and SHA256SUMS for them)."""
     files = sorted((d / 'layers').glob('*.parquet')) + [p for p in (d / 'nuinsseg-mosaic.ome.tif',
-                   d / 'NUINSSEG-ATTRIBUTION.md', d / 'validation.json', d / 'validation.md') if p.exists()]  # fmt: skip
+                   d / 'NUINSSEG-ATTRIBUTION.md', d / 'drg-mosaic.ome.tif', d / 'drg-mosaic.json',
+                   d / 'DRG-ATTRIBUTION.md', d / 'validation.json', d / 'validation.md') if p.exists()]  # fmt: skip
     files += sorted(d.glob('*.jpg'))
     (d / 'SHA256SUMS').write_text(''.join(f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n' for p in files))
     return [*files, d / 'SHA256SUMS']

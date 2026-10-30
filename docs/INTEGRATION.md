@@ -993,6 +993,7 @@ Three cases, each a slide in the app with the reference and every method as laye
 | Case | Reference | Methods | Score |
 |---|---|---|---|
 | **NuInsSeg** mosaic: 16 H&E patches, one per organ (human and mouse), CC BY 4.0 | nuclei outlined by hand | Grounding DINO + SAM 2.1, SAM 3, Grounding DINO → SAM 3, segment everything, classic, Cellpose-SAM | nuclei matched one-to-one at IoU ≥ 0.5: precision, recall, F1, mean IoU |
+| **Rat DRG** neurofilament immunofluorescence: 6 fields (Zenodo 6546069, CC BY 4.0) | neurons outlined by 3 experts (consensus) | Grounding DINO → SAM 3, SAM 3, Grounding DINO + SAM 2.1, segment everything, sized 15–60 µm so satellite glia and Schwann cells are left out | neurons matched at IoU ≥ 0.5 |
 | **CAMELYON16** test_065 (sample pack, CC0) | metastases outlined by pathologists | areas (4 brushed boxes, as a user would), SAM 3 and Grounding DINO → SAM 3 by name | Dice of the tumour area in the lesion region |
 | **Xenium** breast (sample pack, CC BY 4.0) | 10x's nuclei from DAPI (an instrument's segmentation, not hand-drawn) | classic, Cellpose-SAM | nuclei matched at IoU ≥ 0.5 |
 

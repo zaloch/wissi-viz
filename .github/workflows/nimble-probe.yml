@@ -1,0 +1,49 @@
+# A small test of Nimble (Bespoke Labs, Apache-2.0, a decision model from Qwen3.5-9B) through Ollama: the planning
+# decisions for the rat DRG goals from each vision model's description (lab/vlm-probe-out), and the corrections it
+# picks for results that are off. The decisions and their probabilities are posted as notices.
+name: nimble-probe
+on:
+  workflow_dispatch:
+  push:
+    branches: ['lab/**', '!lab/vlm-probe-out']
+    paths: [scripts/nimble_probe.py, .github/workflows/nimble-probe.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - name: The vision models' descriptions
+        run: |
+          git fetch -q origin lab/vlm-probe-out
+          mkdir -p "$RUNNER_TEMP/looks" && git --work-tree="$RUNNER_TEMP/looks" checkout origin/lab/vlm-probe-out -- .
+          git reset -q
+          for d in "$RUNNER_TEMP"/looks/vlm-probe-*; do echo "$d: $(jq -r .model "$d"/*.json 2>/dev/null | sort -u | tr '\n' ' ')"; done
+      - name: Ollama and Nimble
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          sudo systemctl stop ollama || true
+          sudo mkdir -p /mnt/ollama && sudo chown "$USER" /mnt/ollama
+          (OLLAMA_MODELS=/mnt/ollama ollama serve > "$RUNNER_TEMP/ollama.log" 2>&1 &)
+          for i in $(seq 1 30); do curl -sf http://localhost:11434/api/tags >/dev/null && break; sleep 2; done
+          ollama --version
+          ollama pull nimble
+          echo "::notice title=nimble licence::$(ollama show nimble --license 2>/dev/null | head -3 | tr '\n' ' ')"
+          ollama show nimble | head -20
+      - name: Decisions from each vision model's descriptions
+        run: |
+          rc=0
+          for d in "$RUNNER_TEMP"/looks/vlm-probe-*; do
+            m=$(jq -r .model "$d"/*.json 2>/dev/null | head -1)
+            echo "::notice title=looks::from $m"
+            uv run -p 3.12 --no-project python scripts/nimble_probe.py --looks "$d" --out "$RUNNER_TEMP/nimble/$(basename "$d")" || rc=1
+          done
+          exit $rc
+      - name: Ollama's log
+        if: always()
+        run: grep -iE 'error|panic|fail|out of memory' "$RUNNER_TEMP/ollama.log" | tail -10 | cut -c1-600 | sed 's/^/::notice title=ollama::/' || true

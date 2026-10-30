@@ -614,7 +614,7 @@ def _brightfield(w, data, s):
     assert pg.is_visible('#f-excl-row') and pg.is_visible('#f-size-max') and pg.is_visible('#f-notin')
     pg.fill('#f-exclude', 'fold')
     pg.dispatch_event('#f-exclude', 'input')
-    pg.wait_for_function('() => /not fold/.test(document.getElementById("f-hint").textContent)')
+    pg.wait_for_function('() => /excluding fold/.test(document.getElementById("f-hint").textContent)')
     pg.fill('#f-size-max', '30')
     pg.dispatch_event('#f-size-max', 'input')
     pg.wait_for_function('() => /[0-9]–30 µm/.test(document.getElementById("f-hint").textContent)')

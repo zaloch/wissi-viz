@@ -664,8 +664,8 @@ def segment_everything(
     lname, n = _publish(registry, sid, F, sim, strictness, name, cls, color)
     if sim is not None:
         _remember(rid, slide=sid, F=F, sim=sim, name=lname, cls=cls, color=color, extra={}, strictness=strictness)
-    why = (f'none of the {len(polys):,} outlines is like your examples: lower the strictness, or run without them'
-           if n == 0 and ex else '')  # fmt: skip
+    why = (f'None of the {len(polys):,} outlines is similar to the examples. Lower the strictness, or clear '
+           '“use as examples”.' if n == 0 and ex else '')  # fmt: skip
     rects = [(x * f, y * f, (x + w) * f, (y + h) * f) for x, y, w, h in tiles]
     return _summary(
         rid if sim is not None else None, lname, n, len(polys), strictness, where, t0, 'segment', note=note,
@@ -1146,10 +1146,11 @@ def find_by_text(
         registry.remove_annotations(sid, prov)
     if not polys:
         long = [n for n in names if len(n.split()) > 3]
-        tip = ('SAM 3 knows short names: try 1–3 words, e.g. "neuron" or "nucleus"' if long and model == 'sam3'
-               else 'try a shorter name' if long else 'try other words or another object size')  # fmt: skip
+        tip = ('SAM 3 expects short names of one to three words, such as "neuron" or "nucleus"'
+               if long and model == 'sam3' else 'Use a shorter name' if long else
+               'Try other words or another object size')  # fmt: skip
         raise ValueError(f'{label} found nothing named "{", ".join(names)}" in {where} ({len(tiles)} tile'
-                         f'{"s" if len(tiles) != 1 else ""} searched): {tip}')  # fmt: skip
+                         f'{"s" if len(tiles) != 1 else ""} searched). {tip}.')  # fmt: skip
     upd(0.95, f'{len(polys):,} matches: removing duplicates…')
     keep = _box_nms(np.asarray(boxes, float), np.asarray(scores, float))
     every = _polys_features([polys[i] for i in keep], 'match', {'score': np.round(np.asarray(scores)[keep], 3)})
@@ -1173,7 +1174,7 @@ def find_by_text(
             None, lname, 0, len(every), strictness, where, t0, 'text', note=f'{label}; {why} left out',
             kpis=[['found', '0'], ['matches', f'{len(every):,}'], ['tiles', str(len(tiles))]],
             companions=_companions(registry, sid, lname, every, tiles),
-            why=f'all {len(every):,} matches were left out ({why}): widen the size range or shorten Exclude',
+            why=f'All {len(every):,} matches were excluded ({why}). Widen the size range or shorten Exclude.',
         )  # fmt: skip
     polys = [polys[i] for i in keep]
     score = np.asarray(scores, float)[keep]
@@ -1213,9 +1214,9 @@ def find_by_text(
               strictness=strictness, classes=classes, labels=lab)  # fmt: skip
     why = ''
     if n == 0:
-        why = (f'none of the {len(polys):,} matches is like your examples: lower the strictness, or run without them '
-               '(untick "Use as examples")') if ex else (
-               f'none of the {len(polys):,} matches scores above this strictness: lower it')  # fmt: skip
+        why = (f'None of the {len(polys):,} matches is similar to the examples. Lower the strictness, or clear '
+               '“use as examples”.') if ex else (
+               f'No match scores above this strictness. Lower it to include the {len(polys):,} weaker matches.')  # fmt: skip
     return _summary(
         rid, lname, n, len(polys), strictness, where, t0, 'text', note=note,
         kpis=[['found', f'{n:,}'], ['matches', f'{len(polys):,}'], ['tiles', str(len(tiles))]],

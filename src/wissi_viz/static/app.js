@@ -1031,7 +1031,7 @@ function chainDialog(mode, sid, L) {
     collect = () => ['/layers/regions', { layer: L.name, classes: cs.value ? [cs.value] : null, join_um: +join.value, min_area_um2: +minA.value }];
   } else {
     $('lo-h').textContent = `Keep only the ${L.name} inside…`;
-    $('lo-p').textContent = 'A new layer with the objects whose centre lies inside the regions you pick (measurements kept): run analyses, find all or exports on just those.';
+    $('lo-p').textContent = 'Creates a layer with the objects whose centre lies inside the selected regions, keeping their measurements, so that analyses, find all and exports can use only those.';
     const regs = regionLayers(p, L.name).filter((R) => (R.meta.count ?? 0) > 0);
     const rs = h('select', { 'aria-label': 'Regions' }, ...regs.map((R) => h('option', {}, R.name)));
     const rc = h('select', { 'aria-label': 'Region class' });
@@ -1227,7 +1227,7 @@ function renderResults(fresh = false) {
   const box = $('an-results');
   box.replaceChildren();
   $('an-count').textContent = results.length ? `${results.length}` : '';
-  if (!results.length) { box.append(h('div', { class: 'panel-note', id: 'an-none' }, 'Nothing yet. Each run adds layers to the slide and a result here.')); return; }
+  if (!results.length) { box.append(h('div', { class: 'panel-note', id: 'an-none' }, 'No results yet. Each analysis adds its layers to the slide and its result here.')); return; }
   results.forEach((r, i) => box.append(resultCard(r, fresh && i === 0)));
 }
 
@@ -1619,42 +1619,42 @@ async function renderDraw() {
     const pos = use ? n + mine.filter((x) => !x.neg).length : 0;
     const exLabel = `${n} outline${n === 1 ? '' : 's'} in ${drawLayer} · ${$('a-class').value.trim() || 'any class'}${mine.length ? ` + ${mine.length} picked` : ''}`;
     $('ex-count').textContent = use ? exLabel : `${exLabel} · not used`;
-    $('ex-count').title = use && (n || mine.length) ? 'These are used as examples: only objects like them are found' : '';
-    const exNote = pos ? ` Only matches like your ${pos} example${pos === 1 ? '' : 's'} (${drawLayer} · ${$('a-class').value.trim() || 'any class'}${mine.length ? ', picked objects' : ''}) are kept, and their size replaces the object size; untick “use as examples” to find without them.` : '';
+    $('ex-count').title = use && (n || mine.length) ? 'Used as examples: only objects similar to these are kept' : '';
+    const exNote = pos ? ` Only matches similar to the ${pos} example${pos === 1 ? '' : 's'} (${drawLayer} · ${$('a-class').value.trim() || 'any class'}${mine.length ? ', picked objects' : ''}) are kept, and the examples’ size replaces the object size. Clear “use as examples” to search without them.` : '';
     let msg = '', ok = !!sid && !caps.error && !findJob;
     if (caps.error) msg = caps.error;
     else if (findMode === 'objects') {
-      if (!cands.length) { msg = 'No object layer to search: add a cell table, or use “Segment everything”.'; ok = false; }
-      else if (!pos) { msg = $('ex-use').checked ? `Mark at least one example of “${$('a-class').value || 'a class'}” (SAM, draw, or pick objects).` : 'Similar objects needs examples: tick “use as examples”.'; ok = false; }
-      else msg = `${pos} example${pos === 1 ? '' : 's'} → every similar object of ${cs.value}.`;
+      if (!cands.length) { msg = 'No object layer to search. Add a cell table, or use Segment everything.'; ok = false; }
+      else if (!pos) { msg = $('ex-use').checked ? `Mark at least one example of “${$('a-class').value || 'a class'}” with SAM, a drawing tool or Pick objects.` : 'Similar objects requires examples. Select “use as examples”.'; ok = false; }
+      else msg = `Finds every object in ${cs.value} similar to the ${pos} example${pos === 1 ? '' : 's'}.`;
     } else if (findMode === 'segment') {
-      msg = pos ? `${caps.sam || 'SAM'} outlines every object.${exNote}`
-        : `${caps.sam || 'SAM'} outlines every object ${sizeText()} across (no examples: keeps all). The whole slide can take long without a GPU.`;
+      msg = pos ? `${caps.sam || 'SAM'} outlines every object.${exNote} Searching the whole slide may take a long time without a GPU.`
+        : `${caps.sam || 'SAM'} outlines every object ${sizeText()} across. Without examples, all outlines are kept. Searching the whole slide may take a long time without a GPU.`;
     } else if (findMode === 'text' && cellModel) {
       const where = $('f-where').selectedOptions[0]?.textContent || 'this view';
       msg = model === 'classpose'
-        ? `Classpose outlines and types every cell of the whole slide file (first run installs it with uv; slow without a GPU), then keeps those in ${where}. Its weights were trained on non-commercial datasets: check before commercial use.`
-        : `${CELL_MODELS[model]} outlines every nucleus in ${where}, classed by size (or brightest marker) with area, shape and stain measurements: a cell layer the analyses use.${model === 'cellpose' ? ' The whole slide can take long without a GPU.' : ''}`;
+        ? `Classpose outlines and classifies every cell of the whole slide file, then keeps those in ${where}. The first run installs it with uv; without a GPU it is slow. Its weights were trained on datasets with non-commercial terms: review them before commercial use.`
+        : `${CELL_MODELS[model]} outlines every nucleus in ${where} and measures its area, shape and stain. Nuclei are classed by size (or by brightest marker in fluorescence), and the result is a cell layer for the analyses.${model === 'cellpose' ? ' Searching the whole slide may take a long time without a GPU.' : ''}`;
     } else if (findMode === 'text') {
       const words = $('f-prompt').value.split(/[.,;\n]+/).map((w) => w.trim()).filter(Boolean);
       const g = tx.grounding || {};
       const both = model === 'dino-sam3', s3need = model === 'sam3' || both;
       const name = { grounding: 'Grounding DINO + SAM 2.1', sam3: 'SAM 3', 'dino-sam3': 'Grounding DINO → SAM 3' }[model] || model;
-      const dl = [s3need && !s3.downloaded ? 'SAM 3 once (~3.3 GB from Hugging Face)' : '', model !== 'sam3' && !g.downloaded ? `Grounding DINO once (~${g.size_mb || 250} MB)` : ''].filter(Boolean);
-      const dlText = dl.length ? ` Downloads ${dl.join(' and ')}.` : '';
+      const dl = [s3need && !s3.downloaded ? 'SAM 3 (about 3.3 GB, from Hugging Face)' : '', model !== 'sam3' && !g.downloaded ? `Grounding DINO (about ${g.size_mb || 250} MB)` : ''].filter(Boolean);
+      const dlText = dl.length ? ` The first run downloads ${dl.join(' and ')}.` : '';
       const s3name = $('f-s3name').value.trim() || conceptOf(words[0] || '');
       $('f-s3name').placeholder = words[0] ? `auto: ${conceptOf(words[0])}` : 'auto';
       const longs = [...(both ? [s3name] : words), ...$('f-exclude').value.split(/[.,;\n]+/).map((w) => w.trim()).filter(Boolean)].filter((w) => w.split(/\s+/).length > 3);
-      const short = longs.length && s3need ? ` ⚠ SAM 3 knows short names (1–3 words, e.g. “neuron”, “nucleus”): “${longs[0]}” will likely find nothing; ${both ? 'shorten it' : 'describe it with Grounding DINO → SAM 3 instead, or shorten it'}.` : '';
-      if (s3need && !s3.accepted) { msg = 'Accept the SAM License to use SAM 3, or pick Grounding DINO + SAM 2.1.'; ok = false; }
-      else if (!words.length) { msg = 'Type what to find, e.g. “nucleus”, or “gland. vessel” (one class per phrase).'; ok = false; }
-      else if (both) msg = `Grounding DINO reads “${words.join('”, “')}” and boxes its best matches in each tile; SAM 3 takes them as examples of “${s3name}” and finds every one like them, ${sizeText()} across${$('f-exclude').value.trim() ? `, not ${$('f-exclude').value.trim()}` : ''}.${$('f-expand').checked && words.length === 1 ? ' Then segment everything finds more like the best of those.' : ''}${short}${exNote}${dlText} The whole slide can take long without a GPU.`;
-      else if ($('f-expand').checked && words.length === 1) msg = `${name} finds ${words[0]} ${sizeText()} across; the best matches then become examples and SAM outlines everything like them.${short}${exNote}${dlText} The whole slide can take long without a GPU.`;
-      else msg = `${name} finds every ${words.join(', ')} ${sizeText()} across${$('f-exclude').value.trim() ? `, not ${$('f-exclude').value.trim()}` : ''}.${short}${exNote}${dlText} ${model === 'sam3' ? 'SAM 3 handles dense small objects well.' : 'Grounding DINO finds larger structures (glands, vessels, fat, folds) far better than dense nuclei: for those, use Segment everything with examples, SAM 3, or Grounding DINO → SAM 3.'} The whole slide can take long without a GPU.`;
+      const short = longs.length && s3need ? ` ⚠ SAM 3 expects short names of one to three words, such as “neuron” or “nucleus”; “${longs[0]}” is unlikely to match. ${both ? 'Shorten it.' : 'Shorten it, or use Grounding DINO → SAM 3 for descriptions.'}` : '';
+      if (s3need && !s3.accepted) { msg = 'Accept the SAM License to use SAM 3, or select Grounding DINO + SAM 2.1.'; ok = false; }
+      else if (!words.length) { msg = 'Enter what to find, such as “nucleus” or “gland. vessel” (one class per phrase).'; ok = false; }
+      else if (both) msg = `Grounding DINO marks its best matches for “${words.join('”, “')}” in each tile; SAM 3 uses them as examples of “${s3name}” and outlines every similar object ${sizeText()} across${$('f-exclude').value.trim() ? `, excluding ${$('f-exclude').value.trim()}` : ''}.${$('f-expand').checked && words.length === 1 ? ' Segment everything then adds objects similar to the best of these.' : ''}${short}${exNote}${dlText} Searching the whole slide may take a long time without a GPU.`;
+      else if ($('f-expand').checked && words.length === 1) msg = `${name} finds ${words[0]} ${sizeText()} across; the best matches then serve as examples, and SAM outlines every similar object.${short}${exNote}${dlText} Searching the whole slide may take a long time without a GPU.`;
+      else msg = `${name} finds every ${words.join(', ')} ${sizeText()} across${$('f-exclude').value.trim() ? `, excluding ${$('f-exclude').value.trim()}` : ''}.${short}${exNote}${dlText} ${model === 'sam3' ? 'SAM 3 handles dense small objects well.' : 'Grounding DINO detects larger structures (glands, vessels, fat, folds) much better than dense nuclei; for nuclei, use Segment everything with examples, SAM 3 or Grounding DINO → SAM 3.'} Searching the whole slide may take a long time without a GPU.`;
     } else {
       const k = classes.filter((c) => c.n > 0);
-      msg = k.length >= 2 ? `Train on ${k.map((c) => `${c.name} (${c.n})`).join(', ')} in ${drawLayer} → map those areas.`
-        : `Draw shapes of at least two classes in ${drawLayer} (e.g. Area 1 and Area 2: change the class, draw, repeat).`;
+      msg = k.length >= 2 ? `Trains on ${k.map((c) => `${c.name} (${c.n})`).join(', ')} in ${drawLayer} and maps those areas.`
+        : `Draw shapes of at least two classes in ${drawLayer}, such as Area 1 and Area 2: set the class, draw, then repeat for the next class.`;
       ok = ok && k.length >= 2;
     }
     hint.textContent = msg;
@@ -1761,7 +1761,7 @@ function renderFindResults(fresh = false) {
       };
       card.append(h('label', { class: 'field' }, 'Strictness', sl, out));
     }
-    if (r.why) card.append(h('div', { class: 'panel-note warn' }, `Why 0: ${r.why}.`));
+    if (r.why) card.append(h('div', { class: 'panel-note warn' }, r.why));
     const parts = [['found', r.layer], ...Object.entries(r.companions || {})];
     if (parts.length > 1) {   // what to draw on the slide: the result, every match before filtering, the tiles searched
       r.vis = r.vis || { found: true };

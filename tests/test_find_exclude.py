@@ -75,7 +75,7 @@ def test_text_size_range_and_excluded_phrases(session):  # noqa: F811
     assert abs(nobig['count'] - small['count']) <= 2
     none = findall.find_by_text(reg, sid, prompt='big', exclude='', scope=scope, object_um=1, object_um_max=2,
                                 detector=_Phrases())  # fmt: skip
-    assert none['count'] == 0 and 'were left out' in none['why'] and len(reg.layer(sid, none['companions']['matches']))
+    assert none['count'] == 0 and 'were excluded' in none['why'] and len(reg.layer(sid, none['companions']['matches']))
     assert len(reg.layer(sid, none['layer'])) == 0
 
 
@@ -128,4 +128,4 @@ def test_matches_and_tiles_beside_the_result(session):  # noqa: F811
     big = [{'layer': 'cells', 'index': int(i)} for i in range(len(L))][:2]
     zero = findall.find_by_text(reg, sid, prompt='nucleus', scope={'kind': 'view', 'rect': RECT}, strictness=1.0,
                                 examples={'picks': big}, detector=_Phrases())  # fmt: skip
-    assert zero['count'] == 0 and 'like your examples' in zero['why']
+    assert zero['count'] == 0 and 'similar to the examples' in zero['why']

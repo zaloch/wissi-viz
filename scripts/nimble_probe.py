@@ -107,10 +107,11 @@ RESULTS = [  # (what the last run gave, the right next step)
 ]  # fmt: skip
 
 
-def notice(title: str, text: str) -> None:
+def notice(title: str, text: str, annotate: bool = False) -> None:
+    """Print; with ``annotate`` also as a GitHub notice (a step keeps only 10, so only the summary is one)."""
     print(f'{title}: {text}', flush=True)
-    if os.environ.get('GITHUB_ACTIONS'):
-        print(f'::notice title={title}::{" ".join(text.split())[:3500]}', flush=True)
+    if annotate and os.environ.get('GITHUB_ACTIONS'):
+        print(f'::notice title={title}::{" ".join(text.split())[:4000]}', flush=True)
 
 
 def decide(host: str, model: str, state: str, questions: dict, timeout: float = 1800) -> tuple[dict, float]:
@@ -164,6 +165,8 @@ def main(argv=None) -> int:
                         f'{lk.get("approx_object_count")} cells. {lk.get("notes") or ""}')  # fmt: skip
     bad = 0
     rec = {'model': a.model, 'plans': {}, 'checks': []}
+    short = []  # one line per decision, for the summary notice
+    src = next(iter(looks.values()), '').split(' described it')[0] or 'no vision model'
     for k, (goal, expect) in GOALS.items():
         look = looks.get(k) or f'(no vision model description; a fixed one) {FALLBACK_LOOK}'
         state = f'{CONTEXT}\nWhat the image shows: {look}\nGoal: {goal}'
@@ -175,6 +178,8 @@ def main(argv=None) -> int:
                 wrong.append(q)
         bad += bool(wrong)
         rec['plans'][k] = {'state': state, 'answers': ans, 'seconds': sec, 'wrong': wrong}
+        short.append(f'goal {k} {"OK" if not wrong else "WRONG " + "/".join(wrong)}: '
+                     + ', '.join(f'{q}={shown(ans.get(q))}' for q in PLAN))  # fmt: skip
         notice(f'nimble plan {k}', f'{"OK" if not wrong else "WRONG: " + ", ".join(wrong)} · {sec} s · '
                + ' · '.join(f'{q}: {shown(ans.get(q))}' for q in PLAN) + f' · from: {look[:300]}')  # fmt: skip
     for j, (result, right) in enumerate(RESULTS, 1):
@@ -182,8 +187,10 @@ def main(argv=None) -> int:
         got = value(ans.get('next'))
         bad += got != right
         rec['checks'].append({'result': result, 'answers': ans, 'right': right, 'seconds': sec})
+        short.append(f'check {j} {"OK" if got == right else "WRONG"} (right {right}): {shown(ans.get("next"))}')
         notice(f'nimble check {j}', f'{"OK" if got == right else "WRONG"} (right: {right}) · {sec} s · '
                f'{shown(ans.get("next"))} · {result[:160]}')  # fmt: skip
+    notice(f'nimble from {src}', ' | '.join(short), annotate=True)
     (out / 'nimble.json').write_text(json.dumps(rec, indent=2, ensure_ascii=False), encoding='utf-8')
     return 0 if not bad else 1
 

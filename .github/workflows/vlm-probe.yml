@@ -1,0 +1,42 @@
+# A small test of Qwen3-VL 4B (Apache-2.0) through Ollama on a CPU runner: shown three sample images and a goal, does it
+# describe them correctly and plan an analysis with wissi-viz's tools? The answers are posted as notices.
+name: vlm-probe
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [scripts/vlm_probe.py, .github/workflows/vlm-probe.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        model: ['qwen3-vl:4b', 'qwen3-vl:4b-thinking']
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - name: Ollama and the model
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          (pgrep -x ollama >/dev/null || (ollama serve > "$RUNNER_TEMP/ollama.log" 2>&1 &))
+          for i in $(seq 1 30); do curl -sf http://localhost:11434/api/tags >/dev/null && break; sleep 2; done
+          ollama --version
+          ollama pull '${{ matrix.model }}'
+          ollama show '${{ matrix.model }}' | head -30
+      - name: Probe
+        env:
+          WISSI_VLM_MODEL: ${{ matrix.model }}
+        run: |
+          uv run -p 3.12 --no-project --with numpy --with pillow --with scikit-image --with pooch \
+            python scripts/vlm_probe.py --out "$RUNNER_TEMP/vlm-probe"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vlm-probe-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/vlm-probe

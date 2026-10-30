@@ -318,8 +318,16 @@ def test_page_in_browser_mode(files, tmp_path):
             pg.click('#empty button[data-act=open]')  # no native dialogs here → the path box
             pg.wait_for_selector('#pathbox textarea', state='visible')
             pg.fill('#paths', f'"{files["a"]}"\n{files["b"]}\n{files["csv"]}')
+            # the button's handler is bound when the app finishes starting: on slow machines a click before that is lost
+            pg.wait_for_function('() => !!document.getElementById("b-paths").onclick', timeout=60000)
             pg.click('#b-paths')
-            pg.wait_for_function('() => document.querySelectorAll("#slides li").length === 2', timeout=90000)
+            try:
+                pg.wait_for_function('() => document.querySelectorAll("#slides li").length === 2', timeout=90000)
+            except Exception as e:  # say what the page shows
+                state = pg.evaluate('() => ({slides: document.querySelectorAll("#slides li").length, '
+                                    'log: document.getElementById("log").textContent, '
+                                    'paths: document.getElementById("paths").value})')  # fmt: skip
+                raise AssertionError(f'slides did not open: {state}; page errors {errors}') from e
             assert pg.is_hidden('#empty')
             assert pg.eval_on_selector('#n', 'e => e.value') == '2'
             pg.wait_for_function('() => document.getElementById("grid").panes.every(p => p.slide && p.slide.info)')

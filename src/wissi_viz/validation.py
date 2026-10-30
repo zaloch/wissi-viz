@@ -70,6 +70,7 @@ def _get(url: str, dest: Path, log) -> Path:
     if dest.exists() and dest.stat().st_size > 0:
         return dest
     log(f'downloading {url}')
+    dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + '.part')
     with urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': 'wissi-viz'}), timeout=120) as r:
         with open(tmp, 'wb') as f:
@@ -437,8 +438,9 @@ def run(cases=CASES, methods=None, directory: str | None = None, yes: bool = Fal
             t0 = time.perf_counter()
             try:
                 report['cases'][case] = fn(s, d, methods, log)
-            except SystemExit as e:
-                report['cases'][case] = {'error': str(e)}
+            except (SystemExit, Exception) as e:  # noqa: BLE001  (one case failing: reported, the others run)
+                report['cases'][case] = {'error': f'{e.__class__.__name__}: {e}'[:400]}
+                log(f'{case}: failed: {report["cases"][case]["error"]}')
             report['cases'][case]['seconds'] = round(time.perf_counter() - t0, 1)
     finally:
         s.shutdown()

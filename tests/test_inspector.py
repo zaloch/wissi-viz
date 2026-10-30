@@ -367,9 +367,9 @@ def test_drawing_measuring_undo_delete_in_the_browser(session):
             sq = layer('Annotations').properties(1)
             assert sq['width_um'] == pytest.approx(sq['height_um'], rel=0.01), sq
             # undo: the square, then the rectangle (the empty layer goes)
-            pg.keyboard.press('Control+z')
+            pg.keyboard.press('ControlOrMeta+z')  # ⌘Z on macOS
             wait_n('Annotations', 1)
-            pg.keyboard.press('Control+z')
+            pg.keyboard.press('ControlOrMeta+z')  # ⌘Z on macOS
             wait_n('Annotations', 0)
             # measure a length by dragging; Enter keeps it with its length
             pg.keyboard.press('7')
@@ -407,7 +407,7 @@ def test_drawing_measuring_undo_delete_in_the_browser(session):
             pg.keyboard.press('Escape')
             pg.keyboard.press('Delete')
             wait_n('Annotations', 0)
-            pg.keyboard.press('Control+z')
+            pg.keyboard.press('ControlOrMeta+z')  # ⌘Z on macOS
             wait_n('Annotations', 1)
             assert layer('Annotations').properties(0)['area_um2'] == pytest.approx(500 * 400 * MPP**2, rel=0.03)
             b.close()

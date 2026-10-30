@@ -29,7 +29,7 @@ jobs:
       - name: Install
         run: |
           uv venv -p 3.12
-          uv pip install -e ".[sam3]" pooch pytest pytest-github-actions-annotate-failures
+          uv pip install -e ".[sam3,analysis]" pooch pytest pytest-github-actions-annotate-failures
       - name: Download from Hugging Face, quantize here, find the cat
         env:
           WISSI_TEST_SAM3: '1'

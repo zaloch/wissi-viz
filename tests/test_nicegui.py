@@ -128,4 +128,7 @@ def test_nicegui_inspector_example(tmp_path):
         proc.terminate()
         proc.wait(timeout=10)
     text = log.read_text()
-    assert 'Traceback' not in text, text[-3000:]  # every Python callback got the event's data
+    # every Python callback got the event's data; Windows' asyncio may log a closed pipe at shutdown (not ours)
+    ours = [i for i in range(len(text)) if text.startswith('Traceback', i)
+            and '_ProactorBasePipeTransport._call_connection_lost' not in text[max(0, i - 300) : i]]  # fmt: skip
+    assert not ours, text[-3000:]

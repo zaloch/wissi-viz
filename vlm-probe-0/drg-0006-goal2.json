@@ -1,0 +1,46 @@
+{
+  "model": "qwen3-vl:4b-instruct",
+  "name": "drg-0006-goal2",
+  "goal": "Measure the size of each neuron and report how many are large (more than 40 \u00b5m across).",
+  "look": {
+    "is_microscopy": true,
+    "modality": "fluorescence",
+    "stain": "Neurofilament (antibody marking neurons)",
+    "tissue": "rat dorsal root ganglion (DRG)",
+    "structures": [
+      "neurons",
+      "neurofilament staining",
+      "cell bodies",
+      "processes"
+    ],
+    "approx_object_count": 0,
+    "notes": "The image is a fluorescence microscopy image of a rat dorsal root ganglion section stained with an antibody against neurofilament. The image shows neuronal cell bodies and processes, with neurofilament staining visible as bright punctate structures. The exact number of neurons cannot be determined from this image alone without quantitative analysis tools. The pixel size is 1.04 \u00b5m, and the images are magnified to show different regions of the sample."
+  },
+  "plan": {
+    "_raw": " clear view of the neurons. The image is also too low resolution to provide a clear view of the neurons. The image is also too low resolution to provide a clear view of the neurons. The image is also too low resolution to provide a clear view of the neurons. The image is also too low resolution to provide a clear view of the neurons. The image is also too low resolution to provide a clear view of the neurons. The image is also too low resolution to provide a clear view of the neurons. The image is also too low resolution to provide a clear view of the neurons. The image is also too low resolution to provide a clear view of the neurons. The image is also too low resolution to provide a clear view of the neurons. The image is also too low resolution to provide a clear view of the neurons. The image is also too low resolution to provide a clear view of the neurons. The image is also too low resolution to provide a clear view of the neurons. The image is also too low resolution to provide a clear view of the neurons. The image is also too low resolution to provide a clear view of the neurons. The image is also too low resolution to provide a clear view of the neurons. The image is also too low resolution to provide a clear view of the neurons. The image is also too low resolution to provide a clear view of the neurons. The image is also too low resolution to provide a clear view of the neurons. The image is also too low resolution to provide a clear view of the neurons. The image"
+  },
+  "reference_count": 78,
+  "timing": {
+    "look": {
+      "seconds": 223.0,
+      "first_token_s": 187.1,
+      "prompt_tokens": 3305,
+      "answer_tokens": 190,
+      "tokens_per_s": 5.3,
+      "done_reason": "stop",
+      "thinking_chars": 0
+    },
+    "plan": {
+      "seconds": 241.7,
+      "first_token_s": 21.2,
+      "prompt_tokens": 3794,
+      "answer_tokens": 1024,
+      "tokens_per_s": 4.6,
+      "done_reason": "length",
+      "thinking_chars": 0
+    }
+  },
+  "problems": [
+    "answer unparsable"
+  ]
+}

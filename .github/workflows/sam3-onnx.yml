@@ -42,6 +42,6 @@ jobs:
         if: always()
         run: |
           d=$(ls /mnt/cache/*/models/sam3/sam3-decoder.onnx 2>/dev/null | head -1)
-          [ -n "$d" ] && uv run --no-sync python scripts/sam3_inspect.py "$d" > /mnt/inspect.txt 2>&1 || true
-          head -c 3800 /mnt/inspect.txt | tr '\n' '|' | sed 's/^/::notice::/'; echo
-          tail -c +3800 /mnt/inspect.txt | head -c 3800 | tr '\n' '|' | sed 's/^/::notice::/'; echo
+          [ -n "$d" ] && uv run --no-sync python scripts/sam3_inspect.py "$d" > "$RUNNER_TEMP/inspect.txt" 2>&1 || true
+          head -c 3800 "$RUNNER_TEMP/inspect.txt" | tr '\n' '|' | sed 's/^/::notice::/'; echo
+          tail -c +3800 "$RUNNER_TEMP/inspect.txt" | head -c 3800 | tr '\n' '|' | sed 's/^/::notice::/'; echo

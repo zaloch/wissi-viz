@@ -2,8 +2,11 @@
 correctly and plan an analysis with wissi-viz's tools? Nothing is run or measured; this only reads the model's answers.
 
     ollama pull qwen3-vl:4b
-    uv run python scripts/vlm_probe.py                 # the built-in sample images
-    uv run python scripts/vlm_probe.py --model qwen3-vl:8b --out probe-out
+    uv run --with tifffile --with scipy python scripts/vlm_probe.py      # rat DRG images, downloaded once (~Zenodo)
+    uv run --with tifffile --with scipy python scripts/vlm_probe.py --model qwen3-vl:8b
+
+The images: rat dorsal root ganglion, neurofilament immunofluorescence, neurons outlined by three experts (Schulte,
+Troidl et al. 2023, https://doi.org/10.5281/zenodo.6546069, CC BY 4.0). Unpacking needs 7-Zip (7z) or bsdtar.
 
 Writes one JSON file per image (the answers, timings) to --out and prints a short summary.
 """
@@ -15,6 +18,8 @@ import base64
 import io
 import json
 import os
+import shutil
+import subprocess
 import sys
 import time
 import urllib.request
@@ -50,7 +55,8 @@ LOOK = {
 PLAN = {
     'type': 'object',
     'properties': {
-        'feasible': {'type': 'boolean'},
+        'feasible': {'type': 'string', 'enum': ['yes', 'partly', 'no']},
+        'not_possible': {'type': 'array', 'items': {'type': 'string'}},
         'steps': {
             'type': 'array',
             'items': {
@@ -69,7 +75,7 @@ PLAN = {
         'result': {'type': 'string'},
         'risks': {'type': 'array', 'items': {'type': 'string'}},
     },
-    'required': ['feasible', 'steps', 'result', 'risks'],
+    'required': ['feasible', 'steps', 'not_possible', 'result', 'risks'],
 }
 
 SYSTEM = (
@@ -79,35 +85,97 @@ SYSTEM = (
 )
 
 
-def samples() -> list[dict]:
-    """Built-in test images (scikit-image's sample data) with a goal each; the last is not microscopy at all."""
-    from skimage import data
-
-    mitosis = data.human_mitosis()  # fluorescent nuclei, fetched once by scikit-image
-    mitosis = (np.clip(mitosis / np.percentile(mitosis, 99.5), 0, 1) * 255).astype(np.uint8)
-    return [
-        {
-            'name': 'ihc-colon',
-            'image': data.immunohistochemistry(),
-            'goal': 'Count the DAB-positive (brown) cells and report the fraction of all cells that are positive.',
-            'expect': {'modality': 'brightfield', 'stain_has': ['dab', 'hematoxylin', 'ihc', 'immuno']},
-        },
-        {
-            'name': 'mitosis-nuclei',
-            'image': np.stack([mitosis] * 3, -1),
-            'goal': 'Count the nuclei and find the ones that are dividing (mitotic).',
-            'expect': {'modality': 'fluorescence', 'stain_has': ['dapi', 'hoechst', 'nuclear', 'fluoresc']},
-        },
-        {
-            'name': 'not-microscopy',
-            'image': data.coffee(),
-            'goal': 'Count the nuclei.',
-            'expect': {'is_microscopy': False},
-        },
-    ]
+DRG_RECORD = 'https://zenodo.org/api/records/6546069'  # rat DRG, Schulte, Troidl et al. 2023, CC BY 4.0
+DRG_FILE = 'Annotations_ratDRG.rar'
+DRG_NEURON_UM = 30.0  # typical rat DRG neuron diameter: the images carry no pixel size, so it is estimated from this
 
 
-def png_b64(rgb: np.ndarray, side: int = 512) -> str:
+def drg_folder(work: Path) -> Path:
+    """The rat DRG neurofilament images and the experts' consensus masks (downloaded once, licence checked)."""
+    nf = work / 'drg' / 'Annotations_ratDRG' / 'NF'
+    if nf.exists():
+        return nf
+    meta = json.loads(urllib.request.urlopen(DRG_RECORD, timeout=60).read().decode())
+    lic = str((meta.get('metadata') or {}).get('license', {}).get('id', '')).lower()
+    if not lic.startswith('cc-by') or '-nc' in lic or '-nd' in lic:
+        raise SystemExit(f'{DRG_RECORD}: licence {lic!r} is not CC BY')
+    f = next(f for f in meta['files'] if f['key'] == DRG_FILE)
+    rar = work / DRG_FILE
+    if not rar.exists():
+        print(f'downloading {DRG_FILE} ({f["size"] / 1e6:.0f} MB)', flush=True)
+        urllib.request.urlretrieve(f['links']['self'], rar)
+    for tool, cmd in (('7z', ['7z', 'x', '-y', f'-o{work / "drg"}', str(rar)]),
+                      ('bsdtar', ['bsdtar', '-xf', str(rar), '-C', str(work / 'drg')])):  # fmt: skip
+        if shutil.which(tool):
+            (work / 'drg').mkdir(parents=True, exist_ok=True)
+            subprocess.run(cmd, check=True, capture_output=True)
+            break
+    if not nf.exists():
+        raise SystemExit('could not unpack the DRG archive: install 7-Zip (7z) or bsdtar')
+    return nf
+
+
+def drg_image(nf: Path, k: int) -> tuple[str, np.ndarray, np.ndarray, int, float]:
+    """Image ``k``: (name, 8-bit RGB as the model sees it, experts' mask, their neuron count, µm per pixel)."""
+    import tifffile
+    from scipy import ndimage as ndi
+
+    imgs = sorted((nf / 'images').glob('*.tif'))
+    p = imgs[k % len(imgs)]
+    a = tifffile.imread(p).astype(np.float32)
+    a = a[0] if a.ndim == 3 else a
+    lo, hi = np.percentile(a, (0.5, 99.8))
+    g = (np.clip((a - lo) / max(hi - lo, 1), 0, 1) * 255).astype(np.uint8)
+    m = np.asarray(Image.open(nf / 'masks' / 'GT_Estimation' / f'{p.stem}.png'))
+    m = (m[..., 0] if m.ndim == 3 else m) > 0
+    lab, n = ndi.label(m)
+    sizes = np.bincount(lab.ravel())[1:]
+    sizes = sizes[sizes > 50]
+    px = float(np.median(2 * np.sqrt(sizes / np.pi))) if len(sizes) else 60.0
+    return f'drg-{p.stem}', np.stack([g] * 3, -1), m, int(len(sizes)), DRG_NEURON_UM / px
+
+
+def outlined(rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """The image with the experts' neuron outlines drawn on in yellow."""
+    from scipy import ndimage as ndi
+
+    edge = mask & ~ndi.binary_erosion(mask, iterations=3)
+    out = rgb.copy()
+    out[edge] = (255, 210, 0)
+    return out
+
+
+def samples(work: Path) -> list[dict]:
+    """Rat DRG neurofilament immunofluorescence (CC BY 4.0) with three goals: one plain, one with sizes, and one
+    that can only partly be done (the images have one marker, so CGRP-positive neurons cannot be told apart)."""
+    nf = drg_folder(work)
+    n_imgs = len(list((nf / 'images').glob('*.tif')))
+    out = []
+    goals = [
+        ('Outline every neuron cell body and count them, leaving out the satellite glia and Schwann cells around them.',
+         {'tools': ['find_by_text|find_cells|segment_everything'], 'feasible': ['yes', 'partly']}),
+        ('Measure the size of each neuron and report how many are large (more than 40 µm across).',
+         {'tools': ['find_by_text|find_cells|segment_everything', 'measure|count'], 'feasible': ['yes', 'partly']}),
+        ('Count the neurons and report what fraction of them are CGRP-positive nociceptors.',
+         {'tools': ['find_by_text|find_cells|segment_everything'], 'feasible': ['partly', 'no'],
+          'not_possible': True}),
+    ]  # fmt: skip
+    for j, (goal, exp) in enumerate(goals):
+        name, rgb, mask, n, mpp = drg_image(nf, j * max(n_imgs // 3, 1))
+        out.append({
+            'name': f'{name}-goal{j + 1}',
+            'image': rgb,
+            'outlined': outlined(rgb, mask),
+            'goal': goal,
+            'context': f'Pixel size about {mpp:.2f} µm.',
+            'reference_count': n,
+            'expect': {'is_microscopy': True, 'modality': 'fluorescence',
+                       'stain_has': ['neurofil', 'fluoresc', 'immuno', 'antibod', 'marker', 'neuron'], **exp},
+        })  # fmt: skip
+    return out
+
+
+def png_b64(rgb: np.ndarray, side: int = 640) -> str:
     im = Image.fromarray(rgb).convert('RGB')
     im.thumbnail((side, side))
     b = io.BytesIO()
@@ -121,7 +189,8 @@ def notice(title: str, text: str) -> None:
         print(f'::notice title={title}::{" ".join(text.split())[:3500]}', flush=True)
 
 
-def chat(host: str, model: str, messages: list[dict], schema: dict | None, limit: int, budget: float = 600) -> tuple:
+def chat(host: str, model: str, messages: list[dict], schema: dict | None, limit: int, budget: float = 600,
+         think: bool | None = None) -> tuple:  # fmt: skip
     """One streamed chat: (the answer, parsed if a schema was given; stats). Stops at ``limit`` tokens (thinking
     included) or after ``budget`` seconds; an unparsable answer comes back as {'_raw': its end}."""
     body = {
@@ -130,6 +199,8 @@ def chat(host: str, model: str, messages: list[dict], schema: dict | None, limit
         'stream': True,
         'options': {'temperature': 0, 'num_ctx': 8192, 'num_predict': limit},
     }
+    if think is not None:
+        body['think'] = think
     if schema:
         body['format'] = schema
     req = urllib.request.Request(
@@ -177,7 +248,7 @@ def check(look: dict, plan: dict, expect: dict) -> list[str]:
     bad = []
     if 'is_microscopy' in expect and look.get('is_microscopy') != expect['is_microscopy']:
         bad.append(f'is_microscopy={look.get("is_microscopy")}')
-    if expect.get('is_microscopy') is False and plan.get('feasible'):
+    if expect.get('is_microscopy') is False and plan.get('feasible') != 'no':
         bad.append('planned an analysis of a non-microscopy image')
     if 'modality' in expect and look.get('modality') != expect['modality']:
         bad.append(f'modality={look.get("modality")}')
@@ -186,6 +257,14 @@ def check(look: dict, plan: dict, expect: dict) -> list[str]:
         bad.append(f'stain="{look.get("stain")}"')
     if expect.get('is_microscopy', True) and not plan.get('steps'):
         bad.append('no steps planned')
+    used = {st.get('tool') for st in plan.get('steps', [])}
+    for want in expect.get('tools', []):
+        if not used & set(want.split('|')):
+            bad.append(f'no {want} step')
+    if 'feasible' in expect and plan.get('feasible') not in expect['feasible']:
+        bad.append(f'feasible={plan.get("feasible")}')
+    if expect.get('not_possible') and not plan.get('not_possible'):
+        bad.append('nothing flagged as not possible')
     return bad
 
 
@@ -194,26 +273,34 @@ def main(argv=None) -> int:
     p.add_argument('--model', default=os.environ.get('WISSI_VLM_MODEL', 'qwen3-vl:4b'))
     p.add_argument('--host', default=os.environ.get('OLLAMA_HOST_URL', 'http://localhost:11434'))
     p.add_argument('--out', default='vlm-probe')
+    p.add_argument('--work', default='vlm-probe-work', help='where the DRG images are downloaded and unpacked')
     p.add_argument('--limit', type=int, default=0, help='most tokens per answer (default 1024; 4096 if thinking)')
+    p.add_argument('--think', choices=['on', 'off', 'default'], default=os.environ.get('WISSI_VLM_THINK', 'off'),
+                   help="the model's reasoning before answering (default off)")  # fmt: skip
     a = p.parse_args(argv)
-    limit = a.limit or (4096 if 'thinking' in a.model else 1024)
+    think = {'on': True, 'off': False, 'default': None}[a.think]
+    limit = a.limit or (4096 if think or (think is None and 'thinking' in a.model) else 1024)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     tools = '\n'.join(f'- {k}: {v}' for k, v in TOOLS.items())
-    sample = samples()
+    work = Path(a.work)
+    work.mkdir(parents=True, exist_ok=True)
+    sample = samples(work)
 
     # speed first (plain text, then one image without the JSON format), so a slow or stuck answer can be told apart
-    _, t = chat(a.host, a.model, [{'role': 'user', 'content': 'Reply with one word: ready.'}], None, 200)
-    notice('vlm speed', f'{a.model} text: {t}')
+    _, t = chat(a.host, a.model, [{'role': 'user', 'content': 'Reply with one word: ready.'}], None, 200, think=think)
+    notice('vlm speed', f'{a.model} think={a.think} text: {t}')
     img = png_b64(sample[0]['image'])
     q = [{'role': 'user', 'content': 'In two sentences, what is this image?', 'images': [img]}]
-    text, t = chat(a.host, a.model, q, None, min(limit, 1024))
+    text, t = chat(a.host, a.model, q, None, min(limit, 1024), think=think)
     notice('vlm image', f'{a.model} {t} · {text[-1500:]}')
 
     failed = 0
     for s in sample:
         img = png_b64(s['image'])
-        Image.open(io.BytesIO(base64.b64decode(img))).save(out / f'{s["name"]}.png')
+        seen = Image.open(io.BytesIO(base64.b64decode(img)))
+        seen.save(out / f'{s["name"]}.png')  # exactly what the model is shown
+        Image.fromarray(s['outlined']).resize(seen.size).save(out / f'{s["name"]}.experts.png')
         look_q = (
             'Describe this image. Is it microscopy? Brightfield or fluorescence? Which stain or markers? Which tissue '
             'or sample? Which structures are visible? Roughly how many cells or nuclei are visible?'
@@ -221,16 +308,18 @@ def main(argv=None) -> int:
         msgs = [{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': look_q, 'images': [img]}]
         plan, t2 = {}, {}
         try:
-            look, t1 = chat(a.host, a.model, msgs, LOOK, limit)
+            look, t1 = chat(a.host, a.model, msgs, LOOK, limit, think=think)
             if '_raw' not in look:
                 plan_q = (
-                    f'Goal: {s["goal"]}\nTools available:\n{tools}\nPlan the analysis as steps using only these '
+                    f'Goal: {s["goal"]} {s.get("context", "")}\nTools available:\n{tools}\nPlan the analysis as steps using only these '
                     'tools. For each step give the tool, what it applies to (a short name), sizes in µm where relevant, '
                     'the marker for split_by_marker, and why. Say what the result will be, and the risks (what could '
-                    'go wrong). If the goal does not fit this image, set feasible to false and give no steps.'
+                    'go wrong). Plan every part of the goal this image allows, even if other parts are not possible: list those '
+                    'parts under not_possible with the reason, and set feasible to yes, partly or no. Only if nothing '
+                    'of the goal fits this image, set feasible to no and give no steps.'
                 )
                 msgs += [{'role': 'assistant', 'content': json.dumps(look)}, {'role': 'user', 'content': plan_q}]
-                plan, t2 = chat(a.host, a.model, msgs, PLAN, limit)
+                plan, t2 = chat(a.host, a.model, msgs, PLAN, limit, think=think)
         except Exception as e:  # noqa: BLE001 - report it and go on to the next image
             failed += 1
             notice(f'vlm {s["name"]}', f'{a.model} ERROR {type(e).__name__}: {e}')
@@ -239,7 +328,8 @@ def main(argv=None) -> int:
         problems = ['answer unparsable'] if raw else check(look, plan, s['expect'])
         failed += bool(problems)
         rec = {'model': a.model, 'name': s['name'], 'goal': s['goal'], 'look': look, 'plan': plan,
-               'timing': {'look': t1, 'plan': t2}, 'problems': problems}  # fmt: skip
+               'reference_count': s.get('reference_count'), 'timing': {'look': t1, 'plan': t2},
+               'problems': problems}  # fmt: skip
         (out / f'{s["name"]}.json').write_text(json.dumps(rec, indent=2), encoding='utf-8')
         steps = ' → '.join(f'{st.get("tool")}({st.get("what")})' for st in plan.get('steps', []))
         notice(
@@ -248,7 +338,8 @@ def main(argv=None) -> int:
             f'look {t1.get("seconds")} s ({t1.get("answer_tokens")} tok, {t1.get("done_reason")}), '
             f'plan {t2.get("seconds")} s ({t2.get("answer_tokens")} tok, {t2.get("done_reason")}) · '
             f'{look.get("modality")}, stain "{look.get("stain")}", tissue "{look.get("tissue")}", '
-            f'~{look.get("approx_object_count")} objects · feasible={plan.get("feasible")} · {steps or "no steps"} · '
+            f'~{look.get("approx_object_count")} objects (experts: {s.get("reference_count")}) · feasible={plan.get("feasible")} · {steps or "no steps"} · '
+            f'not possible: {"; ".join(plan.get("not_possible", [])) or "-"} · '
             f'result: {plan.get("result")} · risks: {"; ".join(plan.get("risks", []))}'
             + (f' · raw: {raw}' if raw else ''),
         )

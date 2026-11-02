@@ -287,7 +287,7 @@ def test_dino_to_sam3_passes_the_best_boxes_as_examples():
     d = findall.DinoSam3(Dino(), s3, examples=3)
     d.detect(np.zeros((4, 4, 3), np.uint8), ['DAB stained and unstained neurons', 'glia'])
     names, ex = s3.seen
-    assert names == ['neurons', 'glia'] and d.tile == 1008 and d.masks
+    assert names == ['cell', 'glia'] and d.tile == 1008 and d.masks  # neurons: SAM 3 knows them as "cell"
     assert [list(x) for x in ex[0]] == [[0, 0, 10, 10], [50, 50, 60, 60], [80, 80, 90, 90]]  # overlapping 2nd skipped
     assert [list(x) for x in ex[1]] == [[5, 5, 9, 9]]
     d.concepts = {'DAB stained and unstained neurons': 'neuron'}

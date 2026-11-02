@@ -324,7 +324,7 @@ def drg_mosaic(d: Path, n: int = 6, log=print) -> tuple[Path, Path, float]:
 
 
 DRG_METHODS = {
-    'dino-sam3': ('Grounding DINO → SAM 3', {'mode': 'text', 'model': 'dino-sam3', 'sam3_name': 'neuron',
+    'dino-sam3': ('Grounding DINO → SAM 3', {'mode': 'text', 'model': 'dino-sam3',
                                              'prompt': 'large round neuron cell bodies'}),
     'sam3': ('SAM 3', {'mode': 'text', 'model': 'sam3', 'prompt': 'neuron'}),
     'grounding': ('Grounding DINO + SAM 2.1', {'mode': 'text', 'model': 'grounding', 'prompt': 'neuron'}),
@@ -407,7 +407,7 @@ NUCLEUS_METHODS = {
     'grounding': ('Grounding DINO + SAM 2.1', {'mode': 'text', 'model': 'grounding', 'prompt': 'nucleus',
                                                'expand': True}),
     'sam3': ('SAM 3', {'mode': 'text', 'model': 'sam3', 'prompt': 'nucleus'}),
-    'dino-sam3': ('Grounding DINO → SAM 3', {'mode': 'text', 'model': 'dino-sam3', 'sam3_name': 'nucleus',
+    'dino-sam3': ('Grounding DINO → SAM 3', {'mode': 'text', 'model': 'dino-sam3',
                                              'prompt': 'cell nuclei stained purple with hematoxylin'}),
     'segment': ('Segment everything', {'mode': 'segment'}),
     'classic': ('Classic threshold', {'mode': 'cells', 'model': 'classic'}),

@@ -129,3 +129,62 @@ def test_matches_and_tiles_beside_the_result(session):  # noqa: F811
     zero = findall.find_by_text(reg, sid, prompt='nucleus', scope={'kind': 'view', 'rect': RECT}, strictness=1.0,
                                 examples={'picks': big}, detector=_Phrases())  # fmt: skip
     assert zero['count'] == 0 and 'similar to the examples' in zero['why']
+
+
+def test_sam3_words():
+    """SAM 3 is asked for "cell" for nuclei, neurons and cell bodies (the only word it knows them by on slides)."""
+    from wissi_viz import findall
+
+    for n in ('nucleus', 'Nuclei', 'neuron', 'DAB stained and unstained neurons', 'cell body', 'cells', 'soma'):
+        assert findall.sam3_word(n) == 'cell', n
+    for n, want in (('gland', 'gland'), ('blood vessel', 'blood vessel'), ('a furry animal lying on a couch', 'animal'),
+                    ('glia', 'glia'), ('body', 'body')):  # fmt: skip
+        assert findall.sam3_word(n) == want, n
+
+
+class _Sam3(_Phrases):
+    """Stands in for SAM 3 (name, ~88 px objects): records the words asked for and the tiles' scale."""
+
+    name, label, tile, object_px = 'sam3', 'SAM 3', 1008, 88
+
+    def __init__(self):
+        self.asked, self.sizes = [], []
+
+    def detect(self, rgb, names, min_score=0.1):
+        self.asked.append(list(names))
+        self.sizes.append(rgb.shape[:2])
+        return super().detect(rgb, ['nucleus' if n == 'cell' else n for n in names], min_score)
+
+
+def test_sam3_is_asked_for_cell_at_its_own_scale(session):  # noqa: F811
+    from wissi_viz import findall
+
+    s, sid = session
+    det = _Sam3()
+    r = findall.find_by_text(s.registry, sid, prompt='nucleus', scope={'kind': 'view', 'rect': RECT}, object_um=10,
+                             strictness=0.0, detector=det)  # fmt: skip
+    assert {tuple(a) for a in det.asked} == {('cell',)} and r['count'] > 0
+    assert 'SAM 3 asked for "cell" (for "nucleus")' in r['note']
+    # 10 µm at 0.5 µm/px = 20 level-0 px → 88 model px: f = 0.5 (at most 2× enlarged); tiles 1008 × 0.5 = 504 px
+    assert max(max(sz) for sz in det.sizes) == 1008
+    # a name of its own (the SAM 3 name field) is used as given
+    det2 = _Sam3()
+    findall.find_by_text(s.registry, sid, prompt='nucleus', scope={'kind': 'view', 'rect': RECT}, object_um=10,
+                         strictness=0.0, detector=det2, sam3_name='nucleus')  # fmt: skip
+    assert {tuple(a) for a in det2.asked} == {('nucleus',)}
+
+
+def test_a_wide_size_range_keeps_the_smallest_visible(session):  # noqa: F811
+    """150 µm – 4 mm: the tiles' scale keeps a 150 µm object ≥ ~24 model px (it was 17 px in one tiny picture)."""
+    from wissi_viz import findall
+
+    s, sid = session
+    det = _Sam3()
+    try:  # nothing of that size on the synthetic slide (an empty result or an error): only the scale matters here
+        findall.find_by_text(s.registry, sid, prompt='tumor', scope={'kind': 'view', 'rect': RECT}, object_um=150,
+                             object_um_max=4000, strictness=0.0, detector=det)  # fmt: skip
+    except ValueError:
+        pass
+    # 150 µm = 300 level-0 px; f = 300 / 24 = 12.5 (it was 4 mm / 0.45 tile = 17.6): one tile, the whole slide
+    W = max(s.registry.info(sid)['width'], s.registry.info(sid)['height'])
+    assert det.sizes and max(max(sz) for sz in det.sizes) == pytest.approx(W / 12.5, abs=2)

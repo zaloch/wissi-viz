@@ -805,6 +805,23 @@ def concept(phrase: str) -> str:
     return head[-1]
 
 
+#: SAM 3 knows nuclei, neurons and other cell bodies on microscopy only as "cell": asked for "nucleus" or "neuron" it
+#: scores ~0.01, asked for "cell" it outlined 67 % of NuInsSeg's H&E nuclei and 91 % of the rat DRG experts' neurons
+#: (scripts/sam3_slide_probe.py). Such names are asked for as "cell"; the size range keeps the kind meant.
+_CELLISH = {'nucleus', 'nuclei', 'neuron', 'neurons', 'soma', 'somata', 'somas', 'perikaryon', 'perikarya', 'cell',
+            'cells'}  # fmt: skip
+
+
+def sam3_word(phrase: str) -> str:
+    """The name SAM 3 is asked for: "cell" for nuclei, neurons, cell bodies and the like; else the phrase's short
+    name (:func:`concept`)."""
+    c = concept(phrase)
+    words = {w.lower().strip('.,;:()"\'') for w in c.split()}
+    if words & _CELLISH or ({'body', 'bodies'} & words and 'cell' in phrase.lower()):
+        return 'cell'
+    return c
+
+
 class DinoSam3:
     """Grounding DINO reads the (descriptive) prompt and boxes its most confident matches in each tile; those boxes
     are SAM 3's examples ("like this one"), with a short name for the concept, and SAM 3 finds and outlines every
@@ -813,6 +830,7 @@ class DinoSam3:
     name = 'dino-sam3'
     label = 'Grounding DINO → SAM 3'
     masks = True
+    object_px = 64  # objects' size in the model's picture: Grounding DINO's boxes and SAM 3 both see them well
 
     def __init__(self, dino, s3, examples: int = 3, min_example: float = 0.25) -> None:
         self.dino, self.sam3 = dino, s3
@@ -834,7 +852,7 @@ class DinoSam3:
                     break
             if picked:
                 ex[k] = [b[i] for i in picked]
-        short = [self.concepts.get(n) or concept(n) for n in names]
+        short = [self.concepts.get(n) or sam3_word(n) for n in names]
         return self.sam3.detect(rgb, short, min_score=min_score, exemplars=ex)
 
 
@@ -1036,10 +1054,21 @@ def find_by_text(
         detector = text_detector(model, lambda f, m: upd(0.0, m))
     if isinstance(detector, DinoSam3) and sam3_name.strip():  # the short name SAM 3 gets for the (first) phrase
         detector.concepts = {names[0]: sam3_name.strip()}
+    # the words the model is asked for: SAM 3 gets names it knows (nucleus, neuron … → "cell", see sam3_word)
+    asked = list(names)
+    if getattr(detector, 'name', '') == 'sam3':
+        asked = [sam3_name.strip() if i == 0 and sam3_name.strip() else sam3_word(n) for i, n in enumerate(names)]
+    elif isinstance(detector, DinoSam3):
+        asked = [detector.concepts.get(n) or sam3_word(n) for n in names]
+    renamed = [(n, a) for n, a in zip(names, asked) if a.lower() != n.lower()]
     T = int(getattr(detector, 'tile', 800))
-    f = max(0.5, (d_lo if ranged else d0) / 48.0)  # level-0 px per model px (≥ 0.5: at most 2× enlarged)
-    if ranged:  # the largest still well inside a tile
-        f = max(f, d_hi / (0.45 * T))
+    # level-0 px per model px: objects ~object_px across in the model's picture (SAM 3: larger, so that a tile holds
+    # fewer than its ~200 detections), at most 2× enlarged
+    px = float(getattr(detector, 'object_px', 48))
+    f = max(0.5, (d_lo if ranged else d0) / px)
+    if ranged:  # the largest well inside a tile, but the smallest never below ~24 model px (a wide range: 150 µm–4 mm
+        # made one tiny picture of the whole region, where a 150 µm object was 17 px)
+        f = max(f, min(d_hi / (0.45 * T), d_lo / 24.0))
     lv = 0
     for i, Lv in enumerate(info.levels):
         if Lv.downsample <= f * 1.0001:
@@ -1089,7 +1118,9 @@ def find_by_text(
         tw, th = max(1, int(round((x1 - x0) / f))), max(1, int(round((y1 - y0) / f)))
         if (tw, th) != (rgb.shape[1], rgb.shape[0]):
             rgb = np.asarray(Image.fromarray(rgb).resize((tw, th), Image.BILINEAR))
-        out = detector.detect(rgb, names + ex_names, min_score=floor)
+        out = detector.detect(
+            rgb, (asked if getattr(detector, 'name', '') == 'sam3' else names) + ex_names, min_score=floor
+        )
         b, sc, lab = out[:3]
         masks = out[3] if len(out) > 3 else None
         if not len(b):
@@ -1146,9 +1177,10 @@ def find_by_text(
         registry.remove_annotations(sid, prov)
     if not polys:
         long = [n for n in names if len(n.split()) > 3]
-        tip = ('SAM 3 expects short names of one to three words, such as "neuron" or "nucleus"'
-               if long and model == 'sam3' else 'Use a shorter name' if long else
-               'Try other words or another object size')  # fmt: skip
+        s3 = getattr(detector, 'name', '') in ('sam3', 'dino-sam3')
+        tip = (f'SAM 3 was asked for "{", ".join(asked)}"; it knows few microscopy words (nuclei and neurons as '
+               '"cell"): try "cell" with a size range, or another object size' if s3 else 'Use a shorter name'
+               if long else 'Try other words or another object size')  # fmt: skip
         raise ValueError(f'{label} found nothing named "{", ".join(names)}" in {where} ({len(tiles)} tile'
                          f'{"s" if len(tiles) != 1 else ""} searched). {tip}.')  # fmt: skip
     upd(0.95, f'{len(polys):,} matches: removing duplicates…')
@@ -1183,6 +1215,8 @@ def find_by_text(
     F = _polys_features(polys, names[0])
     sim = _text_sim(score)
     note = f'{label} at {f:.2g} level-0 px per model px'
+    if renamed:
+        note += '; SAM 3 asked for ' + ', '.join(f'"{a}" (for "{n}")' for n, a in renamed)
     if n_size:
         note += f'; {n_size:,} outside {d_lo * mpp:.3g}–{d_hi * mpp:.3g} µm left out'
     if ex_names:

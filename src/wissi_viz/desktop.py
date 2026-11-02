@@ -236,9 +236,57 @@ def _macos_identity() -> None:
             except Exception:  # noqa: BLE001
                 pass
         img = NSImage.alloc().initWithContentsOfFile_(str(icon_path('icns')))
-        NSApplication.sharedApplication().setApplicationIconImage_(img)
+        NSApplication.sharedApplication().setApplicationIconImage_(img)  # also registers with LaunchServices
     except Exception:  # noqa: BLE001  (cosmetic: pyobjc missing or a changed AppKit)
         pass
+    macos_display_name(APP_NAME)
+
+
+_LS = '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/LaunchServices'
+_CF = '/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation'
+_UTF8 = 0x08000100  # kCFStringEncodingUTF8
+
+
+def macos_display_name(name: str | None = None) -> str | None:
+    """The name macOS shows for this process (Dock, ⌘-Tab, Force Quit, Activity Monitor); with ``name``, set it first.
+
+    Run from Python, the process is registered under the interpreter's name ("Python"), and the Dock reads that
+    registration, not the bundle dictionary :func:`_macos_identity` changes. LaunchServices' own (private) calls
+    rename it, as Chromium does for its app windows; None where they are missing (not macOS, or a future macOS
+    without them): the name then stays as it was, nothing else changes."""
+    if sys.platform != 'darwin':
+        return None
+    try:
+        ls, cf = ctypes.CDLL(_LS), ctypes.CDLL(_CF)
+        asn_of = ls['_LSGetCurrentApplicationASN']
+        asn_of.restype, asn_of.argtypes = ctypes.c_void_p, []
+        key = ctypes.c_void_p.in_dll(ls, '_kLSDisplayNameKey').value
+        asn = asn_of()
+        if not asn or not key:
+            return None  # not registered with LaunchServices (no window yet / not a GUI session)
+        if name:
+            mk = cf['CFStringCreateWithCString']
+            mk.restype, mk.argtypes = ctypes.c_void_p, [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32]
+            put = ls['_LSSetApplicationInformationItem']
+            put.restype = ctypes.c_int32
+            put.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+            put(-2, asn, key, mk(None, name.encode(), _UTF8), None)  # -2: kLSDefaultSessionID
+        get = ls['_LSCopyApplicationInformationItem']
+        get.restype, get.argtypes = ctypes.c_void_p, [ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p]
+        v = get(-2, asn, key)
+        if not v:
+            return None
+        buf = ctypes.create_string_buffer(512)
+        to_c = cf['CFStringGetCString']
+        to_c.restype = ctypes.c_bool
+        to_c.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_long, ctypes.c_uint32]
+        ok = to_c(v, buf, len(buf), _UTF8)
+        rel = cf['CFRelease']
+        rel.argtypes = [ctypes.c_void_p]
+        rel(v)
+        return buf.value.decode() if ok else None
+    except Exception:  # noqa: BLE001  (cosmetic: private calls missing or changed)
+        return None
 
 
 # Windows: a window's AppUserModel properties (propkey.h); with them the taskbar button, its tooltip menu and a pinned

@@ -600,7 +600,7 @@
           <option value="classic">Classic stain threshold · no model</option>
           <option value="classpose">Classpose · whole slide files</option></optgroup></select></div>
       <div class="f2" id="f-text-row" hidden>Find <input type="text" id="f-prompt" placeholder="nucleus. gland. blood vessel" aria-label="What to find (one class per phrase)" spellcheck="false"></div>
-      <div class="f2" id="f-s3name-row" hidden>SAM 3 name <input type="text" id="f-s3name" placeholder="auto" aria-label="Short name for SAM 3 (one to three words)" title="SAM 3 expects a short name (one to three words) for what Grounding DINO's matches show; if empty, the main noun of the description is used" spellcheck="false"></div>
+      <div class="f2" id="f-s3name-row" hidden>SAM 3 name <input type="text" id="f-s3name" placeholder="auto" aria-label="Short name for SAM 3 (one to three words)" title="The name SAM 3 is asked for (one to three words). Empty: the main noun of the description, and “cell” for nuclei, neurons and cell bodies (on slides SAM 3 knows them only by that name)" spellcheck="false"></div>
       <label class="panel-note" id="f-expand-row" hidden style="display: flex; gap: 6px; align-items: flex-start"><input type="checkbox" id="f-expand" checked>
         <span>Then find more like the best matches: they serve as examples for <i>segment everything</i>, which finds dense small objects such as nuclei that the text model misses (one phrase only)</span></label>
       <div class="panel-note" id="f-lic-row" hidden><span id="f-lic-msg"></span> <button id="f-lic" class="btn" style="margin-left: 4px">Read the licence…</button></div>

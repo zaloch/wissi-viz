@@ -273,6 +273,9 @@ class Sam3:
     label = 'SAM 3'
     tile = SIZE
     masks = True  # outlines come with the detections (no SAM 2.1 pass)
+    #: objects' size in the model's picture when a slide is searched: ~130 per 1008 px tile at most, under the ~200
+    #: detections SAM 3 returns per picture (at 48 px a tile of dense nuclei held ~440)
+    object_px = 88
 
     def __init__(self, folder: Path, device: str | None = None) -> None:
         self.folder = Path(folder)

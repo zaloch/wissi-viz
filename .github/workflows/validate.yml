@@ -9,7 +9,8 @@ on:
     - cron: '41 7 * * 2'   # weekly
   push:
     branches: [main]
-    paths: [src/wissi_viz/validation.py, src/wissi_viz/evaluate.py, .github/workflows/validate.yml]
+    paths: [src/wissi_viz/validation.py, src/wissi_viz/evaluate.py, src/wissi_viz/findall.py, src/wissi_viz/sam3.py,
+            .github/workflows/validate.yml]
 
 permissions:
   contents: write

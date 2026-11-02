@@ -429,3 +429,25 @@ def test_browser_fallback_says_why(monkeypatch):
     assert opened == ['http://127.0.0.1:9/app?fallback=pywebview%20is%20not%20installed%20here']
     D.run_browser('http://127.0.0.1:9', srv)
     assert opened[-1] == 'http://127.0.0.1:9/app'
+
+
+@pytest.mark.skipif(sys.platform != 'darwin', reason='macOS')
+def test_macos_dock_name_is_wissi_viz(capsys):
+    """Run from Python, macOS lists the app as "Python" (Dock, ⌘-Tab, Force Quit): it is renamed wissi-viz."""
+    import subprocess
+
+    pytest.importorskip('AppKit')
+    from AppKit import NSApplication
+
+    from wissi_viz import desktop
+
+    NSApplication.sharedApplication()  # registers the process with LaunchServices, as opening the window does
+    before = desktop.macos_display_name()
+    comm = subprocess.run(['ps', '-o', 'comm=', '-p', str(os.getpid())], capture_output=True, text=True).stdout.strip()
+    if os.environ.get('GITHUB_ACTIONS'):
+        with capsys.disabled():  # a notice in the run's annotations
+            print(f'\n::notice title=macOS names::LaunchServices name before: {before!r}; ps comm: {comm!r}')
+    if before is None:
+        pytest.skip('this process is not registered with LaunchServices here (no GUI session)')
+    assert desktop.macos_display_name('wissi-viz') == 'wissi-viz', before
+    assert desktop.macos_display_name() == 'wissi-viz'

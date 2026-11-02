@@ -17,6 +17,7 @@ The embedded element (``<wissi-viz>`` / NiceGUI) is unchanged; this is just anot
 from __future__ import annotations
 
 import argparse
+import base64
 import ctypes
 import importlib.util
 import json
@@ -128,6 +129,19 @@ class Bridge:
 
     def open_paths(self, paths, slide: str | None = None):
         return self._s.open(paths, slide=slide)
+
+    def save_file(self, name: str, data_b64: str):
+        """Save what the page made (a snapshot, a table, an export) where the person picks, with the system's Save
+        dialog: the app window does not download links as a browser does. The path, or None if cancelled."""
+        import webview
+
+        fd = getattr(webview, 'FileDialog', None)
+        got = self._window.create_file_dialog(fd.SAVE if fd else webview.SAVE_DIALOG, save_filename=name)
+        if not got:
+            return None
+        path = Path(got if isinstance(got, str) else got[0])
+        path.write_bytes(base64.b64decode(data_b64))
+        return str(path)
 
     def close_slide(self, slide: str):
         return self._s.close(slide)

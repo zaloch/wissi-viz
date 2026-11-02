@@ -85,6 +85,19 @@ const typing = (t) => t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.t
 // ------------------------------------------------------------------------------------------------ bridge
 // pywebview's js_api in the desktop window; token-protected HTTP otherwise
 const native = () => window.pywebview && window.pywebview.api;
+/** Save a file the page made: the system's Save dialog in the app window (it does not download links), a download
+ *  in a browser. Resolves to where it went (a path, the file name, or null when cancelled). */
+async function saveBlob(blob, name) {
+  name = name.replace(/[\\/:*?"<>|]+/g, '_');
+  if (await nativeReady && native()?.save_file) {
+    const b64 = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1] || ''); fr.onerror = rej; fr.readAsDataURL(blob); });
+    return native().save_file(name, b64);
+  }
+  const a = h('a', { href: URL.createObjectURL(blob), download: name });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  return name;
+}
 const NATIVE = new URLSearchParams(location.search).has('native');
 const nativeReady = new Promise((res) => {
   if (!NATIVE || native()) return res(!!native());
@@ -1027,7 +1040,7 @@ function layerMenu(ev, sid, L) {
   menuEl = h('div', { class: 'menu', role: 'menu' },
     bbox ? item('Zoom to layer', 'Z', () => grid.goToBounds(active, bbox[0], bbox[1], bbox[2], bbox[3])) : null,
     item(`Export as ${$('a-fmt').selectedOptions[0].text}`, 'E', () => {
-      location.href = `${API}/slides/${enc(sid)}/annotations/export?layer=${enc(L.name)}&fmt=${$('a-fmt').value}`;
+      exportLayer(sid, L.name, $('a-fmt').value);
     }),
     item('Summary', 'M', () => { setTab('measure'); $('ms-layer').value = L.name; renderMeasure(); }),
     item('Measure its regions', '', () => { setTab('measure'); $('m-regions').value = L.name; }),
@@ -1294,11 +1307,21 @@ function dataTable(t) {
   return h('table', { class: 'ct' }, h('tr', {}, ...t.columns.map((c) => h('th', {}, c))),
     ...t.rows.slice(0, 200).map((row) => h('tr', {}, ...row.map((v) => h('td', {}, typeof v === 'number' ? fmt(v, 4) : v ?? '–')))));
 }
+/** A layer as a file (GeoJSON, GeoParquet, …), saved where the person picks. */
+async function exportLayer(sid, layer, fmt) {
+  try {
+    const r = await fetch(`${API}/slides/${enc(sid)}/annotations/export?layer=${enc(layer)}&fmt=${fmt}`, { cache: 'no-cache' });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `${r.status} ${r.statusText}`);
+    const cd = r.headers.get('content-disposition') || '';
+    const name = decodeURIComponent((/filename\*=UTF-8''([^;]+)/i.exec(cd) || /filename="?([^";]+)"?/i.exec(cd) || [])[1] || `${layer}.${fmt}`);
+    const where = await saveBlob(await r.blob(), name);
+    if (where) toast({ title: `Exported ${layer}`, sub: where, ms: 4000 });
+  } catch (err) { toast({ kind: 'bad', title: `Could not export ${layer}`, sub: err.message || String(err) }); }
+}
 function downloadCsv(t, name) {
   const q = (v) => (v == null ? '' : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
   const text = [t.columns.map(q).join(','), ...t.rows.map((r) => r.map(q).join(','))].join('\n');
-  const a = h('a', { href: URL.createObjectURL(new Blob([text], { type: 'text/csv' })), download: name.replace(/[\\/:*?"<>|]+/g, '_') });
-  document.body.append(a); a.click(); a.remove();
+  return saveBlob(new Blob([text], { type: 'text/csv' }), name);
 }
 
 // ---- charts (small, dependency-free SVG)
@@ -2143,10 +2166,9 @@ async function snapshot() {
   const blob = await grid.snapshot(active, { scaleBar: grid.getAttribute('scalebar') !== 'false' });
   if (!blob) return;
   const sl = slides.find((x) => x.id === activeSlide());
-  const name = `${(sl?.name || 'slide').replace(/\.[^.]+$/, '')} ${Math.round(p.view.cx)},${Math.round(p.view.cy)}.png`.replace(/[\\/:*?"<>|]+/g, '_');
-  const a = h('a', { href: URL.createObjectURL(blob), download: name });
-  document.body.append(a); a.click(); a.remove();
-  toast({ title: 'Snapshot saved', sub: name, ms: 3000 });
+  const name = `${(sl?.name || 'slide').replace(/\.[^.]+$/, '')} ${Math.round(p.view.cx)},${Math.round(p.view.cy)}.png`;
+  const where = await saveBlob(blob, name);
+  if (where) toast({ title: 'Snapshot saved', sub: where, ms: 4000 });
 }
 // overview map: the slide's thumbnail with the active pane's view on it; click or drag to go there
 let mapOn = lsGet('wissi-map', '0') === '1', mapFor = null;

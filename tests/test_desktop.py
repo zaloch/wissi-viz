@@ -182,6 +182,31 @@ def test_bridge_uses_native_dialogs(files):
             sys.modules['webview'] = saved
 
 
+def test_bridge_saves_files_with_the_save_dialog(tmp_path, monkeypatch):
+    """The app window does not download links: snapshots, tables and exports go through the system's Save dialog."""
+    import base64
+
+    class Win:
+        def __init__(self, answer):
+            self.answer, self.calls = answer, []
+
+        def create_file_dialog(self, kind, save_filename=''):
+            self.calls.append((kind, save_filename))
+            return self.answer
+
+    fake = types.SimpleNamespace(FileDialog=types.SimpleNamespace(OPEN='open', FOLDER='folder', SAVE='save'))
+    monkeypatch.setitem(sys.modules, 'webview', fake)
+    b = D.Bridge(None)
+    dest = tmp_path / 'chosen.png'
+    b._window = Win(str(dest))  # pywebview returns a path (or a tuple of one, on some platforms)
+    assert b.save_file('slide 10,20.png', base64.b64encode(b'PNG...').decode()) == str(dest)
+    assert dest.read_bytes() == b'PNG...' and b._window.calls == [('save', 'slide 10,20.png')]
+    b._window = Win((str(tmp_path / 't.csv'),))
+    assert b.save_file('t.csv', base64.b64encode(b'a,b').decode()) == str(tmp_path / 't.csv')
+    b._window = Win(None)  # cancelled
+    assert b.save_file('x.png', '') is None
+
+
 def test_native_window_wiring(files, monkeypatch):
     """run_native: window on /app?native=1 with the bridge, File menu, icon, persistent storage, drop + icon hooks."""
     seen = {}

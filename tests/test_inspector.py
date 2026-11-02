@@ -410,6 +410,19 @@ def test_drawing_measuring_undo_delete_in_the_browser(session):
             pg.keyboard.press('ControlOrMeta+z')  # ⌘Z on macOS
             wait_n('Annotations', 1)
             assert layer('Annotations').properties(0)['area_um2'] == pytest.approx(500 * 400 * MPP**2, rel=0.03)
+            # a figure of four panes: one PNG, laid out 2 × 2, panels lettered, about four panes' size
+            pg.select_option('#n', '4')
+            pg.wait_for_function(f'() => ({g})().panes.length === 4 && ({g})().panes.every(p => p.view)')
+            pg.wait_for_timeout(800)
+            with pg.expect_download() as dl:
+                pg.click('#vtools [data-v=snapgrid]')
+            from PIL import Image
+
+            im = Image.open(dl.value.path())
+            pw = pg.evaluate(f'() => ({g})().panes[0].rect.w')
+            assert im.width >= 2 * pw and im.height > im.width * 0.3, im.size
+            if shots:
+                im.save(Path(shots) / 'draw-figure.png')
             b.close()
     finally:
         srv.stop()

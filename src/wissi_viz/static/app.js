@@ -2141,6 +2141,7 @@ function viewTool(v, b) {
   } else if (v === 'map') toggleMap();
   else if (v === 'scale') setScaleBar(b.getAttribute('aria-pressed') !== 'true');
   else if (v === 'snap') snapshot();
+  else if (v === 'snapgrid') snapshotGrid();
   else if (v === 'full') {
     if (document.fullscreenElement) document.exitFullscreen?.();
     else ($('main').requestFullscreen || $('main').webkitRequestFullscreen)?.call($('main'));
@@ -2169,6 +2170,15 @@ async function snapshot() {
   const name = `${(sl?.name || 'slide').replace(/\.[^.]+$/, '')} ${Math.round(p.view.cx)},${Math.round(p.view.cy)}.png`;
   const where = await saveBlob(blob, name);
   if (where) toast({ title: 'Snapshot saved', sub: where, ms: 4000 });
+}
+async function snapshotGrid() {
+  // every pane, as laid out: panels lettered A, B, C… with their slide's name, and scale bars
+  const labels = grid.panes.map((q, i) => (slides.find((x) => x.id === panes[i])?.name || q.slide?.info?.name || '').replace(/\.[^.]+$/, ''));
+  const blob = await grid.snapshotGrid({ scaleBar: grid.getAttribute('scalebar') !== 'false', labels });
+  if (!blob) return;
+  const n = grid.panes.filter((q) => q.view).length;
+  const where = await saveBlob(blob, `wissi-viz figure ${n} panel${n === 1 ? '' : 's'}.png`);
+  if (where) toast({ title: 'Figure saved', sub: where, ms: 4000 });
 }
 // overview map: the slide's thumbnail with the active pane's view on it; click or drag to go there
 let mapOn = lsGet('wissi-map', '0') === '1', mapFor = null;

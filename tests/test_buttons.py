@@ -348,6 +348,9 @@ def _brightfield(w, data, s):
     with pg.expect_download() as dl:
         w.check('#vtools [data-v=snap]', None)
     assert dl.value.suggested_filename.endswith('.png')
+    with pg.expect_download() as dl:
+        w.check('#vtools [data-v=snapgrid]', None)
+    assert dl.value.suggested_filename.startswith('wissi-viz figure') and dl.value.suggested_filename.endswith('.png')
     w.check('#vtools [data-v=full]', '() => !!document.fullscreenElement')
     w.check('#vtools [data-v=full]', '() => !document.fullscreenElement')
     w.check('#fps', '() => document.getElementById("perf").style.display === "block"')

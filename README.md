@@ -118,7 +118,7 @@ shows how to use it when hovered and on the slide while in use. Shapes show thei
 perimeter, width, height or length, in µm when the slide is calibrated); measurements stay on screen until `Esc`, `↵`
 keeps one in a Measurements layer; `⌘Z` / `Ctrl+Z` undoes a drawing, `Delete` removes the selected one. The view bar on the slide
 zooms to 2.5–40×, shows the overview map (`O`), toggles the scale bar and saves a snapshot; the footer shows frames
-per second. Click an object for its card, right-click for a radial menu, `?` for every shortcut.
+per second. Click an object for its card, right-click for a radial menu, `?` for every shortcut. Two snapshot buttons save the selected pane, or a figure of every pane (panels lettered A, B, C…, slide names, scale bars).
 
 ![Find all: three picked nuclei as examples, every similar nucleus marked, with the result's strictness slider](docs/screenshots/find-all.jpg)
 

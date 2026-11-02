@@ -2148,32 +2148,90 @@ export class WsiGrid extends HTMLElement {
     return new Promise((resolve) => { (this._snaps ||= []).push({ p, resolve, scaleBar }); this.requestRender(); });
   }
 
+  /** A PNG figure of every pane as laid out on screen: panels lettered A, B, C… with a label each (default: the
+   *  slide's name) and a scale bar, on a white (or dark) page: Promise<Blob>.
+   *  opts: {scaleBar, letters, labels: [text per pane index] | false, gutter (px), dark} */
+  snapshotGrid({ scaleBar = true, letters = true, labels = null, gutter = 14, dark = false } = {}) {
+    const ps = this.panes.filter((p) => p.view && p.rect.w > 0);
+    if (!ps.length) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      (this._snaps ||= []).push({ grid: { ps, scaleBar, letters, labels, gutter, dark }, resolve });
+      this.requestRender();
+    });
+  }
+
+  _scaleBar(g, p, x, y, k) {   // bottom-left corner at (x, y), canvas px
+    const mpp = p.slide?.info?.mpp;
+    if (!mpp) return;
+    const umPerPx = mpp[0] / p.view.scale;
+    const target = 140 * umPerPx, pow = Math.pow(10, Math.floor(Math.log10(target)));
+    const nice = [1, 2, 5, 10].map((m) => m * pow).filter((v) => v <= target).pop() || pow;
+    const bw = (nice / umPerPx) * k, txt = nice >= 1000 ? `${nice / 1000} mm` : nice >= 1 ? `${nice} µm` : `${nice * 1000} nm`;
+    g.fillStyle = 'rgba(0,0,0,.55)'; g.fillRect(x - 8 * k, y - 26 * k, bw + 16 * k, 32 * k);
+    g.fillStyle = '#fff'; g.fillRect(x, y - 5 * k, bw, 5 * k);
+    g.font = `${12 * k}px ui-monospace, Menlo, monospace`; g.fillText(txt, x, y - 10 * k);
+  }
+
+  _paneInto(g, p, dx, dy, k) {   // the pane's pixels (image, layers, overlay) at (dx, dy), canvas px
+    const W = this.$root.clientWidth || 1, H = this.$root.clientHeight || 1;
+    for (const src of [this.$canvas, this.$ov]) {
+      if (!src || !src.width) continue;
+      const fx = src.width / W, fy = src.height / H;
+      // whole canvas pixels inside the pane: a fractional edge picked up the dark gap between panes as a line
+      const sx = Math.ceil(p.rect.x * fx), sy = Math.ceil(p.rect.y * fy);
+      const sw = Math.floor((p.rect.x + p.rect.w) * fx) - sx, sh = Math.floor((p.rect.y + p.rect.h) * fy) - sy;
+      g.drawImage(src, sx, sy, sw, sh, dx, dy, Math.round(p.rect.w * k), Math.round(p.rect.h * k));
+    }
+  }
+
   _takeSnaps() {
     const jobs = this._snaps.splice(0);
-    const W = this.$root.clientWidth || 1, H = this.$root.clientHeight || 1;
-    for (const { p, resolve, scaleBar } of jobs) {
-      const k = Math.max(1, this.dpr || 1);
+    const k = Math.max(1, this.dpr || 1);
+    for (const job of jobs) {
+      if (job.grid) { this._takeGrid(job.grid, job.resolve, k); continue; }
+      const { p, resolve, scaleBar } = job;
       const c = document.createElement('canvas');
       c.width = Math.round(p.rect.w * k); c.height = Math.round(p.rect.h * k);
       const g = c.getContext('2d');
-      for (const src of [this.$canvas, this.$ov]) {
-        if (!src || !src.width) continue;
-        const fx = src.width / W, fy = src.height / H;
-        g.drawImage(src, p.rect.x * fx, p.rect.y * fy, p.rect.w * fx, p.rect.h * fy, 0, 0, c.width, c.height);
-      }
-      const mpp = p.slide?.info?.mpp;
-      if (scaleBar && mpp) {
-        const umPerPx = mpp[0] / p.view.scale;
-        const target = 140 * umPerPx, pow = Math.pow(10, Math.floor(Math.log10(target)));
-        const nice = [1, 2, 5, 10].map((m) => m * pow).filter((v) => v <= target).pop() || pow;
-        const bw = (nice / umPerPx) * k, txt = nice >= 1000 ? `${nice / 1000} mm` : nice >= 1 ? `${nice} µm` : `${nice * 1000} nm`;
-        const x = 14 * k, y = c.height - 14 * k;
-        g.fillStyle = 'rgba(0,0,0,.55)'; g.fillRect(x - 8 * k, y - 26 * k, bw + 16 * k, 32 * k);
-        g.fillStyle = '#fff'; g.fillRect(x, y - 5 * k, bw, 5 * k);
-        g.font = `${12 * k}px ui-monospace, Menlo, monospace`; g.fillText(txt, x, y - 10 * k);
-      }
+      this._paneInto(g, p, 0, 0, k);
+      if (scaleBar) this._scaleBar(g, p, 14 * k, c.height - 14 * k, k);
       c.toBlob((b) => resolve(b), 'image/png');
     }
+  }
+
+  _takeGrid({ ps, scaleBar, letters, labels, gutter, dark }, resolve, k) {
+    // rows and columns from where the panes sit on screen; a band above each panel for its letter and label
+    const xs = [...new Set(ps.map((p) => Math.round(p.rect.x)))].sort((a, b) => a - b);
+    const ys = [...new Set(ps.map((p) => Math.round(p.rect.y)))].sort((a, b) => a - b);
+    const cw = Math.max(...ps.map((p) => p.rect.w)), ch = Math.max(...ps.map((p) => p.rect.h));
+    const gap = gutter * k, band = (letters || labels !== false ? 26 : 0) * k;
+    const c = document.createElement('canvas');
+    c.width = Math.round(xs.length * (cw * k + gap) + gap);
+    c.height = Math.round(ys.length * (ch * k + band + gap) + gap);
+    const g = c.getContext('2d');
+    g.fillStyle = dark ? '#0b0d10' : '#ffffff'; g.fillRect(0, 0, c.width, c.height);
+    ps.forEach((p, i) => {
+      const col = xs.indexOf(Math.round(p.rect.x)), row = ys.indexOf(Math.round(p.rect.y));
+      const x0 = Math.round(gap + col * (cw * k + gap)), y0 = Math.round(gap + row * (ch * k + band + gap));
+      this._paneInto(g, p, x0, y0 + band, k);
+      if (scaleBar) this._scaleBar(g, p, x0 + 14 * k, y0 + band + p.rect.h * k - 14 * k, k);
+      g.textBaseline = 'alphabetic'; g.fillStyle = dark ? '#e8ecf1' : '#111418';
+      let tx = x0;
+      if (letters) {
+        const L = String.fromCharCode(65 + (i % 26)) + (i >= 26 ? String(Math.floor(i / 26)) : '');
+        g.font = `700 ${16 * k}px system-ui, -apple-system, Segoe UI, sans-serif`;
+        g.fillText(L, tx, y0 + band - 8 * k);
+        tx += g.measureText(L).width + 8 * k;
+      }
+      const label = labels === false ? '' : (labels?.[p.index] ?? p.slide?.info?.name ?? '');
+      if (label) {
+        g.font = `${13 * k}px system-ui, -apple-system, Segoe UI, sans-serif`;
+        let t = String(label);
+        while (t.length > 1 && g.measureText(t).width > x0 + p.rect.w * k - tx) t = t.slice(0, -2) + '…';
+        g.fillText(t, tx, y0 + band - 8 * k);
+      }
+    });
+    c.toBlob((b) => resolve(b), 'image/png');
   }
 
   // What a frame really costs the main thread: our JS *plus* the browser's style/paint/commit that follow the rAF

@@ -93,6 +93,24 @@
   /* ---- viewer + HUD */
   main { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
   wissi-viz { position: absolute; inset: 0; }
+  main.objs wissi-viz { bottom: 300px; }
+  main.objs #keyflash { bottom: 318px; } main.objs #toolhint { bottom: 364px; }
+  #card .shape { display: grid; grid-template-columns: 1fr auto; gap: 3px 12px; font-size: 12px; margin: 8px 0 6px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+  #objs { position: absolute; left: 0; right: 0; bottom: 0; height: 300px; z-index: 7; display: flex; flex-direction: column;
+          background: var(--panel); border-top: 1px solid var(--line); font-size: 12px; }
+  #objs[hidden] { display: none; }
+  #objs-head, #objs-filters { gap: 8px; padding: 6px 10px; flex: none; }
+  #objs-filters { padding-top: 0; }
+  #objs-wrap { flex: 1; overflow: auto; outline: none; border-top: 1px solid var(--line); }
+  #objs-table { border-collapse: collapse; font: 11px var(--mono); min-width: 100%; }
+  #objs-table th, #objs-table td { padding: 3px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+  #objs-table th { position: sticky; top: 0; background: var(--panel); color: var(--dim); font-weight: 500; cursor: pointer; user-select: none; z-index: 1; }
+  #objs-table th.on { color: var(--text); } #objs-table th small { opacity: .7; margin-left: 3px; }
+  #objs-table td.txt, #objs-table th.txt { text-align: left; }
+  #objs-table tbody tr { cursor: pointer; } #objs-table tbody tr:hover { background: var(--raise); }
+  #objs-table tbody tr.sel { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+  #objs-table td.more { text-align: center; color: var(--accent); }
+  #objs .fchip { cursor: pointer; } #objs .fchip.off { opacity: .45; }
   .hud { position: absolute; z-index: 5; background: rgba(17,20,25,.95); border: 1px solid var(--line2); border-radius: 12px;
          box-shadow: 0 12px 32px rgba(0,0,0,.5); backdrop-filter: blur(6px); }
   @keyframes rise { from { transform: translateY(10px); opacity: 0; } to { transform: none; opacity: 1; } }
@@ -432,6 +450,27 @@
   <div id="tip" class="hud"></div>
   <div id="ttip" class="hud" role="tooltip"></div>
   <div id="toolhint" class="hud" aria-live="polite"></div>
+  <section id="objs" hidden aria-label="Objects table">
+    <div class="row" id="objs-head">
+      <b>Objects in</b><select id="objs-layer" aria-label="Layer whose objects are listed"></select>
+      <span id="objs-count" class="mono dim"></span>
+      <span class="grow"></span>
+      <button id="objs-prev" class="btn icon" title="Previous object in this order ([)" aria-label="Previous object">◀</button>
+      <span id="objs-pos" class="mono dim"></span>
+      <button id="objs-next" class="btn icon" title="Next object in this order (])" aria-label="Next object">▶</button>
+      <button id="objs-csv" class="btn" title="Save every object of this layer with its measurements (CSV)">CSV</button>
+      <button id="objs-close" class="btn icon ghost" title="Close the objects table (T)" aria-label="Close the objects table">✕</button>
+    </div>
+    <div class="row" id="objs-filters">
+      <span id="objs-classes" class="row" style="gap: 4px; flex-wrap: wrap"></span>
+      <span class="grow"></span>
+      <select id="objs-col" aria-label="Measurement to filter by"></select>
+      <input id="objs-min" type="number" step="any" placeholder="min" aria-label="Smallest value kept" style="width: 84px">
+      <input id="objs-max" type="number" step="any" placeholder="max" aria-label="Largest value kept" style="width: 84px">
+      <button id="objs-add" class="btn" title="Keep only objects whose value lies in this range">Filter</button>
+    </div>
+    <div id="objs-wrap" tabindex="0"><table id="objs-table"><thead></thead><tbody></tbody></table></div>
+  </section>
   <div id="toasts" aria-live="polite"></div>
   <div id="radial" role="menu" aria-label="Actions at this point">
     <span class="ring"></span><span class="dot"></span>
@@ -534,6 +573,7 @@
 
   <section id="p-measure" class="pane-body" role="tabpanel" aria-labelledby="t-measure">
     <div class="f2">Summary of <select id="ms-layer" aria-label="Layer to summarise"></select></div>
+    <div class="row"><span class="grow"></span><button id="ms-objs" class="btn" title="Every object of this layer with its size and measurements: sort, filter, step through (T)">Objects table</button></div>
     <div id="ms-body" style="display: flex; flex-direction: column; gap: 10px"></div>
     <span class="lbl" style="margin-top: 6px">Measure regions</span>
     <div class="f2">Regions <select id="m-regions"></select></div>
@@ -683,6 +723,7 @@
     <span>Remove the last point of a polygon or path <span class="mono dim">⌫</span></span>
     <span>Keep a measurement (Measurements layer) <span class="mono dim">↵</span></span>
     <span>Undo the last drawing or delete <span class="mono dim">⌘/Ctrl Z</span></span>
+    <span>Objects table of a layer · previous / next object <span class="mono dim">T · [ ]</span></span>
     <span>Delete the selected drawing (click it first) <span class="mono dim">Delete</span></span>
     <span>Layers / Image / Annotate / Analyze / Measure <span class="mono dim">L I D A M</span></span>
     <span>Pick objects as examples <span class="mono dim">P · shift = not like</span></span>

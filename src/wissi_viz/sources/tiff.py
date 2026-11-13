@@ -63,10 +63,21 @@ class TiffSource(SlideSource):
         self._ci = self._axes.index('C') if 'C' in self._axes else None
         self._dtype = None
 
-        if self._rgb:
+        # a colour image stored as three separate 8-bit planes (OME-TIFF H&E from PhenoCycler / Xenium pipelines):
+        # three channels, 8 bit, none of them named — read as one RGB image, not as three markers
+        n0 = level_shapes[0][self._ci] if self._ci is not None else 1
+        with tifffile.TiffFile(self.path) as tf:
+            dt0 = tf.series[series].dtype
+        named = [
+            nm
+            for nm, _ in ome_channels[:n0]
+            if nm and not re.fullmatch(r'(Channel[:\s_-]*[\d:]*|[RGB]|red|green|blue)', nm, re.I)
+        ]
+        self._planar_rgb = not self._rgb and n0 == 3 and dt0 == np.uint8 and not named
+        if self._rgb or self._planar_rgb:
             mode, dtype, channels = 'rgb', 'uint8', []
         else:
-            n = level_shapes[0][self._ci] if self._ci is not None else 1
+            n = n0
             with tifffile.TiffFile(self.path) as tf:
                 dt = tf.series[series].dtype
             mode = 'channels'
@@ -175,6 +186,11 @@ class TiffSource(SlideSource):
         return out
 
     def read_region(self, level, x, y, w, h, channel=None):
+        if self._planar_rgb:  # three 8-bit planes → one RGB image
+            return np.dstack([self._read_plane(level, x, y, w, h, c) for c in range(3)])
+        return self._read_plane(level, x, y, w, h, channel)
+
+    def _read_plane(self, level, x, y, w, h, channel=None):
         page = self._page_for(level, channel) if self._fast else None
         if page is not None:
             try:
@@ -290,6 +306,11 @@ def _check_complete(tf, s, size: int, name: str) -> None:
         )
 
 
+#: OME length units → µm (PhenoCycler exports give centimetres; unknown units are taken as µm)
+_UM_PER = {'pm': 1e-6, 'Å': 1e-4, 'nm': 1e-3, 'µm': 1.0, 'μm': 1.0, 'um': 1.0, 'mm': 1e3, 'cm': 1e4, 'dm': 1e5,
+           'm': 1e6, 'in': 25400.0, 'thou': 25.4, 'mil': 25.4}  # fmt: skip
+
+
 def _mpp_from_tiff(tf) -> tuple[float, float] | None:
     try:
         if tf.is_svs:
@@ -302,7 +323,7 @@ def _mpp_from_tiff(tf) -> tuple[float, float] | None:
             px = root.find('.//{*}Pixels')
             if px is not None and px.get('PhysicalSizeX'):
                 unit = px.get('PhysicalSizeXUnit', 'µm')
-                f = {'nm': 1e-3, 'mm': 1e3, 'm': 1e6}.get(unit, 1.0)
+                f = _UM_PER.get(unit, 1.0)
                 return (float(px.get('PhysicalSizeX')) * f, float(px.get('PhysicalSizeY', px.get('PhysicalSizeX'))) * f)
         p = tf.pages[0]
         philips = _mpp_philips(p.description or '')

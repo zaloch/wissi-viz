@@ -336,6 +336,33 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
             headers=hdrs('no-cache'),
         )
 
+    def _shape_of(L, idx: int, mpp: float | None) -> list[dict]:
+        """One object's geometry for its card: [{'label', 'value', 'unit'}] (µm when calibrated, else px); empty
+        for the columnar objects of a table (points) or without shapely."""
+        g = L.geometry(idx)
+        if not g or g['type'] == 'Point':
+            return []
+        try:
+            import shapely.geometry as sg
+
+            from .metrics import _shape
+        except ImportError:
+            return []
+        geom = sg.shape(g)
+        d = _shape(geom, mpp or 1.0)
+        u = 'µm' if mpp else 'px'
+        if geom.geom_type == 'Polygon':  # the sides of the tightest box around it, as the objects table gives them
+            e = np.asarray(geom.minimum_rotated_rectangle.exterior.coords)
+            if len(e) >= 4:
+                a, b = sorted(np.hypot(*np.diff(e[:3], axis=0).T) * (mpp or 1.0))
+                d['box_long'], d['box_short'] = float(b), float(a)
+        rows = [('Area', 'shape_area_um2', f'{u}²'), ('Length', 'shape_length_um', u),
+                ('Perimeter', 'shape_perimeter_um', u), ('Longest side (tightest box)', 'box_long', u),
+                ('Shortest side (tightest box)', 'box_short', u), ('Longest diameter (Feret)', 'shape_max_feret_um', u),
+                ('Circularity (1 = circle)', 'shape_circularity', ''), ('Solidity (1 = no dents)', 'shape_solidity', '')]  # fmt: skip
+        return [{'label': lab, 'value': float(d[k]), 'unit': unit} for lab, k, unit in rows
+                if k in d and d[k] == d[k]]  # fmt: skip
+
     @r.get('/slides/{sid}/annotations/feature/{idx}')
     def ann_feature(
         sid: str, idx: int, layer_name: str = Query(alias='layer'), pct: bool = False, geometry: bool = False
@@ -361,6 +388,7 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
         if pct:
             out['percentiles'] = summary.percentiles(L, props)
             out['order'] = summary.preferred_columns(L, 8)
+            out['shape'] = _shape_of(L, idx, (registry.info(sid).get('mpp') or [None])[0])
         return JSONResponse(out, headers=hdrs('no-cache'))
 
     @r.get('/slides/{sid}/annotations/summary')
@@ -483,6 +511,52 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
         if fmt == 'json':
             df = df.head(limit)
         return _table_response(df, fmt, f'{e.name.rsplit(".", 1)[0]} - {layer_name} objects')
+
+    _tables: dict = {}  # (slide, layer) → (layer version, objects frame): one shape pass per layer version
+
+    @r.get('/slides/{sid}/annotations/table')
+    async def ann_table(
+        sid: str,
+        layer_name: str = Query(alias='layer'),
+        sort: str = 'index',
+        desc: bool = False,
+        offset: int = 0,
+        limit: int = Query(200, le=2000),
+        classes: str | None = Query(None, alias='class'),
+        where: list[str] = Query(default=[]),
+        find: int | None = None,
+    ):
+        """A page of a layer's objects with their geometry (area, perimeter, axes, Feret, circularity … in µm when the
+        slide is calibrated) and stored measurements: sorted by ``sort``, filtered by ``class`` (names separated by
+        ``|``) and ``where=column:min:max`` (either bound may be empty); ``find`` gives the row of one object in
+        this order (the app's objects table; wissi_viz.metrics.object_page)."""
+        from .metrics import object_metrics, object_page
+
+        L = layer(sid, layer_name)
+        mpp = (registry.info(sid).get('mpp') or [None])[0]
+
+        def work():
+            got = _tables.get((sid, layer_name))
+            if got is None or got[0] != L.version:
+                got = (L.version, object_metrics(L, mpp=mpp, intensity=False))
+                _tables[(sid, layer_name)] = got
+                while len(_tables) > 8:
+                    _tables.pop(next(iter(_tables)))
+            ranges = []
+            for w in where:
+                col, _, rest = w.partition(':')
+                lo, _, hi = rest.partition(':')
+                ranges.append((col, float(lo) if lo else None, float(hi) if hi else None))
+            return object_page(got[1], sort=sort, desc=desc, offset=offset, limit=limit,
+                               classes=classes.split('|') if classes else None, where=ranges, find=find)  # fmt: skip
+
+        try:
+            out = await anyio.to_thread.run_sync(work)
+        except ImportError as ex:
+            raise HTTPException(501, f'the objects table needs: pip install "wissi-viz[analysis]" ({ex.name})') from ex
+        except ValueError as ex:
+            raise HTTPException(400, str(ex)) from ex
+        return JSONResponse(_jsonable(out), headers=hdrs('no-cache'))
 
     @r.get('/sam/status')
     def sam_status(load: bool = False):

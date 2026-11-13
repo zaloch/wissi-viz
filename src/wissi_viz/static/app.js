@@ -1042,6 +1042,7 @@ function layerMenu(ev, sid, L) {
     item(`Export as ${$('a-fmt').selectedOptions[0].text}`, 'E', () => {
       exportLayer(sid, L.name, $('a-fmt').value);
     }),
+    item('Objects table', 'T', () => openObjects(L.name)),
     item('Summary', 'M', () => { setTab('measure'); $('ms-layer').value = L.name; renderMeasure(); }),
     item('Measure its regions', '', () => { setTab('measure'); $('m-regions').value = L.name; }),
     item('Analyse these cells', 'A', () => { setTab('analyze'); $('an-objects').value = L.name; renderAnalyze(); }),
@@ -1910,7 +1911,14 @@ function showCard(d, f) {
   const props = f.properties || {};
   const pct = f.percentiles || {};
   const order = (f.order || []).filter((k) => k in props).concat(Object.keys(props).filter((k) => typeof props[k] === 'number' && !(f.order || []).includes(k)));
-  const nums = order.filter((k) => typeof props[k] === 'number').slice(0, 6);
+  // geometry first (computed for this object, with units); stored copies of the same sizes are not repeated
+  const shape = f.shape || [];
+  const SIZE_KEYS = /^(area|perimeter|length|width|height)_(um2?|px2?)$/;
+  const nums = order.filter((k) => typeof props[k] === 'number' && !(shape.length && SIZE_KEYS.test(k))).slice(0, 6);
+  const sizeText = (r) => r.unit === 'µm²' && r.value >= 1e5 ? `${(r.value / 1e6).toFixed(3)} mm²` : r.unit === 'µm' && r.value >= 1000 ? `${(r.value / 1000).toFixed(2)} mm`
+    : `${r.value >= 100 ? Math.round(r.value).toLocaleString('en-US') : r.value >= 10 ? r.value.toFixed(1) : r.value.toFixed(2)}${r.unit ? ` ${r.unit}` : ''}`;
+  const table = h('button', { class: 'btn grow', title: 'Show this object in the objects table of its layer' }, 'In table');
+  table.onclick = () => { hideCard(); openObjects(d.layer); objs.sel = d.index; setTimeout(() => loadObjects(0, { find: d.index }).then((t) => { if (t?.position != null) pickRowOnly(t.position); }), 50); };
   const text = Object.keys(props).filter((k) => typeof props[k] === 'string' && k !== 'classification').slice(0, 3);
   const close = h('button', { class: 'btn icon ghost', 'aria-label': 'Close' }, icon('close', 14));
   close.onclick = hideCard;
@@ -1918,9 +1926,10 @@ function showCard(d, f) {
   zoom.onclick = () => grid.goTo(d.pane, d.centroid[0], d.centroid[1], { magnification: 40 });
   const copy = h('button', { class: 'btn grow' }, 'Copy');
   copy.onclick = () => { navigator.clipboard?.writeText(JSON.stringify({ layer: d.layer, index: d.index, class: d.class, x: d.centroid[0], y: d.centroid[1], ...props })); toast({ title: 'Copied', sub: `${d.layer} #${d.index}`, ms: 2000 }); };
-  card.replaceChildren(
+  card.replaceChildren(...[   // (null children would be written as the text "null")
     h('div', { class: 'row' }, h('span', { style: `width: 10px; height: 10px; border-radius: 3px; background: ${color}` }), h('b', { style: 'font-weight: 700' }, d.class || 'object'),
       h('span', { class: 'grow' }), h('span', { class: 'mono dim', style: 'font-size: 11px' }, `${d.layer} #${d.index.toLocaleString('en-US')}`), close),
+    shape.length ? h('div', { class: 'shape' }, ...shape.flatMap((r) => [h('span', { class: 'dim' }, r.label), h('span', { class: 'mono', style: 'text-align: right' }, sizeText(r))])) : null,
     nums.length ? h('div', { class: 'bars' }, ...nums.flatMap((k) => [
       h('span', { class: 'dim', title: k, style: 'overflow: hidden; text-overflow: ellipsis; white-space: nowrap' }, k),
       pct[k] != null ? h('span', { class: 'bar', title: `${pct[k]} percentile in ${d.layer}` }, h('span', { style: `width: ${pct[k]}%; background: ${color}` })) : h('span'),
@@ -1928,7 +1937,7 @@ function showCard(d, f) {
     ])) : null,
     nums.some((k) => pct[k] != null) ? h('div', { class: 'dim', style: 'font-size: 11px; margin-top: 6px' }, 'bars: percentile within this layer') : null,
     ...text.map((k) => h('div', { class: 'row', style: 'font-size: 12px; margin-top: 4px' }, h('span', { class: 'dim' }, k), h('span', { class: 'grow', style: 'text-align: right' }, props[k]))),
-    h('div', { class: 'row', style: 'margin-top: 10px' }, zoom, copy));
+    h('div', { class: 'row', style: 'margin-top: 10px' }, zoom, table, copy)].filter(Boolean));
   $('tip').style.display = 'none';
   card.style.display = 'block';
   card.classList.remove('rise'); void card.offsetWidth; card.classList.add('rise');
@@ -1993,6 +2002,8 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { hideCard(); closeRadial(); closeMenu(); if (picking) setPicking(false); if ($('picker').classList.contains('on') && !typing(e.target)) closePicker(); return; }
   if (mod || e.altKey || typing(e.target) || document.querySelector('dialog[open]')) return;
   const k = e.key;
+  if (k === 't' || k === 'T') { if (objs.layer) closeObjects(); else openObjects(); keyFlash('T', 'Objects table'); return; }
+  if (objs.layer && (k === ']' || k === '[')) { stepObject(k === ']' ? 1 : -1); return; }
   if (k >= '1' && k <= '9' && !e.repeat) { const [t, label] = TOOLS[+k - 1]; setTool(t); keyFlash(k, label); return; }
   if ((k === 'Delete' || k === 'Backspace') && !e.defaultPrevented && grid.panes[grid.active]?.selection && !grid._drawing) { e.preventDefault(); deleteSelected(); return; }
   const tabs = { l: ['layers', 'Layers'], i: ['image', 'Image'], a: ['analyze', 'Analyze'], m: ['measure', 'Measure'], d: ['draw', 'Annotate'] };
@@ -2028,6 +2039,8 @@ function wire() {
   $('b-help').onclick = () => $('help').showModal();
   $('b-connect').onclick = openConnect;
   for (const b of $('tabs').children) b.onclick = () => setTab(b.dataset.tab);
+  wireObjects();
+  $('ms-objs').onclick = () => openObjects($('ms-layer').value || undefined);
   for (const b of $('l-scope').children) b.onclick = () => { for (const x of $('l-scope').children) x.setAttribute('aria-pressed', String(x === b)); };
   $('l-filter').oninput = () => renderLayers();
   for (const b of $('l-mode').children) b.onclick = () => { layerMode = b.dataset.mode; lsSet('wissi-layer-mode', layerMode); renderLayers(); };
@@ -2171,6 +2184,153 @@ async function snapshot() {
   const where = await saveBlob(blob, name);
   if (where) toast({ title: 'Snapshot saved', sub: where, ms: 4000 });
 }
+// ---------------------------------------------------------------- objects table (a drawer under the slide)
+// One row per object of a layer: class, geometry (with units) and its stored measurements; sorted and filtered on the
+// server, read a page at a time. A row selects its object on the slide and goes to it; an object clicked on the
+// slide selects its row.
+const objs = { layer: null, sid: null, sort: 'index', desc: false, classes: null, where: {}, cols: [], rows: [], offset: 0, total: 0, of: 0, sel: null, pos: null, busy: false };
+const OBJ_PAGE = 200;
+const objsUrl = (extra = {}) => {
+  const q = new URLSearchParams({ layer: objs.layer, sort: objs.sort, desc: String(objs.desc), ...extra });
+  if (objs.classes) q.set('class', [...objs.classes].join('|'));
+  for (const [c, [lo, hi]] of Object.entries(objs.where)) q.append('where', `${c}:${lo ?? ''}:${hi ?? ''}`);
+  return `/slides/${enc(objs.sid)}/annotations/table?${q}`;
+};
+function openObjects(layerName) {
+  const p = curPane(), sid = activeSlide();
+  const ls = layersOf(p);
+  if (!sid || !ls.length) { toast({ title: 'No layer to list', sub: 'Add a cell table or annotations, draw, or run a detection first.' }); return; }
+  Object.assign(objs, { sid, layer: layerName || (ls.find((L) => L.name === objs.layer) || ls[0]).name, sort: 'index', desc: false, classes: null, where: {}, sel: null, pos: null });
+  $('objs').hidden = false;
+  $('main').classList.add('objs');
+  const sel = $('objs-layer');
+  sel.replaceChildren(...ls.map((L) => h('option', { value: L.name }, `${L.name} (${L.meta.count.toLocaleString('en-US')})`)));
+  sel.value = objs.layer;
+  loadObjects(0);
+}
+function closeObjects() { $('objs').hidden = true; $('main').classList.remove('objs'); objs.layer = null; }
+async function loadObjects(offset, { append = false, find = null } = {}) {
+  if (!objs.layer || objs.busy) return;
+  objs.busy = true;
+  try {
+    const t = await api(objsUrl({ offset, limit: OBJ_PAGE, ...(find != null ? { find } : {}) }));
+    objs.cols = t.columns; objs.total = t.total; objs.of = t.of; objs.classCounts = t.classes;
+    if (append) objs.rows.push(...t.rows); else { objs.rows = t.rows; objs.offset = t.offset; }
+    if (find != null) objs.pos = t.position;
+    renderObjects();
+    return t;
+  } catch (err) { toast({ kind: 'bad', title: 'Objects table', sub: err.message || String(err) }); }
+  finally { objs.busy = false; }
+}
+const objFmt = (v, c) => v == null ? '–' : !c.numeric ? String(v) : Number.isInteger(v) ? v.toLocaleString('en-US') : Math.abs(v) >= 1000 ? Math.round(v).toLocaleString('en-US') : Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(3);
+function renderObjects() {
+  const filtered = objs.total !== objs.of;
+  $('objs-count').textContent = filtered ? `${objs.total.toLocaleString('en-US')} of ${objs.of.toLocaleString('en-US')} (filtered)` : `${objs.of.toLocaleString('en-US')}`;
+  $('objs-pos').textContent = objs.pos != null ? `${(objs.pos + 1).toLocaleString('en-US')} / ${objs.total.toLocaleString('en-US')}` : '';
+  // class chips (click: keep / leave out a class) and the range filters in force
+  const names = Object.keys(objs.classCounts || {});
+  const chips = names.length > 1 && names.length <= 24 ? names.map((n) => {
+    const on = !objs.classes || objs.classes.has(n);
+    const b = h('button', { class: `chip fchip${on ? '' : ' off'}`, title: `${on ? 'Leave out' : 'Show'} ${n}`, 'aria-pressed': String(on) }, `${n} ${objs.classCounts[n].toLocaleString('en-US')}`);
+    b.onclick = () => {
+      const set = new Set(objs.classes || names);
+      if (set.has(n)) set.delete(n); else set.add(n);
+      objs.classes = set.size === names.length || !set.size ? null : set;
+      objs.pos = null; loadObjects(0);
+    };
+    return b;
+  }) : [];
+  const ranges = Object.entries(objs.where).map(([c, [lo, hi]]) => {
+    const ci = objs.cols.find((x) => x.name === c) || { label: c, unit: '' };
+    const b = h('button', { class: 'chip fchip', title: 'Remove this filter' }, `${ci.label} ${lo != null ? `≥ ${lo}` : ''}${lo != null && hi != null ? ', ' : ''}${hi != null ? `≤ ${hi}` : ''} ${ci.unit} ✕`);
+    b.onclick = () => { delete objs.where[c]; objs.pos = null; loadObjects(0); };
+    return b;
+  });
+  $('objs-classes').replaceChildren(...chips, ...ranges);
+  const colSel = $('objs-col'), keep = colSel.value;
+  colSel.replaceChildren(...objs.cols.filter((c) => c.numeric && c.name !== 'index').map((c) => h('option', { value: c.name, title: c.min != null ? `${objFmt(c.min, c)} to ${objFmt(c.max, c)}` : '' }, `${c.label}${c.unit ? ` (${c.unit})` : ''}`)));
+  if (keep) colSel.value = keep;
+  const head = h('tr', {}, ...objs.cols.map((c) => {
+    const th = h('th', { class: `${c.numeric ? '' : 'txt'}${objs.sort === c.name ? ' on' : ''}`, title: `Sort by ${c.label}${c.min != null ? ` · ${objFmt(c.min, c)} to ${objFmt(c.max, c)}, median ${objFmt(c.median, c)}${c.unit ? ` ${c.unit}` : ''}` : ''}`,
+      'aria-sort': objs.sort === c.name ? (objs.desc ? 'descending' : 'ascending') : 'none' },
+      c.name === 'index' ? '#' : c.label, c.unit ? h('small', {}, c.unit) : null, objs.sort === c.name ? (objs.desc ? ' ▼' : ' ▲') : '');
+    th.onclick = () => { if (objs.sort === c.name) objs.desc = !objs.desc; else { objs.sort = c.name; objs.desc = c.numeric && c.name !== 'index'; } objs.pos = null; loadObjects(0, objs.sel != null ? { find: objs.sel } : {}); };
+    return th;
+  }));
+  $('objs-table').tHead.replaceChildren(head);
+  const body = $('objs-table').tBodies[0];
+  const rows = objs.rows.map((r, i) => {
+    const tr = h('tr', { class: r[0] === objs.sel ? 'sel' : '', dataset: { i: String(i) } }, ...r.map((v, j) => h('td', { class: objs.cols[j].numeric ? '' : 'txt' }, objFmt(v, objs.cols[j]))));
+    tr.onclick = () => pickObject(objs.offset + i);
+    return tr;
+  });
+  const before = objs.offset > 0 ? [h('tr', {}, h('td', { class: 'more', colSpan: objs.cols.length, onclick: () => loadObjects(0) }, `Rows from ${(objs.offset + 1).toLocaleString('en-US')} · show from the first`))] : [];
+  const left = objs.total - objs.offset - objs.rows.length;
+  const after = left > 0 ? [h('tr', {}, h('td', { class: 'more', colSpan: objs.cols.length, onclick: () => loadObjects(objs.offset + objs.rows.length, { append: true }) }, `${left.toLocaleString('en-US')} more · show the next ${Math.min(left, OBJ_PAGE)}`))] : [];
+  body.replaceChildren(...before, ...rows, ...after);
+  if (!objs.rows.length) body.replaceChildren(h('tr', {}, h('td', { class: 'more txt', colSpan: Math.max(1, objs.cols.length), style: 'color: var(--dim); cursor: default' }, filtered ? 'No object passes the filters.' : 'This layer has no objects.')));
+  body.querySelector('tr.sel')?.scrollIntoView({ block: 'nearest' });
+}
+/** Select the object at a position of the current order: its row, and on the slide (centred, zoomed to its size). */
+async function pickObject(pos) {
+  if (pos < 0 || pos >= objs.total) return;
+  if (pos < objs.offset || pos >= objs.offset + objs.rows.length) await loadObjects(Math.max(0, pos - 20));
+  const r = objs.rows[pos - objs.offset];
+  if (!r) return;
+  const col = (n) => r[objs.cols.findIndex((c) => c.name === n)];
+  objs.sel = r[0]; objs.pos = pos;
+  renderObjects();
+  const p = curPane(), x = col('x_px'), y = col('y_px');
+  if (!p || x == null) return;
+  const mpp = p.slide?.info?.mpp?.[0] || 1;
+  const half = Math.max(1.5 * ((col('max_feret_um') || 0) / mpp), 60);
+  grid.goToBounds(p.index, x - half, y - half, x + half, y + half);
+  grid.select(p.index, objs.layer, objs.sel);
+}
+const stepObject = (d) => pickObject(objs.pos == null ? (d > 0 ? 0 : objs.total - 1) : objs.pos + d);
+async function objectsCsv() {
+  try {
+    const r = await fetch(`${API}/slides/${enc(objs.sid)}/annotations/object_metrics?layer=${enc(objs.layer)}&fmt=csv`, { cache: 'no-cache' });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `${r.status} ${r.statusText}`);
+    const where = await saveBlob(await r.blob(), `${objs.layer} objects.csv`);
+    if (where) toast({ title: 'Objects saved', sub: where, ms: 4000 });
+  } catch (err) { toast({ kind: 'bad', title: 'Could not save the objects', sub: err.message || String(err) }); }
+}
+function wireObjects() {
+  $('objs-close').onclick = closeObjects;
+  $('objs-layer').onchange = () => openObjects($('objs-layer').value);
+  $('objs-prev').onclick = () => stepObject(-1);
+  $('objs-next').onclick = () => stepObject(1);
+  $('objs-csv').onclick = objectsCsv;
+  const add = () => {
+    const c = $('objs-col').value, lo = $('objs-min').value, hi = $('objs-max').value;
+    if (!c || (lo === '' && hi === '')) return;
+    objs.where[c] = [lo === '' ? null : +lo, hi === '' ? null : +hi];
+    $('objs-min').value = ''; $('objs-max').value = '';
+    objs.pos = null; loadObjects(0);
+  };
+  $('objs-add').onclick = add;
+  for (const id of ['objs-min', 'objs-max']) $(id).onkeydown = (e) => { if (e.key === 'Enter') add(); };
+  $('objs-wrap').onkeydown = (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); stepObject(1); } else if (e.key === 'ArrowUp') { e.preventDefault(); stepObject(-1); }
+  };
+  // an object clicked on the slide: its row
+  grid.addEventListener('objectclick', (e) => {
+    const d = e.detail;
+    if (!objs.layer || !d || d.layer !== objs.layer) return;
+    objs.sel = d.index;
+    loadObjects(0, { find: d.index }).then((t) => { if (t?.position != null) pickRowOnly(t.position); });
+  });
+  // the layer changed (drawn, deleted, detected): read it again
+  grid.addEventListener('draw', () => { if (objs.layer) setTimeout(() => loadObjects(0), 600); });
+  grid.addEventListener('objectdeleted', () => { if (objs.layer) setTimeout(() => loadObjects(0), 300); });
+}
+async function pickRowOnly(pos) {   // show and mark the row without moving the view (the object was clicked there)
+  if (pos < objs.offset || pos >= objs.offset + objs.rows.length) await loadObjects(Math.max(0, pos - 20));
+  objs.pos = pos;
+  renderObjects();
+}
+
 async function snapshotGrid() {
   // every pane, as laid out: panels lettered A, B, C… with their slide's name, and scale bars
   const labels = grid.panes.map((q, i) => (slides.find((x) => x.id === panes[i])?.name || q.slide?.info?.name || '').replace(/\.[^.]+$/, ''));

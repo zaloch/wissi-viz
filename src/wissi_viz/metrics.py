@@ -519,6 +519,76 @@ def object_metrics(
     return _df(out)
 
 
+#: units by column suffix, and the columns shown first in an objects table
+_UNITS = (('_um2', 'µm²'), ('_mm2', 'mm²'), ('_um', 'µm'), ('_px', 'px'), ('_deg', '°'))
+_FIRST = ('index', 'class', 'area_um2', 'perimeter_um', 'major_axis_um', 'minor_axis_um', 'max_feret_um',
+          'circularity', 'solidity', 'aspect_ratio', 'eccentricity', 'x_px', 'y_px')  # fmt: skip
+
+
+def column_info(name: str) -> dict:
+    """How a measurement column is shown: {'name', 'label' (without its unit suffix), 'unit'}."""
+    for suf, unit in _UNITS:
+        if name.endswith(suf):
+            return {'name': name, 'label': name[: -len(suf)].replace('_', ' '), 'unit': unit}
+    return {'name': name, 'label': name.replace('_', ' '), 'unit': ''}
+
+
+def object_page(
+    df,
+    *,
+    sort: str = 'index',
+    desc: bool = False,
+    offset: int = 0,
+    limit: int = 200,
+    classes: Sequence[str] | None = None,
+    where: Sequence[tuple[str, float | None, float | None]] = (),
+    find: int | None = None,
+) -> dict:
+    """One page of an objects table (the frame of :func:`object_metrics`), filtered by class and by ranges
+    ``(column, min, max)``, sorted by a column: {'columns': [{name, label, unit, numeric, min, median, max}],
+    'rows', 'total' (after filtering), 'of' (before), 'offset', 'position' (the row of object ``find`` in this
+    order, or None), 'classes': {name: count}}. Geometry columns come first."""
+    of = len(df)
+    counts = df['class'].value_counts().to_dict() if 'class' in df else {}
+    keep = np.ones(of, bool)
+    if classes:
+        keep &= df['class'].isin(list(classes)).to_numpy()
+    for col, lo, hi in where:
+        if col not in df:
+            continue
+        v = df[col].to_numpy()
+        if lo is not None:
+            keep &= v >= lo
+        if hi is not None:
+            keep &= v <= hi
+    d = df[keep]
+    if sort in d:
+        d = d.sort_values(sort, ascending=not desc, kind='stable', na_position='last')
+    position = None
+    if find is not None:
+        hit = np.nonzero(d['index'].to_numpy() == find)[0]
+        position = int(hit[0]) if len(hit) else None
+    cols = [c for c in _FIRST if c in d] + [c for c in d.columns if c not in _FIRST]
+    info = []
+    for c in cols:
+        ci = column_info(c)
+        v = d[c]
+        ci['numeric'] = v.dtype.kind in 'iufb' if isinstance(v.dtype, np.dtype) else False  # not pandas' strings
+        if ci['numeric'] and len(v):
+            f = v.to_numpy(dtype=float)
+            f = f[np.isfinite(f)]
+            if len(f):
+                ci.update(min=float(f.min()), median=float(np.median(f)), max=float(f.max()))
+        info.append(ci)
+    page = d.iloc[max(0, offset) : max(0, offset) + max(1, limit)][cols]
+    rows = [
+        [None if isinstance(x, float) and not math.isfinite(x) else (x.item() if hasattr(x, 'item') else x) for x in r]
+        for r in page.itertuples(index=False, name=None)
+    ]
+    return {'columns': info, 'rows': rows, 'total': int(len(d)), 'of': int(of), 'offset': int(max(0, offset)),
+            'position': position, 'classes': {str(k): int(v) for k, v in counts.items()}}  # fmt: skip
+
+
 def _object_intensity(source, F, polys: np.ndarray, level: int, tile: int) -> dict:
     """Per-object mean / sd of each channel (or H / E / DAB OD and grey for brightfield), tile by tile."""
     L = source.info.levels[level]

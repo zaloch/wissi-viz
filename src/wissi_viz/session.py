@@ -114,6 +114,7 @@ class Session:
         self._recent_file = user_dir('config') / 'recent.json'
         self._projects_file = user_dir('config') / 'projects.json'
         self.show: list[str] = []  # slide ids to show in panes on load (a session)
+        self.views: dict[str, list[float]] = {}  # slide id → [x0, y0, x1, y1] to open on (a session's "view")
         #: the user's own groups of slides: [{'name', 'slides': [path, …]}] (paths, so they survive restarts)
         self.projects: list[dict] = self._load_projects()
 
@@ -365,6 +366,8 @@ class Session:
                 continue
             sid = r['opened'][0]
             ids[e.get('id', sid)] = sid
+            if e.get('view') and len(e['view']) == 4:
+                self.views[sid] = [float(v) for v in e['view']]
             for lp in e.get('layers', []):
                 try:
                     layer = annio.load(lp)
@@ -396,6 +399,7 @@ class Session:
             'recent': self.recent(),
             'version': __version__,
             'show': self.show,
+            'views': self.views,
             'projects': self.projects,
         }
 

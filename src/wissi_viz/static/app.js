@@ -2417,6 +2417,13 @@ async function start() {
     document.title = 'wissi-viz (browser window: see the notice)';   // the title bar says so too, not only the notice
   }
   apply();
+  // a session may say where each slide opens (e.g. on the tissue of a cut-out that fills little of its canvas)
+  for (const [i, sid] of panes.entries()) {
+    const v = st.views?.[sid];
+    if (!v) continue;
+    const go = (n = 0) => { const p = grid.panes[i]; if (p?.slide?.info && p.view) grid.goToBounds(i, v[0], v[1], v[2], v[3], { animate: false }); else if (n < 200) setTimeout(() => go(n + 1), 100); };
+    go();
+  }
   renderRecent(st.recent);
   if (!CAPS.open) {
     for (const id of ['b-open', 'b-folder', 'b-layer']) $(id).hidden = true;

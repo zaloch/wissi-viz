@@ -230,3 +230,43 @@ def test_codex_is_a_set_of_its_own():
     assert not any(x.get('set') for x in pack.items('quick'))
     assert pack._collection(cx[0]).startswith('CODEX')
     assert set(pack.status()) >= {'quick', 'full', 'codex'}
+
+
+def test_a_session_can_say_where_a_slide_opens(tmp_path):
+    """A cut-out that fills little of its canvas opens on its tissue: the session's "view" reaches the app's state."""
+    import json
+
+    import numpy as np
+    import tifffile
+
+    from wissi_viz import annio, pack
+    from wissi_viz.annotations import AnnotationLayer
+    from wissi_viz.session import Session
+
+    d = tmp_path / 'pack'
+    (d / 'slides').mkdir(parents=True)
+    (d / 'layers').mkdir()
+    img = np.zeros((2000, 3000, 3), np.uint8)
+    img[1400:1800, 200:700] = (200, 120, 180)
+    tifffile.imwrite(d / 'slides' / 'cut.tif', img, tile=(256, 256), photometric='rgb')
+    L = AnnotationLayer.from_geojson({'type': 'Feature', 'properties': {}, 'geometry': {'type': 'Polygon',
+                                      'coordinates': [[[200, 1400], [700, 1400], [700, 1800], [200, 1800], [200, 1400]]]}},
+                                     name='Tissue')  # fmt: skip
+    annio.export(L, d / 'layers' / 'cut.tissue.parquet')
+    x = {'id': 'cut', 'title': 'Cut-out', 'file': 'cut.tif', 'licence': 'CC0-1.0'}
+    view = pack._tissue_view(x, d)
+    assert view and view[0] < 200 < 700 < view[2] and view[1] < 1400 < 1800 < view[3] and view[2] - view[0] < 700
+    doc = json.loads(pack.session([x], d).read_text(encoding='utf-8'))
+    assert doc['slides'][0]['view'] == view
+    s = Session(cache_dir=tmp_path / 'cache', remember=False)
+    try:
+        s.load_session(d / 'session-1.json', log=lambda m: None)
+        assert list(s.state()['views'].values()) == [view]
+    finally:
+        s.shutdown()
+    # tissue that fills the image: no view
+    big = AnnotationLayer.from_geojson({'type': 'Feature', 'properties': {}, 'geometry': {'type': 'Polygon',
+                                        'coordinates': [[[0, 0], [3000, 0], [3000, 2000], [0, 2000], [0, 0]]]}},
+                                       name='Tissue')  # fmt: skip
+    annio.export(big, d / 'layers' / 'cut.tissue.parquet')
+    assert pack._tissue_view(x, d) is None

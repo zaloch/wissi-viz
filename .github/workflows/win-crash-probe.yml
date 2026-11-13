@@ -1,0 +1,30 @@
+# Windows access violation while a cell table is read and tiles are produced: which part crashes?
+name: win-crash-probe
+on:
+  workflow_dispatch:
+  push:
+    branches: [lab/win-crash]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.13']
+    env:
+      UV_PYTHON: ${{ matrix.python }}
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - name: Install (locked)
+        run: uv sync --locked --extra analysis --extra io --extra polars --extra server --extra remote
+      - name: Probe
+        env:
+          PROBE_RUNS: '8'
+        run: uv run --no-sync python scripts/win_crash_probe.py

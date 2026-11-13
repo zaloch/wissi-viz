@@ -404,7 +404,34 @@ def _brightfield(w, data, s):
         w.check('.menu button:has-text("Export as")', None)
     assert dl.value.suggested_filename
     menu()
+    # the objects table of the layer: opens, steps, filters, saves, closes
+    w.check('.menu button:has-text("Objects table")', '() => !document.getElementById("objs").hidden')
+    pg.wait_for_selector('#objs-table tbody tr')
+    pg.select_option('#objs-layer', 'cells')  # many objects: stepping moves
+    pg.wait_for_function('() => document.querySelectorAll("#objs-table tbody tr").length > 5')
+    w.audit('objects table')
+    w.check('#objs-next', '() => document.getElementById("objs-pos").textContent.trim().startsWith("1")')
+    w.check('#objs-next', '() => document.getElementById("objs-pos").textContent.trim().startsWith("2")')
+    w.check('#objs-prev', '() => document.getElementById("objs-pos").textContent.trim().startsWith("1")')
+    pg.fill('#objs-min', '1e12')
+    w.check('#objs-add', '() => document.getElementById("objs-count").textContent.includes("filtered")')
+    w.check(
+        '#objs-classes .fchip:has-text("✕")',
+        '() => !document.getElementById("objs-count").textContent.includes("filtered")',
+    )
+    w.check(
+        '#objs-classes .fchip', '() => document.getElementById("objs-count").textContent.includes("filtered")'
+    )  # a class left out
+    w.check('#objs-classes .fchip', '() => !document.getElementById("objs-count").textContent.includes("filtered")')
+    with pg.expect_download() as dl:
+        w.check('#objs-csv', None)
+    assert dl.value.suggested_filename.endswith('objects.csv')
+    w.check('#objs-close', '() => document.getElementById("objs").hidden')
+    menu()
     w.check('.menu button:has-text("Summary")', '() => document.getElementById("p-measure").classList.contains("on")')
+    w.check('#ms-objs', '() => !document.getElementById("objs").hidden')
+    pg.keyboard.press('t')
+    assert pg.evaluate('() => document.getElementById("objs").hidden')
     pg.click('#t-layers')
     menu()
     w.check(
@@ -465,6 +492,10 @@ def _brightfield(w, data, s):
     )  # 40×: 0.25 µm per screen px
     pg.evaluate(f'([x, y]) => ({G})().goTo(0, x, y, {{zoom: 2, animate: false}})', [float(c.cx[5]), float(c.cy[5])])
     pg.wait_for_timeout(400)
+    pg.mouse.click(*box)
+    pg.wait_for_selector('#card .btn')
+    w.check('#card button:has-text("In table")', '() => document.querySelector("#objs-table tr.sel")')
+    pg.keyboard.press('t')
     pg.mouse.click(*box)
     pg.wait_for_selector('#card .btn')
     w.check('#card button[aria-label=Close]', '() => document.getElementById("card").style.display === "none"')

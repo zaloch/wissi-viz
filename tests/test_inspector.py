@@ -403,7 +403,7 @@ def test_drawing_measuring_undo_delete_in_the_browser(session):
             pg.mouse.click(*at(1250, 2200))
             pg.wait_for_function(f'() => ({g})().panes[0].selection?.layer === "Annotations"')
             pg.wait_for_selector('#card', state='visible')  # its sizes: the object card
-            assert 'area_um2' in pg.inner_text('#card')
+            assert 'Area' in pg.inner_text('#card') and '50,000 µm²' in pg.inner_text('#card')  # 500 × 400 px
             pg.keyboard.press('Escape')
             pg.keyboard.press('Delete')
             wait_n('Annotations', 0)
@@ -452,3 +452,124 @@ def test_remove_and_geometry_endpoints(session):
     c.post(base + '/remove', params={'layer': 'D', 'index': 0})
     c.post(base + '/remove', params={'layer': 'D', 'index': 0})
     assert 'D' not in s.registry.layers(sid)
+
+
+def test_objects_table(session):
+    """A layer's objects as a table: geometry first with units, sorted, filtered by class and range, one found."""
+    pytest.importorskip('shapely')
+    pytest.importorskip('pandas')
+    s, sid = session
+    c = _client(s)
+    base = f'/wissi-viz/slides/{sid}/annotations'
+    feats = [{'type': 'Feature', 'geometry': {'type': 'Polygon', 'coordinates': [[[0, 0], [k, 0], [k, k], [0, k], [0, 0]]]},
+              'properties': {'classification': {'name': 'small' if k < 25 else 'large'}}} for k in (10, 20, 30, 40)]  # fmt: skip
+    c.post(base + '/add', params={'layer': 'T'}, json={'type': 'FeatureCollection', 'features': feats})
+    t = c.get(base + '/table', params={'layer': 'T', 'sort': 'area_um2', 'desc': True}).json()
+    names = [x['name'] for x in t['columns']]
+    assert names[:4] == ['index', 'class', 'area_um2', 'perimeter_um'] and t['total'] == t['of'] == 4
+    area = next(x for x in t['columns'] if x['name'] == 'area_um2')
+    assert area['unit'] == 'µm²' and area['label'] == 'area' and area['max'] == pytest.approx(1600 * MPP**2)
+    assert [r[0] for r in t['rows']] == [3, 2, 1, 0] and t['classes'] == {'small': 2, 'large': 2}
+    assert t['rows'][0][names.index('circularity')] == pytest.approx(0.785, abs=0.01)  # a square
+    t = c.get(base + '/table', params={'layer': 'T', 'class': 'large', 'where': f'area_um2:{1000 * MPP**2}:',
+                                       'find': 3}).json()  # fmt: skip
+    assert [r[0] for r in t['rows']] == [3] and t['total'] == 1 and t['position'] == 0
+    t = c.get(base + '/table', params={'layer': 'T', 'offset': 2, 'limit': 1, 'find': 3}).json()
+    assert [r[0] for r in t['rows']] == [2] and t['position'] == 3
+    # a cell table too (points: no area), paged
+    t = c.get(base + '/table', params={'layer': 'cells', 'limit': 5}).json()
+    assert len(t['rows']) == 5 and t['total'] > 100
+    c.post(base + '/add', params={'layer': 'T'}, json=feats[0])  # the layer changed: the table follows
+    assert c.get(base + '/table', params={'layer': 'T'}).json()['total'] == 5
+
+
+def test_objects_table_in_the_browser(session):
+    """The objects table: opens on a layer, sorts by a column, filters by a range and by class, steps through
+    objects (selecting each on the slide), follows a click on the slide; the object card gives the geometry."""
+    pytest.importorskip('playwright')
+    pytest.importorskip('shapely')
+    from playwright.sync_api import sync_playwright
+
+    from wissi_viz import desktop as D
+
+    s, sid = session
+    c = _client(s)
+    feats = [{'type': 'Feature', 'geometry': {'type': 'Polygon',
+              'coordinates': [[[x, 600], [x + k, 600], [x + k, 600 + k], [x, 600 + k], [x, 600]]]},
+              'properties': {'classification': {'name': 'small' if k < 250 else 'large'}}}
+             for x, k in ((600, 100), (900, 200), (1300, 300), (1800, 400))]  # fmt: skip
+    c.post(f'/wissi-viz/slides/{sid}/annotations/add', params={'layer': 'Shapes'},
+           json={'type': 'FeatureCollection', 'features': feats})  # fmt: skip
+    srv = D._Server(s.app())
+    url = srv.start()
+    errors = []
+    shots = os.environ.get('WISSI_SWEEP_SHOTS')
+    try:
+        with sync_playwright() as pw:
+            try:
+                b = pw.chromium.launch(args=['--enable-unsafe-swiftshader'])
+            except Exception as e:
+                pytest.skip(f'no Chromium: {e}')
+            pg = b.new_page(viewport={'width': 1440, 'height': 900})
+            pg.on('pageerror', lambda e: errors.append(str(e)))
+            pg.on('console', lambda m: errors.append(m.text) if m.type == 'error' else None)
+            pg.goto(url + '/app')
+            g = '() => document.getElementById("grid")'
+            pg.wait_for_function(f'() => ({g})().panes.every(p => p.slide && p.slide.layers.has("Shapes"))')
+            pg.evaluate(f'() => ({g})().fit(0, false)')
+            pg.locator('#grid').click(position={'x': 30, 'y': 30})
+            pg.keyboard.press('t')
+            pg.wait_for_selector('#objs-table tbody tr')
+            pg.select_option('#objs-layer', 'Shapes')
+            pg.wait_for_function('() => document.querySelectorAll("#objs-table tbody tr").length === 4')
+            heads = pg.eval_on_selector_all('#objs-table th', 'els => els.map(e => e.textContent)')
+            assert heads[0].startswith('#') and heads[2].startswith('area') and 'µm²' in heads[2], heads
+            # largest first
+            pg.click('#objs-table th:nth-child(3)')
+            pg.wait_for_function('() => document.querySelector("#objs-table tbody tr td").textContent === "3"')
+            first = pg.eval_on_selector_all('#objs-table tbody tr:first-child td', 'els => els.map(e => e.textContent)')
+            assert first[1] == 'large' and first[2].replace(',', '') == f'{400 * 400 * MPP**2:.0f}', first
+            # step: the first object is selected on the slide and centred
+            pg.keyboard.press(']')
+            pg.wait_for_function(f'() => ({g})().panes[0].selection?.f === 3')
+            assert pg.inner_text('#objs-pos').replace(' ', '') == '1/4'
+            pg.keyboard.press(']')
+            pg.wait_for_function(f'() => ({g})().panes[0].selection?.f === 2')
+            pg.wait_for_function(f'() => Math.abs(({g})().panes[0].view.cx - 1450) < 5')  # centred on it
+            if shots:
+                pg.wait_for_timeout(700)
+                pg.screenshot(path=str(Path(shots) / 'objs-table.png'))
+            # a range, then a class
+            pg.fill('#objs-min', str(100 * 100 * MPP**2 + 1))
+            pg.click('#objs-add')
+            pg.wait_for_function('() => document.querySelectorAll("#objs-table tbody tr").length === 3')
+            assert '3 of 4' in pg.inner_text('#objs-count')
+            pg.click('#objs-classes .fchip:has-text("large")')
+            pg.wait_for_function('() => document.querySelectorAll("#objs-table tbody tr").length === 1')
+            assert pg.inner_text('#objs-table tbody tr td:nth-child(2)') == 'small'
+            pg.click('#objs-classes .fchip:has-text("✕")')
+            pg.click('#objs-classes .fchip:has-text("large")')
+            pg.wait_for_function('() => document.querySelectorAll("#objs-table tbody tr").length === 4')
+            # a click on the slide: its row, and the card with the geometry
+            pg.keyboard.press('1')
+            pg.evaluate(f"""() => {{ const e = ({g})();
+                for (const n of e.panes[0].slide.layers.keys()) if (n !== 'Shapes') e.setLayerVisible('all', n, false);
+                e.fit(0, false); }}""")  # only the shapes can be hit; the whole slide in view
+            pg.wait_for_timeout(400)
+            r = pg.evaluate(f"""() => {{ const e = ({g})(), p = e.panes[0], r = e.getBoundingClientRect(), v = p.view;
+                return [r.left + p.rect.x + p.rect.w / 2 + (650 - v.cx) * v.scale,
+                        r.top + p.rect.y + p.rect.h / 2 + (650 - v.cy) * v.scale]; }}""")
+            pg.mouse.click(*r)
+            pg.wait_for_selector('#card .shape', state='visible')
+            card = pg.inner_text('#card')
+            assert 'Area' in card and f'{100 * 100 * MPP**2:,.0f} µm²' in card and 'Perimeter' in card, card
+            pg.wait_for_function('() => document.querySelector("#objs-table tr.sel td")?.textContent === "0"')
+            if shots:
+                pg.screenshot(path=str(Path(shots) / 'objs-card.png'))
+            pg.keyboard.press('Escape')
+            pg.keyboard.press('t')
+            assert not pg.is_visible('#objs')
+            b.close()
+    finally:
+        srv.stop()
+    assert not errors, errors

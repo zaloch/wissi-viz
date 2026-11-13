@@ -163,3 +163,24 @@ def test_evidence_per_tool():
     assert 'F1 0.61' in ev['find_cells'] and 'Cellpose-SAM' in ev['find_cells'] and 'classic' not in ev['find_cells']
     assert 'Dice 0.46' in ev['find_areas'] and 'SAM 3 found nothing' in ev['find_by_text']
     assert validation.evidence({}) == {}
+
+
+def test_ome_units_and_colour_stored_as_three_planes(tmp_path):
+    """PhenoCycler / Xenium pipeline exports: the pixel size in centimetres, and an H&E as three unnamed 8-bit
+    planes — read as µm and as one colour image; three named markers stay channels."""
+    import tifffile
+
+    from wissi_viz.sources import open_slide
+
+    rgb = (np.random.default_rng(0).random((3, 300, 400)) * 255).astype(np.uint8)
+    cm = {'PhysicalSizeX': 2.5e-5, 'PhysicalSizeXUnit': 'cm', 'PhysicalSizeY': 2.5e-5, 'PhysicalSizeYUnit': 'cm'}
+    tifffile.imwrite(tmp_path / 'he.ome.tif', rgb, metadata={'axes': 'CYX', **cm}, tile=(256, 256))
+    s = open_slide(tmp_path / 'he.ome.tif')
+    assert s.info.mode == 'rgb' and s.info.mpp == pytest.approx((0.25, 0.25))
+    t = s.read_region(0, 10, 20, 50, 40)
+    assert t.dtype == np.uint8 and (t == rgb[:, 20:60, 10:60].transpose(1, 2, 0)).all()
+    tifffile.imwrite(tmp_path / 'if.ome.tif', rgb, tile=(256, 256),
+                     metadata={'axes': 'CYX', 'Channel': {'Name': ['DAPI', 'CD3', 'CD8']}, **cm})  # fmt: skip
+    f = open_slide(tmp_path / 'if.ome.tif')
+    assert f.info.mode == 'channels' and [c.name for c in f.info.channels] == ['DAPI', 'CD3', 'CD8']
+    assert f.info.mpp == pytest.approx((0.25, 0.25))

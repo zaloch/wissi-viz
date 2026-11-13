@@ -1,6 +1,7 @@
 """The ``wissi-viz`` command.
 
 wissi-viz --demo                       # 5 public slides, cells segmented, opened in the app
+wissi-viz --demo codex                 # a 39-marker PhenoCycler (CODEX) image and its H&E; add your own with Open
 wissi-viz desktop slide.svs            # the viewer in its own window ("wissi-viz[desktop]")
 wissi-viz serve /data/slides --port 8010 --cache-dir /var/cache/wissi-viz
 wissi-viz serve --allow-open /data/slides --key s3cret     # visitors open slides from that folder
@@ -260,8 +261,9 @@ def _demo_or_benchmark(argv: list[str]) -> None:
         'set',
         nargs='?',
         default=None,
-        choices=['quick', 'full'],
-        help='quick: 5 images (~1.2 GB); full: 32 images (~7 GB). Asked when not given (quick without a terminal)',
+        choices=list(pack.SETS),
+        help='quick: 5 images (~1.2 GB); full: 32 images (~7 GB); codex: a 39-marker PhenoCycler image and its H&E '
+        '(~340 MB). Asked when not given (quick without a terminal)',
     )
     ap.add_argument('--dir', default=None, help='where the images are kept (default: your user cache)')
     ap.add_argument('--yes', action='store_true', help="don't ask before downloading")
@@ -293,8 +295,9 @@ def _ask_set() -> str:
     print('Which sample set?')
     print('  1  quick:  5 images, ~1.2 GB  (3 H&E, 2 multiplex IF)')
     print('  2  full:  32 images, ~7 GB    (26 H&E: OpenSlide, CAMELYON16 lymph nodes, 18 TCGA tumour types; 6 IF)')
-    ans = input('[1/2, default 1] ').strip().lower()
-    return 'full' if ans in ('2', 'f', 'full') else 'quick'
+    print('  3  codex:  2 images, ~340 MB  (human pancreas: 39 markers by PhenoCycler / CODEX, and its H&E)')
+    ans = input('[1/2/3, default 1] ').strip().lower()
+    return 'full' if ans in ('2', 'f', 'full') else 'codex' if ans in ('3', 'c', 'codex') else 'quick'
 
 
 if __name__ == '__main__':

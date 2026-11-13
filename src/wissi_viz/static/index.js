@@ -1490,6 +1490,7 @@ export class WsiGrid extends HTMLElement {
         + (this.showControls ? `<button class="btn" title="Display settings">${SVG_GEAR}</button>` : '');
       p.el = el;
       p.$label = el.querySelector('.label');
+      if (p.tag?.color) el.style.boxShadow = `inset 0 0 0 2px ${p.tag.color}`;
       p.$scale = el.querySelector('.scale');
       p._scaleKey = p._scaleI = p._scaleS = null;   // new elements: the cached scale bar state is stale
       p.$coords = el.querySelector('.coords');
@@ -1548,10 +1549,21 @@ export class WsiGrid extends HTMLElement {
     this.requestRender();
   }
 
+  /** A pane's group tag: {text, color} shown before the slide name, with the pane framed in its colour; null clears. */
+  setPaneTag(pane, tag) {
+    const p = this._pane(pane);
+    if (!p) return;
+    p.tag = tag && (tag.text || tag.color) ? { text: tag.text || '', color: tag.color || null } : null;
+    if (p.el) p.el.style.boxShadow = p.tag?.color ? `inset 0 0 0 2px ${p.tag.color}` : '';
+    this._updateLabel(p);
+  }
+
   _updateLabel(p) {
     if (!p.$label) return;
     const s = p.slide;
-    p.$label.textContent = s ? (s.info?.name || s.info?.id || '') : '';
+    const name = s ? (s.info?.name || s.info?.id || '') : '';
+    p.$label.textContent = p.tag?.text && name ? `${p.tag.text} · ${name}` : name;
+    p.$label.style.borderLeft = p.tag?.color ? `3px solid ${p.tag.color}` : '';
     p.$label.style.display = s && p.$label.textContent ? '' : 'none';
     p.$msg.textContent = !s ? '' : s.error ? `⚠ ${s.error}` : s.info ? '' : 'loading…';
   }

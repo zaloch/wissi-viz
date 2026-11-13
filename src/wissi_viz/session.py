@@ -26,11 +26,11 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.requests import Request  # module level: FastAPI resolves the string annotations here
 
-from . import annio
+from . import annio, slidemeta
 from ._compat import user_dir
 from ._version import __version__
 from .annotations import AnnotationLayer
-from .connectors import RemoteConnection, image_list, open_connection
+from .connectors import RemoteConnection, image_entries, open_connection
 from .objects import cached_object_layer
 from .registry import SLIDE_EXTS, SlideRegistry
 from .server import app_page, create_app
@@ -117,6 +117,21 @@ class Session:
         self.views: dict[str, list[float]] = {}  # slide id → [x0, y0, x1, y1] to open on (a session's "view")
         #: the user's own groups of slides: [{'name', 'slides': [path, …]}] (paths, so they survive restarts)
         self.projects: list[dict] = self._load_projects()
+        #: per-image metadata a tile API gave (slide id → {field: value}); metadata tables matched to slides by a key
+        self.slide_meta: dict[str, dict] = {}
+        self._meta_file = user_dir('config') / 'metadata.json'
+        self.meta_tables: list[slidemeta.MetaTable] = []
+        self._auto_meta: dict[str, dict] = {}
+        self._matched: tuple[tuple, list[dict]] | None = None
+        if remember:
+            try:
+                for t in json.loads(self._meta_file.read_text(encoding='utf-8')):
+                    try:
+                        self.meta_tables.append(slidemeta.MetaTable(t['path'], t.get('key')))
+                    except Exception:  # noqa: BLE001  (moved or deleted since: dropped)
+                        pass
+            except (OSError, ValueError, TypeError):
+                pass
 
     # -- permissions
     @property
@@ -320,7 +335,7 @@ class Session:
         # ${ENV} secrets: on the command line and in the desktop app (the user's own), not from a server's visitors
         conn = open_connection(spec, allow_code=trusted, expand_env=trusted or self.roots is None, **factory_kwargs)
         label = getattr(conn, 'kind', None) or conn.id_prefix
-        pairs = image_list(conn, images)
+        pairs = image_entries(conn, images)
         if not pairs:
             raise ValueError('service lists no images · Give image ids')
         errors = []
@@ -328,15 +343,18 @@ class Session:
             errors.append(f'{label}: showing the first {MAX_CONNECT_IMAGES} of {len(pairs)} images')
             pairs = pairs[:MAX_CONNECT_IMAGES]
         ids = []
-        for iid, name in pairs:
+        for iid, name, meta in pairs:
             sid = conn.register(self.registry, iid, name=name)
             self._paths[sid] = f'{label}:{iid}'
+            if meta:
+                self.slide_meta[sid] = meta
             ids.append(sid)
         try:
             self.registry.info(ids[0])
         except Exception as e:
             for sid in ids:
                 self._paths.pop(sid, None)
+                self.slide_meta.pop(sid, None)
                 self.registry.remove(sid)
             raise ConnectionError(f'{label}: {e}') from e
         self._connections.append(conn)
@@ -352,6 +370,8 @@ class Session:
     # -- the rest
     def close(self, slide: str) -> dict:
         self._paths.pop(slide, None)
+        self.slide_meta.pop(slide, None)
+        self._auto_meta.pop(slide, None)
         self.registry.remove(slide)
         return {'slides': self.slides()}
 
@@ -387,15 +407,71 @@ class Session:
         return {'slides': self.slides(), 'errors': errors}
 
     def slides(self) -> list[dict]:
-        return [
-            {'id': s, 'name': self.registry._entries[s].name, 'path': p}
-            for s, p in self._paths.items()
-            if s in self.registry
-        ]
+        """The open slides with their metadata: file fields, then a tile API's, then metadata tables' (later wins)."""
+        ids = [s for s in self._paths if s in self.registry]
+        names = {s: self.registry._entries[s].name for s in ids}
+        tables = self._table_meta(tuple((s, names[s], self._paths[s]) for s in ids))
+        out = []
+        for s in ids:
+            p = self._paths[s]
+            if s not in self._auto_meta:
+                self._auto_meta[s] = slidemeta.auto_meta(p, remote=self.registry._entries[s].path is None)
+            meta = {**self._auto_meta[s], **self.slide_meta.get(s, {})}
+            for t in tables:
+                meta.update(t.get(s, {}))
+            out.append({'id': s, 'name': names[s], 'path': p, 'meta': meta})
+        return out
+
+    def _table_meta(self, slides: tuple) -> list[dict]:
+        key = (slides, tuple(id(t) for t in self.meta_tables))
+        if self._matched is None or self._matched[0] != key:
+            self._matched = (key, [t.match(list(slides)) for t in self.meta_tables])
+        return self._matched[1]
+
+    # -- metadata tables
+    def add_metadata(
+        self, paths: Iterable[str | os.PathLike], key: str | None = None, *, trusted: bool = False
+    ) -> dict:
+        """Add metadata tables (CSV / TSV / Parquet): the column naming most open slides is the key (by id, name,
+        file name or path), the other columns become fields of the slides it names."""
+        errors = []
+        for raw in paths or []:
+            p = Path(str(raw)).expanduser()
+            try:
+                if not (trusted or self.allowed(p)):
+                    raise PermissionError('outside the folders this server allows')
+                if p.suffix.lower() not in slidemeta.TABLE_EXTS:
+                    raise ValueError('metadata table: .csv, .tsv or .parquet')
+                t = slidemeta.MetaTable(p, key)
+                self.meta_tables = [x for x in self.meta_tables if Path(x.path) != p] + [t]
+            except Exception as e:  # noqa: BLE001  (reported per file)
+                errors.append(f'{p.name}: {e}')
+        self._save_meta()
+        return {**self.metadata_state(), 'errors': errors}
+
+    def remove_metadata(self, path: str) -> dict:
+        self.meta_tables = [t for t in self.meta_tables if t.path != path]
+        self._save_meta()
+        return self.metadata_state()
+
+    def metadata_state(self) -> dict:
+        slides = self.slides()
+        tables = self._matched[1] if self._matched else []
+        return {'slides': slides, 'meta_tables': [t.describe(len(m)) for t, m in zip(self.meta_tables, tables)]}
+
+    def _save_meta(self) -> None:
+        self._matched = None
+        if self.remember:
+            with self._lock:
+                try:
+                    data = [{'path': t.path, 'key': t.key} for t in self.meta_tables]
+                    self._meta_file.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+                except OSError:
+                    pass
 
     def state(self) -> dict:
         return {
-            'slides': self.slides(),
+            **self.metadata_state(),
             'recent': self.recent(),
             'version': __version__,
             'show': self.show,
@@ -575,6 +651,17 @@ def create_session_app(
         check(request, needs_key=mode == 'server')
         body = await request.json()
         return await run(lambda: session.set_projects(body.get('projects')))
+
+    @app.post('/app/metadata')
+    async def app_metadata(request: Request):
+        """Add metadata tables {paths: [...], key?} or remove one {remove: path}."""
+        check(request, needs_key=True)
+        body = await request.json()
+        if body.get('remove'):
+            return await run(lambda: session.remove_metadata(body['remove']))
+        if not session.can_open:
+            raise HTTPException(403, 'this server does not open files')
+        return await run(lambda: session.add_metadata(body.get('paths') or [], body.get('key')))
 
     @app.post('/app/close')
     async def app_close(request: Request):

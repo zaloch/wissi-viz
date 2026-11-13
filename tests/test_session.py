@@ -180,6 +180,36 @@ def test_http_connector_images_from_a_fixed_list():
     assert image_list(c, 'x, y\nz') == [('x', 'x'), ('y', 'y'), ('z', 'z')]
 
 
+def test_slide_metadata_from_files_apis_and_tables(tree, tmp_path):
+    """Every slide has file fields; a tile API's items and a metadata table (matched by file name, any key column)
+    add theirs; the table survives a restart; ids such as 001042 stay text, numbers are numbers."""
+    from wissi_viz.connectors import HttpTileConnection, image_entries
+
+    allowed, _ = tree
+    s = Session(roots=[allowed], remember=True)
+    s.open([allowed / 'a.svs', allowed / 'sub' / 'b.svs'])
+    by = {x['name']: x['meta'] for x in s.slides()}
+    assert by['a.svs']['Format'] == 'svs' and by['b.svs']['Folder'] == 'sub' and 'Modified' in by['a.svs']
+    (allowed / 'meta.csv').write_text(
+        'Block,Slide file,Treatment group,Dose (mg/kg),Animal\nX,a.svs,Untreated,0,001042\nY,b,siRNA,1.5,7\n',
+        encoding='utf-8',
+    )
+    r = s.add_metadata([allowed / 'meta.csv'])
+    assert not r['errors'] and r['meta_tables'][0]['key'] == 'Slide file' and r['meta_tables'][0]['matched'] == 2
+    by = {x['name']: x['meta'] for x in r['slides']}
+    assert by['a.svs']['Treatment group'] == 'Untreated' and by['a.svs']['Animal'] == '001042'
+    assert by['b.svs']['Dose (mg/kg)'] == 1.5 and by['b.svs']['Animal'] == 7 and 'Slide file' not in by['b.svs']
+    assert 'outside' in s.add_metadata([tmp_path / 'private' / 'x.csv'])['errors'][0]
+    again = Session(roots=[allowed], remember=True)  # the table is remembered
+    again.open([allowed / 'a.svs'])
+    assert again.slides()[0]['meta']['Treatment group'] == 'Untreated'
+    assert again.remove_metadata(str(allowed / 'meta.csv'))['meta_tables'] == []
+
+    c = HttpTileConnection({'base_url': 'http://x', 'tile': {'path': '/t'},
+                            'images': ['a', {'id': 'b', 'name': 'B', 'Treatment group': 'siRNA', 'deep': {'x': 1}}]})  # fmt: skip
+    assert image_entries(c) == [('a', 'a', {}), ('b', 'B', {'Treatment group': 'siRNA'})]
+
+
 # ------------------------------------------------------------------------------------------- HTTP endpoints
 def test_server_endpoints_key_token_and_cors(tree, mock_api):
     from starlette.testclient import TestClient

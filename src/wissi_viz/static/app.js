@@ -141,6 +141,7 @@ const call = async (name, ...args) => {
   if (await nativeReady && native()) return native()[name](...args);
   if (name === 'open_paths') return quiet(http(`${BASE}/app/open`, { paths: args[0], slide: args[1] }));
   if (name === 'close_slide') return quiet(http(`${BASE}/app/close`, { slide: args[0] }));
+  if (name === 'add_metadata') return quiet(http(`${BASE}/app/metadata`, { paths: args[0] }));
   if (name === 'state') {
     if (TOKEN) return http(`${BASE}/app/state`);
     const list = await (await fetch(`${API}/slides`, { cache: 'no-cache' })).json();   // a page without a session
@@ -181,9 +182,11 @@ function apply() {
   if (!panes.length) $('minimap').hidden = true;
   else if (mapOn) $('minimap').hidden = false;
   $('b-layer').disabled = !panes.length;
-  $('n').value = Math.max(1, panes.length);
+  $('n').value = deck ? deck.per : Math.max(1, panes.length);
   active = Math.min(active, Math.max(0, panes.length - 1));
-  if (panes.length) grid.setSlides(panes);
+  // a page shorter than the others keeps the page's layout: the rest of its panes stay empty
+  if (panes.length) grid.setSlides(deck && panes.length < deck.per ? [...panes, ...Array(deck.per - panes.length).fill(null)] : panes);
+  if (panes.length) (grid.panes || []).forEach((_, k) => grid.setPaneTag?.(k, (deck && panes[k] && deck.tags.get(panes[k])) || null));
   if (panes.length > 1) grid.setActive(active);
   renderList();
   renderCrumb();
@@ -192,6 +195,7 @@ function apply() {
 
 function setPaneCount(n) {
   if (!slides.length) return;
+  if (deck) { const first = panes[0]; deck.per = n; layoutDeck(first); showPage(deck.page); return; }
   const next = panes.slice(0, n);
   for (let i = next.length; i < n; i++) {
     const unused = slides.find((x) => !next.includes(x.id));
@@ -259,10 +263,124 @@ function toggleGroup(key) {
   renderList();
 }
 
+// ---- arranging the list by metadata: chips group (nested sections) or sort, in the order they stand
+const LV_KEY = 'wissi-list-view';
+const lv = (() => { try { return JSON.parse(lsGet(LV_KEY, '{}')) || {}; } catch (e) { return {}; } })();
+lv.chips = Array.isArray(lv.chips) ? lv.chips.filter((c) => c && c.field) : [];
+lv.breaks = !!lv.breaks;
+const saveLv = () => lsSet(LV_KEY, JSON.stringify(lv));
+const checked = new Set();   // checked slides (ids)
+let checkAnchor = null;
+let listOrder = [];         // slide ids as listed (top to bottom, each once): ranges, Open all
+let listGroups = [];        // [{label, ids}] the top-level metadata groups as listed (pages per group)
+const GROUP_COLORS = ['#f6a04d', '#7bd88f', '#ff6b8b', '#c792ea', '#ffd866', '#4fd1c5', '#e0a3ff', '#9fb4ff'];   // not the accent (active pane)
+function fieldValue(sl, f) { return f === 'Name' ? sl.name : sl.meta?.[f] ?? null; }
+function listFields() {
+  const seen = new Set(['Name']);
+  for (const sl of slides) for (const k of Object.keys(sl.meta || {})) seen.add(k);
+  return [...seen];
+}
+function cmpValues(a, b) {
+  if (a == null || a === '') return b == null || b === '' ? 0 : 1;   // empty values last
+  if (b == null || b === '') return -1;
+  if (typeof a === 'number' && typeof b === 'number') return a - b;
+  return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
+}
+function sortItems(items) {
+  const keys = lv.chips.filter((c) => c.role === 'sort');
+  if (!keys.length) return items;
+  return [...items].sort((a, b) => {
+    for (const c of keys) { const d = cmpValues(fieldValue(a, c.field), fieldValue(b, c.field)); if (d) return c.desc ? -d : d; }
+    return cmpValues(a.name, b.name);
+  });
+}
+const fmtValue = (v) => (v == null || v === '' ? '(none)' : typeof v === 'number' ? v.toLocaleString(undefined, { maximumFractionDigits: 4 }) : String(v));
+/** Nested groups by the group chips: [{key, field, value, label, items, kids}] in the chips' order. */
+function metaTree(items, chips, prefix = 'meta') {
+  if (!chips.length) return null;
+  const [c, ...rest] = chips;
+  const by = new Map();
+  for (const sl of items) {
+    const v = fieldValue(sl, c.field);
+    const k = v == null || v === '' ? '' : String(v);
+    if (!by.has(k)) by.set(k, { v, items: [] });
+    by.get(k).items.push(sl);
+  }
+  const nodes = [...by.entries()].map(([k, { v, items: its }]) => {
+    const key = `${prefix}|${c.field}=${k}`;
+    return { key, field: c.field, value: v, label: fmtValue(v), kind: c.field, items: its, kids: metaTree(its, rest, key) };
+  });
+  nodes.sort((a, b) => { const d = cmpValues(a.value, b.value); return c.desc ? -d : d; });
+  return nodes;
+}
+const leafItems = (g) => (g.kids ? g.kids.flatMap(leafItems) : sortItems(g.items));
+
+function renderChips() {
+  const box = $('s-chips');
+  box.replaceChildren();
+  lv.chips.forEach((c, idx) => {
+    const role = h('button', { class: 'role', title: c.role === 'group' ? 'Group · Click: sort instead' : 'Sort · Click: group instead',
+      'aria-label': `${c.field}: ${c.role === 'group' ? 'grouped' : 'sorted'} · switch` }, c.role === 'group' ? '▤' : '⇅');
+    role.onclick = () => { c.role = c.role === 'group' ? 'sort' : 'group'; saveLv(); renderList(); };
+    const dir = h('button', { class: 'dir', title: c.desc ? 'Descending · Click: ascending' : 'Ascending · Click: descending',
+      'aria-label': `${c.field}: ${c.desc ? 'descending' : 'ascending'} · switch` }, c.desc ? '↓' : '↑');
+    dir.onclick = () => { c.desc = !c.desc; saveLv(); renderList(); };
+    const x = h('button', { class: 'x', title: 'Remove', 'aria-label': `Remove ${c.field}` }, '×');
+    x.onclick = () => { lv.chips.splice(idx, 1); saveLv(); renderList(); };
+    const chip = h('span', { class: `lchip ${c.role}`, draggable: 'true', title: 'Drag: reorder', dataset: { i: idx } }, role, h('span', { class: 'f' }, c.field), dir, x);
+    chip.ondragstart = (e) => { e.dataTransfer.setData('text/wissi-chip', String(idx)); e.dataTransfer.effectAllowed = 'move'; };
+    chip.ondragover = (e) => { if (e.dataTransfer.types.includes('text/wissi-chip')) { e.preventDefault(); chip.classList.add('over'); } };
+    chip.ondragleave = () => chip.classList.remove('over');
+    chip.ondrop = (e) => {
+      e.preventDefault();
+      const from = +e.dataTransfer.getData('text/wissi-chip');
+      if (Number.isFinite(from) && from !== idx) { const [m] = lv.chips.splice(from, 1); lv.chips.splice(idx, 0, m); saveLv(); renderList(); }
+    };
+    box.append(chip);
+  });
+  const add = (role) => {
+    const b = h('button', { class: 'addchip', id: `s-add-${role}`, title: role === 'group' ? 'Group by field' : 'Sort by field' }, role === 'group' ? '+ Group' : '+ Sort');
+    b.onclick = (e) => {
+      const used = new Set(lv.chips.map((c) => c.field));
+      const fields = listFields().filter((f) => !used.has(f));
+      openMenu(e, fields.length ? fields.map((f) => [f, '', () => { lv.chips.push({ field: f, role, desc: false }); saveLv(); renderList(); }])
+        : [['All fields in use', '', () => false]]);
+    };
+    return b;
+  };
+  box.append(add('group'), add('sort'));
+}
+
+function renderOpenBar() {
+  const per = deck ? deck.per : Math.max(1, panes.length);
+  const ids = checked.size ? listOrder.filter((id) => checked.has(id)) : listOrder;
+  const pages = deckPages(ids, per).length;
+  const bar = $('s-open');
+  bar.hidden = !slides.length;
+  $('s-openall').textContent = checked.size ? `Open ${checked.size} selected` : `Open all ${listOrder.length}`;
+  $('s-openall').title = `Pages of ${per} pane${per === 1 ? '' : 's'} (pane count: view bar) · ${pages} page${pages === 1 ? '' : 's'} · Only the shown page loads`;
+  $('s-pages').textContent = `${pages} page${pages === 1 ? '' : 's'} × ${per}`;
+  $('s-clear').hidden = !checked.size;
+  $('s-breaks-box').hidden = !lv.chips.some((c) => c.role === 'group');
+  $('s-breaks').checked = lv.breaks;
+  $('slides').classList.toggle('picking', checked.size > 0);
+}
+
+function togglePick(id, e) {
+  if (e?.shiftKey && checkAnchor && listOrder.includes(checkAnchor)) {
+    const [a, b] = [listOrder.indexOf(checkAnchor), listOrder.indexOf(id)].sort((x, y) => x - y);
+    for (const x of listOrder.slice(a, b + 1)) checked.add(x);
+  } else if (checked.has(id)) checked.delete(id);
+  else checked.add(id);
+  checkAnchor = id;
+  renderList();
+}
+
 function renderList() {
   const box = $('slides');
   const q = ($('s-filter').value || '').trim().toLowerCase();
-  const match = (sl) => !q || sl.name.toLowerCase().includes(q) || (sl.path || '').toLowerCase().includes(q);
+  const match = (sl) => !q || sl.name.toLowerCase().includes(q) || (sl.path || '').toLowerCase().includes(q)
+    || Object.values(sl.meta || {}).some((v) => v != null && String(v).toLowerCase().includes(q));
   const byPath = new Map(slides.map((sl) => [slidePath(sl), sl]));
   const inProject = new Set();
   const groups = projects.map((pr) => {
@@ -270,20 +388,33 @@ function renderList() {
     items.forEach((sl) => inProject.add(sl.id));
     return { key: `proj:${pr.name}`, label: pr.name, kind: 'project', project: pr, items, title: `${items.length} slide${items.length === 1 ? '' : 's'}` };
   });
-  const folders = new Map();
-  for (const sl of slides) {
-    if (inProject.has(sl.id)) continue;
-    const f = folderOf(sl);
-    if (!folders.has(f.key)) folders.set(f.key, { ...f, items: [] });
-    folders.get(f.key).items.push(sl);
+  const rest = slides.filter((sl) => !inProject.has(sl.id));
+  const groupChips = lv.chips.filter((c) => c.role === 'group');
+  const tree = metaTree(slides.filter(match), groupChips);   // every slide, those in projects too (projects stay above)
+  if (tree) groups.push(...tree);
+  else {
+    const folders = new Map();
+    for (const sl of rest) {
+      const f = folderOf(sl);
+      if (!folders.has(f.key)) folders.set(f.key, { ...f, items: [] });
+      folders.get(f.key).items.push(sl);
+    }
+    groups.push(...folders.values());
   }
-  groups.push(...folders.values());
+  renderChips();
   box.replaceChildren();
-  for (const g of groups) {
-    const items = g.items.filter(match);
-    if (q && !items.length) continue;
+  const order = [], seen = new Set();
+  listGroups = [];
+  const colorOf = new Map((tree || []).map((g, i) => [g.key, GROUP_COLORS[i % GROUP_COLORS.length]]));
+  const sortChips = lv.chips.filter((c) => c.role === 'sort').map((c) => c.field);
+  const section = (g, depth, color) => {
+    const items = g.kids ? leafItems(g) : sortItems(g.items.filter(match));
+    if (q && !items.length) return null;
+    for (const sl of items) if (!seen.has(sl.id)) { seen.add(sl.id); order.push(sl.id); }
+    if (depth === 0 && g.kids !== undefined) listGroups.push({ label: g.label, field: g.field, color, ids: items.map((x) => x.id) });
     const closed = closedGroups.has(g.key) && !q;
-    const sec = h('section', { class: `sgroup${closed ? ' closed' : ''}`, dataset: { key: g.key, kind: g.kind }, role: 'group', 'aria-label': g.label });
+    const sec = h('section', { class: `sgroup${closed ? ' closed' : ''}`, dataset: { key: g.key, kind: g.kind }, role: 'group', 'aria-label': g.label,
+      style: depth ? `margin-left: ${depth * 10}px` : null });
     const tw = h('button', { class: 'tw', 'aria-label': `${closed ? 'Expand' : 'Collapse'} ${g.label}`, 'aria-expanded': String(!closed) },
       s('svg', { width: 12, height: 12, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2.5, 'stroke-linecap': 'round', 'aria-hidden': 'true' }, s('path', { d: 'M6 9l6 6 6-6' })));
     tw.onclick = () => toggleGroup(g.key);
@@ -310,46 +441,65 @@ function renderList() {
       };
       gn.onkeydown = (e) => { if (e.key === 'Enter') done(true); else if (e.key === 'Escape') done(false); e.stopPropagation(); };
       gn.onblur = () => done(true);
-
     } else {
-      gn = h('span', { class: 'gn', title: g.title || g.label }, g.label);
+      gn = h('span', { class: 'gn', title: g.title || (g.field ? `${g.field}: ${g.label}` : g.label) }, g.label);
       gn.onclick = () => toggleGroup(g.key);
       if (g.kind === 'project') gn.ondblclick = () => { renaming = g.label; renderList(); };
     }
+    const ids = items.map((x) => x.id);
+    const all = ids.length && ids.every((id) => checked.has(id)), some = ids.some((id) => checked.has(id));
+    const cb = h('input', { type: 'checkbox', class: 'gpick', 'aria-label': `Select ${g.label}`, title: 'Select group' });
+    cb.checked = !!all; cb.indeterminate = !all && some;
+    cb.onclick = (e) => { e.stopPropagation(); for (const id of ids) (all ? checked.delete(id) : checked.add(id)); renderList(); };
+    const openG = h('button', { class: 'btn icon ghost gopen', title: 'Open group as pages', 'aria-label': `Open ${g.label} as pages` }, '▸');
+    openG.onclick = () => openDeck(ids, { title: g.label, color });
     const more = h('button', { class: 'btn icon ghost more', title: 'More', 'aria-label': `More for ${g.label}` }, icon('more', 14));
     more.onclick = (e) => openMenu(e, g.kind === 'project' ? [
-      ['Show in panes', '', () => showSlides(items.map((x) => x.id))],
+      ['Open as pages', '', () => openDeck(ids, { title: g.label })],
+      ['Show in panes', '', () => showSlides(ids)],
       ['Rename', '', () => { renaming = g.label; renderList(); }],
       'hr',
       ['Delete project', '', () => { projects = projects.filter((x) => x !== g.project); saveProjects(); }, 'danger', 'The slides remain open'],
     ] : [
-      ['Show in panes', '', () => showSlides(items.map((x) => x.id))],
+      ['Open as pages', '', () => openDeck(ids, { title: g.label, color })],
+      ['Show in panes', '', () => showSlides(ids)],
       ['Make a project of these', '', () => newProject(items)],
     ]);
-    sec.append(h('div', { class: 'ghead' }, tw, gn, h('span', { class: 'gk' }, g.kind === 'project' ? 'project' : g.kind), h('span', { class: 'chip' }, String(items.length)), more));
-    const ul = h('ul', {});
-    for (const sl of items) ul.append(slideItem(sl, g));
-    if (g.kind === 'project' && !items.length) ul.append(h('li', { class: 'dim', style: 'font-size: 12px; cursor: default; padding: 6px 8px' }, 'Drag slides here, or use a slide’s ⋯ menu.'));
-    sec.append(ul);
+    const kind = g.kind === 'project' ? 'project' : g.field ? '' : g.kind;   // a metadata group: its field is in the chips
+    const head = h('div', { class: 'ghead' }, cb, tw, color ? h('i', { class: 'gdot', style: `background: ${color}` }) : null, gn, kind ? h('span', { class: 'gk' }, kind) : null, h('span', { class: 'chip' }, String(items.length)), openG, more);
+    sec.append(head);
+    if (g.kids) {
+      const kids = h('div', { class: 'kids' });
+      for (const k of g.kids) { const c = section(k, depth + 1, color); if (c) kids.append(c); }
+      sec.append(kids);
+    } else {
+      const ul = h('ul', {});
+      for (const sl of items) ul.append(slideItem(sl, g, sortChips));
+      if (g.kind === 'project' && !items.length) ul.append(h('li', { class: 'dim', style: 'font-size: 12px; cursor: default; padding: 6px 8px' }, 'Drag slides here, or use a slide’s ⋯ menu.'));
+      sec.append(ul);
+    }
     if (g.kind === 'project') {   // drop slides on a project
       sec.ondragover = (e) => { if (e.dataTransfer.types.includes('text/wissi-slide')) { e.preventDefault(); e.stopPropagation(); sec.classList.add('drop'); } };
       sec.ondragleave = () => sec.classList.remove('drop');
       sec.ondrop = (e) => {
-        const id = e.dataTransfer.getData('text/wissi-slide');
+        const dropped = e.dataTransfer.getData('text/wissi-slide').split('\n');
         e.preventDefault(); e.stopPropagation(); sec.classList.remove('drop');
-        const sl = slides.find((x) => x.id === id);
-        if (sl) addToProject(g.label, sl);
+        for (const id of dropped) { const sl = slides.find((x) => x.id === id); if (sl) addToProject(g.label, sl); }
       };
     }
-    box.append(sec);
-  }
+    return sec;
+  };
+  for (const g of groups) { const sec = section(g, 0, colorOf.get(g.key) || null); if (sec) box.append(sec); }
+  listOrder = order;
+  for (const id of [...checked]) if (!slides.some((x) => x.id === id)) checked.delete(id);
   if (q && !box.children.length) box.append(h('div', { class: 'panel-note', style: 'padding: 8px' }, `No slide matches “${q}”.`));
   const nameField = box.querySelector('input.gn');
   if (nameField && document.activeElement !== nameField) { nameField.focus(); nameField.select(); }
   $('s-count').textContent = slides.length ? String(slides.length) : '';
+  renderOpenBar();
 }
 
-function slideItem(sl, g) {
+function slideItem(sl, g, sortChips = []) {
   const shown = panes.map((id, i) => (id === sl.id ? i + 1 : 0)).filter(Boolean);
   const img = h('img', { class: 'thumb', alt: '', loading: 'lazy', src: `${API}/slides/${enc(sl.id)}/thumbnail?size=160` });
   img.onerror = () => { img.removeAttribute('src'); img.classList.add('blank'); };
@@ -374,15 +524,93 @@ function slideItem(sl, g) {
     if (g.kind === 'project') items.push(['Remove from this project', '', () => removeFromProject(g.label, sl)]);
     openMenu(e, items);
   };
-  const li = h('li', { class: (shown.length ? 'shown' : '') + (sl.id === activeSlide() ? ' active' : ''), title: sl.path || sl.name, draggable: 'true', role: 'listitem' },
-    img, h('span', { class: 'txt' }, h('span', { class: 'name' }, sl.name),
-      h('span', { class: 'sub' }, isRemote(sl) ? `${(sl.path || '').split(':')[0]} · tile API` : shown.length ? `pane ${shown.join(', ')}` : '')),
+  const pick = h('input', { type: 'checkbox', class: 'pick', 'aria-label': `Select ${sl.name}`, title: 'Select · Shift: range' });
+  pick.checked = checked.has(sl.id);
+  pick.onclick = (e) => { e.stopPropagation(); togglePick(sl.id, e); };
+  // second line: the sort fields' values (they tell apart slides of one group), else where it is shown
+  const vals = sortChips.filter((f) => f !== 'Name').map((f) => fmtValue(fieldValue(sl, f)));
+  const sub = vals.length ? vals.join(' · ') : isRemote(sl) ? `${(sl.path || '').split(':')[0]} · tile API` : shown.length ? `pane ${shown.join(', ')}` : '';
+  const li = h('li', { class: (shown.length ? 'shown' : '') + (sl.id === activeSlide() ? ' active' : '') + (checked.has(sl.id) ? ' checked' : ''),
+    title: sl.path || sl.name, draggable: 'true', role: 'listitem', dataset: { id: sl.id } },
+    pick, img, h('span', { class: 'txt' }, h('span', { class: 'name' }, sl.name), h('span', { class: 'sub' }, sub)),
     h('span', { class: 'pane' }, shown.join(' ')), x, more);
-  li.onclick = () => { if (!panes.length) panes = [sl.id]; else panes[active] = sl.id; apply(); };
-  li.ondblclick = () => addPane(sl.id);
-  li.ondragstart = (e) => { e.dataTransfer.setData('text/wissi-slide', sl.id); e.dataTransfer.effectAllowed = 'copy'; };
+  li.onclick = (e) => {
+    if (e.shiftKey || e.metaKey || e.ctrlKey) { togglePick(sl.id, e); return; }
+    if (!panes.length) panes = [sl.id]; else panes[active] = sl.id; apply();
+  };
+  li.ondblclick = (e) => { if (!(e.shiftKey || e.metaKey || e.ctrlKey)) addPane(sl.id); };
+  li.ondragstart = (e) => {
+    const ids = checked.has(sl.id) ? listOrder.filter((id) => checked.has(id)) : [sl.id];
+    e.dataTransfer.setData('text/wissi-slide', ids.join('\n'));
+    e.dataTransfer.effectAllowed = 'copy';
+  };
   return li;
 }
+
+// ---- pages of panes: the listed (or selected) slides, a page at a time; only the shown page's slides load
+let deck = null;   // {ids, per, page, pages: [[id…]], titles: [str], tags: Map(id → {text, color}), title}
+const savedViews = new Map();   // slide id → [x0, y0, x1, y1]: each slide opens where it was left
+function deckPages(ids, per, groups = null) {
+  const out = [];
+  if (groups) for (const g of groups) { const gi = ids.filter((id) => g.ids.includes(id)); for (let i = 0; i < gi.length; i += per) out.push(gi.slice(i, i + per)); }
+  else for (let i = 0; i < ids.length; i += per) out.push(ids.slice(i, i + per));
+  return out;
+}
+function openDeck(ids, { title = '', color = null } = {}) {
+  ids = ids.filter((id) => slides.some((x) => x.id === id));
+  if (!ids.length) return;
+  const per = deck ? deck.per : Math.max(1, panes.length);
+  const top = listGroups.filter((g) => g.ids.some((id) => ids.includes(id)));
+  const tags = new Map();
+  for (const g of top) for (const id of g.ids) tags.set(id, { text: g.label, color: g.color });
+  if (color && !top.length) for (const id of ids) tags.set(id, { text: title, color });
+  deck = { ids, per, page: 0, title, tags, byGroup: lv.breaks && top.length > 1 ? top : null };
+  layoutDeck();
+  showPage(0);
+}
+function layoutDeck(keep = null) {
+  deck.pages = deckPages(deck.ids, deck.per, deck.byGroup);
+  deck.titles = deck.pages.map((pg) => {
+    const labels = [...new Set(pg.map((id) => deck.tags.get(id)?.text).filter(Boolean))];
+    return labels.length ? (labels.length > 2 ? `${labels[0]} – ${labels[labels.length - 1]}` : labels.join(', ')) : deck.title;
+  });
+  if (keep) deck.page = Math.max(0, deck.pages.findIndex((pg) => pg.includes(keep)));
+}
+function rememberViews() {
+  for (const v of grid.getViews?.() || []) if (v?.slide != null && v.bounds) savedViews.set(v.slide, v.bounds);
+}
+function showPage(i) {
+  if (!deck) return;
+  rememberViews();
+  deck.page = Math.max(0, Math.min(deck.pages.length - 1, i));
+  panes = deck.pages[deck.page].slice();
+  active = 0;
+  apply();
+  panes.forEach((id, k) => {
+    const v = savedViews.get(id);
+    if (!v) return;
+    const go = (n = 0) => { const p = grid.panes[k]; if (p?.slide?.info && p.view) grid.goToBounds(k, v[0], v[1], v[2], v[3], { padding: 0, animate: false }); else if (n < 200) setTimeout(() => go(n + 1), 50); };
+    go();
+  });
+  renderDeck();
+  // the next page: read its slides and their low-resolution images now, so that it shows at once
+  for (const id of deck.pages[deck.page + 1] || []) {
+    fetch(`${API}/slides/${enc(id)}/info.json`, { priority: "low" }).catch(() => {});
+    fetch(`${API}/slides/${enc(id)}/thumbnail?size=256`, { priority: 'low' }).catch(() => {});
+  }
+}
+function renderDeck() {
+  const el = $('deck');
+  el.hidden = !deck || deck.pages.length < 1;
+  if (!deck) { grid.panes?.forEach((_, k) => grid.setPaneTag?.(k, null)); renderOpenBar(); return; }
+  $('deck-pos').textContent = `${deck.page + 1} / ${deck.pages.length}`;
+  $('deck-title').textContent = deck.titles[deck.page] || '';
+  $('deck-prev').disabled = deck.page === 0;
+  $('deck-next').disabled = deck.page >= deck.pages.length - 1;
+}
+function closeDeck() { rememberViews(); deck = null; renderDeck(); }
+function stepPage(d) { if (deck) showPage(deck.page + d); }
+
 function addPane(id) { if (panes.length < MAX_PANES && !panes.includes(id)) { panes.push(id); active = panes.length - 1; apply(); } }
 
 /** A small menu at the clicked element: entries [label, key, fn, class?, title?] or 'hr'. */
@@ -421,18 +649,19 @@ function renderRecent(items) {
 // ---- the in-page file picker (browser window / server): places, a clickable path, filter, multi-select
 const pk = { dir: '', parent: null, entries: [], sel: new Set(), mode: 'files', root: '' };
 function showPathBox(why) {
-  pk.mode = why === 'pick_folder' ? 'folder' : why === 'pick_layer' ? 'layer' : 'files';
+  pk.mode = why === 'pick_folder' ? 'folder' : why === 'pick_layer' ? 'layer' : why === 'pick_metadata' ? 'meta' : 'files';
   $('empty').style.display = '';
   $('empty').classList.add('picking');
   $('pathbox').style.display = 'block';
   $('paths').dataset.slide = pk.mode === 'layer' ? activeSlide() || '' : '';
   $('paths').placeholder = SERVER ? 'Or paste paths on the server, one per line' : 'Or paste file or folder paths, one per line';
-  $('pk-folder').hidden = pk.mode === 'layer';
-  $('pk-open').textContent = pk.mode === 'layer' ? 'Add to the slide' : 'Open selected';
+  $('pk-folder').hidden = pk.mode === 'layer' || pk.mode === 'meta';
+  $('pk-open').textContent = pk.mode === 'layer' ? 'Add to the slide' : pk.mode === 'meta' ? 'Add metadata table' : 'Open selected';
   if (CAPS.browse) { $('picker').classList.add('on'); browse(pk.dir || ''); setTimeout(() => $('pk-filter').focus(), 50); }
   else $('paths').focus();
   log(pk.mode === 'folder' ? 'Open folder · Select “Open this folder”.'
     : pk.mode === 'layer' ? 'Select cell tables or annotation files for active slide.'
+    : pk.mode === 'meta' ? 'Select metadata table (CSV, TSV, Parquet) · Key column: slide names'
       : SERVER ? 'Select slides on the server.' : 'Click: select · Double-click: open · System file dialogs: desktop app only.');
 }
 function closePicker() {
@@ -441,7 +670,23 @@ function closePicker() {
   $('empty').classList.remove('picking');
   $('empty').style.display = panes.length ? 'none' : '';
 }
+function metaResult(r) {
+  if (!r) return;
+  if (r.slides) { slides = r.slides; renderList(); }
+  if (r.errors?.length) toast({ kind: 'bad', title: 'Metadata table not added', sub: r.errors[0] });
+  else if (r.meta_tables?.length) {
+    const t = r.meta_tables[r.meta_tables.length - 1];
+    toast({ title: `${t.name}: ${t.matched} of ${slides.length} slide${slides.length === 1 ? '' : 's'} matched`,
+      sub: `Key column: ${t.key} · Fields: ${t.columns.slice(0, 6).join(', ')}${t.columns.length > 6 ? ' …' : ''} · Group or sort: + Group, + Sort` });
+  }
+}
 const openPaths = async (list) => {
+  if (pk.mode === 'meta') {
+    const r = await call('add_metadata', list);
+    if (r && !(r.errors || []).length) closePicker();
+    metaResult(r);
+    return;
+  }
   const res = await call('open_paths', list, $('paths').dataset.slide || null);
   if (res && !(res.errors || []).length) closePicker();
   onResult(res);
@@ -494,7 +739,7 @@ const human = (n) => (n == null ? '' : n >= 2 ** 30 ? `${(n / 2 ** 30).toFixed(1
 function renderEntries() {
   const box = $('browser');
   const q = $('pk-filter').value.trim().toLowerCase();
-  const wanted = pk.mode === 'layer' ? ['folder', 'table', 'annotations'] : pk.mode === 'folder' ? ['folder', 'slide'] : ['folder', 'slide', 'table', 'annotations'];
+  const wanted = pk.mode === 'layer' ? ['folder', 'table', 'annotations'] : pk.mode === 'meta' ? ['folder', 'table'] : pk.mode === 'folder' ? ['folder', 'slide'] : ['folder', 'slide', 'table', 'annotations'];
   const list = pk.entries.filter((e) => wanted.includes(e.kind) && (!q || e.name.toLowerCase().includes(q)));
   box.replaceChildren();
   const label = { folder: 'folder', slide: 'slide', table: 'cells', annotations: 'ann.' };
@@ -521,8 +766,8 @@ function renderEntries() {
   $('pk-folder').disabled = !pk.dir || (!nSlides && !pk.entries.some((e) => e.kind === 'folder'));
   $('pk-folder').textContent = nSlides ? `Open this folder (${nSlides} slide${nSlides === 1 ? '' : 's'})` : 'Open this folder';
   $('pk-open').disabled = !pk.sel.size;
-  if (pk.sel.size) $('pk-open').textContent = `${pk.mode === 'layer' ? 'Add' : 'Open'} ${pk.sel.size} selected`;
-  else $('pk-open').textContent = pk.mode === 'layer' ? 'Add to the slide' : 'Open selected';
+  if (pk.sel.size) $('pk-open').textContent = `${pk.mode === 'layer' || pk.mode === 'meta' ? 'Add' : 'Open'} ${pk.sel.size} selected`;
+  else $('pk-open').textContent = pk.mode === 'layer' ? 'Add to the slide' : pk.mode === 'meta' ? 'Add metadata table' : 'Open selected';
   $('pk-info').textContent = pk.mode === 'folder' ? 'Open the folder first, then its slides' : pk.sel.size ? 'Shift / ⌘-click to select more' : 'Click to select · double-click to open';
 }
 
@@ -2024,6 +2269,7 @@ document.addEventListener('keydown', (e) => {
   const k = e.key;
   if (k === 't' || k === 'T') { if (objs.layer) closeObjects(); else openObjects(); keyFlash('T', 'Objects table'); return; }
   if (objs.layer && (k === ']' || k === '[')) { stepObject(k === ']' ? 1 : -1); return; }
+  if (deck && (k === 'PageDown' || k === 'PageUp')) { e.preventDefault(); stepPage(k === 'PageDown' ? 1 : -1); keyFlash(k === 'PageDown' ? 'PgDn' : 'PgUp', `page ${deck.page + 1} of ${deck.pages.length}`); return; }
   if (k >= '1' && k <= '9' && !e.repeat) { const [t, label] = TOOLS[+k - 1]; setTool(t); keyFlash(k, label); return; }
   if ((k === 'Delete' || k === 'Backspace') && !e.defaultPrevented && grid.panes[grid.active]?.selection && !grid._drawing) { e.preventDefault(); deleteSelected(); return; }
   const tabs = { l: ['layers', 'Layers'], i: ['image', 'Image'], a: ['analyze', 'Analyze'], m: ['measure', 'Measure'], d: ['draw', 'Annotate'] };
@@ -2065,6 +2311,13 @@ function wire() {
   $('l-filter').oninput = () => renderLayers();
   for (const b of $('l-mode').children) b.onclick = () => { layerMode = b.dataset.mode; lsSet('wissi-layer-mode', layerMode); renderLayers(); };
   $('s-filter').oninput = () => renderList();
+  $('s-openall').onclick = () => openDeck(checked.size ? listOrder.filter((id) => checked.has(id)) : listOrder, { title: checked.size ? 'Selected' : 'All slides' });
+  $('s-clear').onclick = () => { checked.clear(); renderList(); };
+  $('s-breaks').onchange = () => { lv.breaks = $('s-breaks').checked; saveLv(); renderOpenBar(); };
+  $('s-meta').onclick = async () => metaResult(await call('pick_metadata'));
+  $('deck-prev').onclick = () => stepPage(-1);
+  $('deck-next').onclick = () => stepPage(1);
+  $('deck-close').onclick = () => closeDeck();
   $('s-newproj').onclick = () => newProject([]);
   // file picker
   $('pk-up').onclick = () => { if (pk.parent != null) browse(pk.parent); };
@@ -2446,7 +2699,7 @@ async function start() {
   }
   renderRecent(st.recent);
   if (!CAPS.open) {
-    for (const id of ['b-open', 'b-folder', 'b-layer']) $(id).hidden = true;
+    for (const id of ['b-open', 'b-folder', 'b-layer', 's-meta']) $(id).hidden = true;
     document.querySelectorAll('#empty [data-act=open], #empty [data-act=folder]').forEach((b) => (b.hidden = true));
   }
   $('b-connect').hidden = !CAPS.connect;

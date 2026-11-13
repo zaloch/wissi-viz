@@ -734,7 +734,7 @@ def _fluorescence(w, data, s):
 def _slide_list(w, data, s):
     pg = w.pg
     # projects: new (named inline), drag a slide in, group menus, slide menus, collapse
-    w.check('#s-newproj', '() => document.querySelector("#slides section[data-kind=project] input")')
+    w.check('#s-newproj', '() => document.querySelector("#slides section[data-kind=project] input.gn")')
     pg.keyboard.type('Cohort A')
     pg.keyboard.press('Enter')
     pg.wait_for_selector('#slides section[data-kind=project] .gn:has-text("Cohort A")')
@@ -768,10 +768,10 @@ def _slide_list(w, data, s):
     pg.click('#slides section[data-kind=project] >> nth=0 >> .ghead .more')
     w.check(
         '.menu button:has-text("Rename")',
-        '() => document.activeElement?.matches("#slides section[data-kind=project] input")',
+        '() => document.activeElement?.matches("#slides section[data-kind=project] input.gn")',
     )
     pg.keyboard.press('Escape')
-    pg.wait_for_function('() => !document.querySelector("#slides section[data-kind=project] input")')
+    pg.wait_for_function('() => !document.querySelector("#slides section[data-kind=project] input.gn")')
     pg.hover('#slides li[draggable] >> nth=0')
     pg.click('#slides li[draggable] .more >> nth=0')
     w.audit('slide menu')
@@ -804,4 +804,49 @@ def _slide_list(w, data, s):
     pg.wait_for_function(f'() => document.querySelectorAll("#slides li[draggable]").length === {n_open - 1}')
     assert len(s.slides()) == n_open - 1
     w.cover('.more', '#slides li button')
+    _slide_list_metadata(w, data, s)
     w.audit('end')
+
+
+def _slide_list_metadata(w, data, s):
+    """A metadata table, group / sort chips, checked slides and pages of panes."""
+    pg = w.pg
+    pg.click('#b-open')  # two slides at least (pages to step through)
+    pg.wait_for_selector('#picker.on')
+    pg.fill('#paths', f'{data / "he.svs"}\n{data / "fl.czi"}')
+    pg.click('#b-paths')
+    pg.wait_for_function('() => !document.getElementById("picker").classList.contains("on")')
+    names = [x['name'] for x in s.slides()]
+    assert len(names) >= 2, names
+    rows = ['Slide,Group,Rank'] + [f'{n},{"AB"[i % 2]},{i}' for i, n in enumerate(names)]
+    (data / 'meta.csv').write_text('\n'.join(rows), encoding='utf-8')
+    w.check('#s-meta', '() => document.getElementById("picker").classList.contains("on")')
+    pg.fill('#paths', str(data / 'meta.csv'))
+    w.check('#b-paths', '() => document.querySelector(".toast")?.textContent.includes("matched")')
+    w.check('#s-add-group', '() => document.querySelector(".menu")')
+    w.check(
+        '.menu button:has-text("Group")',
+        f'() => document.querySelectorAll("#slides section[data-kind=Group]").length === {min(2, len(names))}',
+    )
+    w.check('#s-add-sort', '() => document.querySelector(".menu")')
+    w.check('.menu button:has-text("Rank")', '() => document.querySelectorAll("#s-chips .lchip").length === 2')
+    w.check('#s-chips .lchip .dir', '() => document.querySelector("#s-chips .lchip .dir").textContent === "↓"')
+    w.check('#s-chips .lchip.sort .role', '() => document.querySelectorAll("#s-chips .lchip.group").length === 2')
+    w.cover('#s-chips .lchip .role')  # group → sort and back: tests/test_slidelist.py
+    w.check('#s-chips .lchip .x', '() => document.querySelectorAll("#s-chips .lchip").length === 1')
+    pg.select_option('#n', '1')
+    w.check('#s-openall', '() => !document.getElementById("deck").hidden')
+    w.check('#deck-next', '() => document.getElementById("deck-pos").textContent.startsWith("2 /")')
+    w.check('#deck-prev', '() => document.getElementById("deck-pos").textContent.startsWith("1 /")')
+    w.check('#deck-close', '() => document.getElementById("deck").hidden')
+    pg.hover('#slides section >> nth=0 >> .ghead')
+    w.check('#slides section .ghead .gopen', '() => !document.getElementById("deck").hidden')
+    w.check('#deck-close', '() => document.getElementById("deck").hidden')
+    pg.hover('#slides section >> nth=0 >> .ghead')
+    pg.click('#slides section >> nth=0 >> .ghead .more')
+    w.check('.menu button:has-text("Open as pages")', '() => !document.getElementById("deck").hidden')
+    pg.hover('#slides li[draggable] >> nth=0')
+    pg.click('#slides li[draggable] >> nth=0 >> .pick')
+    w.audit('checked slides')
+    w.check('#s-clear', '() => !document.querySelector("#slides li.checked")')
+    w.check('#deck-close', '() => document.getElementById("deck").hidden')

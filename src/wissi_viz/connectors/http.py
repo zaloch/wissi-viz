@@ -81,11 +81,26 @@ def _get(d: Any, path: str | None, default: Any = None) -> Any:
     return d
 
 
-def _id_name(item: Any, id_key: str, name_key: str) -> tuple[str, str] | None:
+def _id_name(item: Any, id_key: str, name_key: str, meta: Any = None) -> tuple | None:
+    """(id, name), or (id, name, metadata) when the item has metadata: the fields ``meta`` lists (dotted), or
+    by default its other plain (text, number, true/false) top-level fields."""
     if isinstance(item, (str, int)):
         return str(item), str(item)
     iid = _get(item, id_key)
-    return None if iid is None else (str(iid), str(_get(item, name_key, iid)))
+    if iid is None:
+        return None
+    out = (str(iid), str(_get(item, name_key, iid)))
+    if isinstance(meta, list):
+        m = {k: _get(item, k) for k in meta}
+    elif isinstance(item, dict) and meta is not False:
+        m = {
+            k: v
+            for k, v in item.items()
+            if k not in (id_key, name_key) and (v is None or isinstance(v, (str, int, float, bool)))
+        }
+    else:
+        m = {}
+    return (*out, m) if m else out
 
 
 class HttpTileConnection(RemoteConnection):
@@ -200,22 +215,24 @@ class HttpTileConnection(RemoteConnection):
         q = {k: str(v).format(channel=channel) for k, v in (t.get('query') or {}).items()}
         return self._req(self._fmt(t['path'], image_id, level=level, col=col, row=row, channel=channel), q).content
 
-    def images(self) -> list[tuple[str, str]]:
+    def images(self) -> list[tuple]:
         """``"images": [...]`` from the config, else the ``"list"`` endpoint::
 
-            "list": {"path": "/api/images", "items": "data.items", "id": "id", "name": "name", "query": {...}}
+            "list": {"path": "/api/images", "items": "data.items", "id": "id", "name": "name", "query": {...},
+                     "meta": ["treatment", "animal.id"]}
 
         ``items`` is the (dotted) field holding the array; leave it out when the response is the array itself.
-        Items may be plain ids."""
+        Items may be plain ids. ``meta``: the fields shown as slide metadata (default: each item's other plain
+        fields; ``false``: none)."""
         fixed = self.config.get('images')
         if fixed is not None:
-            return [_id_name(x, 'id', 'name') for x in fixed if _id_name(x, 'id', 'name')]
+            return [y for y in (_id_name(x, 'id', 'name') for x in fixed) if y]
         spec = self.config.get('list')
         if not spec:
             return []
         data = self._retrying(lambda: self._req(spec['path'], spec.get('query')).json())
         items = _get(data, spec['items']) if spec.get('items') else data
-        out = (_id_name(x, spec.get('id', 'id'), spec.get('name', 'name')) for x in (items or []))
+        out = (_id_name(x, spec.get('id', 'id'), spec.get('name', 'name'), spec.get('meta')) for x in (items or []))
         return [x for x in out if x]
 
     def annotations(self, image_id: str):

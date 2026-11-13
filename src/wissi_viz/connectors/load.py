@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from ..slidemeta import clean_meta
 from .base import RemoteConnection
 from .http import HttpTileConnection
 
@@ -47,15 +48,32 @@ def open_connection(spec: Any, *, allow_code: bool = False, expand_env: bool = T
     raise ValueError(f'not a service description: {text!r} (a .json file, JSON text, or module:factory)')
 
 
-def image_list(conn: RemoteConnection, ids: Any = None) -> list[tuple[str, str]]:
-    """``(id, name)`` pairs: the ids given (a list or a comma / newline separated string), else what the
-    connection lists."""
+def image_entries(conn: RemoteConnection, ids: Any = None) -> list[tuple[str, str, dict]]:
+    """``(id, name, metadata)``: the ids given, else what the connection lists. ``images()`` may give ids,
+    ``(id, name)``, ``(id, name, metadata)`` or dicts ``{'id', 'name', 'meta'}`` (other keys also count as
+    metadata, e.g. ``{'id': 7, 'name': 'S-7', 'Treatment group': 'Untreated'}``)."""
     if isinstance(ids, str):
         ids = [s.strip() for s in ids.replace('\n', ',').split(',')]
     if ids:
-        return [(str(i), str(i)) for i in ids if str(i).strip()]
+        return [(str(i), str(i), {}) for i in ids if str(i).strip()]
     out = []
     for item in conn.images() or []:
-        iid, name = (item, item) if isinstance(item, (str, int)) else item
-        out.append((str(iid), str(name)))
+        if isinstance(item, dict):
+            iid = item.get('id')
+            if iid is None:
+                continue
+            extra = {k: v for k, v in item.items() if k not in ('id', 'name', 'meta')}
+            meta = {**extra, **(item.get('meta') or {})}
+            out.append((str(iid), str(item.get('name') or iid), clean_meta(meta)))
+        elif isinstance(item, (str, int)):
+            out.append((str(item), str(item), {}))
+        else:
+            iid, name, *rest = item
+            out.append((str(iid), str(name), clean_meta(rest[0]) if rest else {}))
     return out
+
+
+def image_list(conn: RemoteConnection, ids: Any = None) -> list[tuple[str, str]]:
+    """``(id, name)`` pairs: the ids given (a list or a comma / newline separated string), else what the
+    connection lists."""
+    return [(i, n) for i, n, _ in image_entries(conn, ids)]

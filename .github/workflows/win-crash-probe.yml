@@ -1,4 +1,5 @@
-# Windows access violation while a cell table is read and tiles are produced: which part crashes?
+# Windows access violation while a cell table is read and tiles are produced (seen twice in the full test suite,
+# never in isolation): the whole suite, repeated, with the table read by Polars, by Polars on one thread, by pyarrow.
 name: win-crash-probe
 on:
   workflow_dispatch:
@@ -9,22 +10,37 @@ permissions:
   contents: read
 
 jobs:
-  probe:
+  suite:
     runs-on: windows-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        python: ['3.10', '3.13']
+        variant: [polars, polars-1-thread, pyarrow]
+        attempt: [1, 2, 3, 4]
     env:
-      UV_PYTHON: ${{ matrix.python }}
+      UV_PYTHON: "3.13"
       PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
       - name: Install (locked)
-        run: uv sync --locked --extra analysis --extra io --extra polars --extra server --extra remote
-      - name: Probe
-        env:
-          PROBE_RUNS: '8'
-        run: uv run --no-sync python scripts/win_crash_probe.py
+        run: uv sync --locked --extra analysis --extra io --extra polars --extra server --extra remote --extra bench --extra slideio --extra desktop --extra nicegui
+      - name: Chromium for the browser tests
+        run: uv run playwright install --with-deps chromium
+        shell: bash
+      - name: Tests
+        shell: bash
+        run: |
+          extra=()
+          [ '${{ matrix.variant }}' = polars-1-thread ] && export POLARS_MAX_THREADS=1
+          [ '${{ matrix.variant }}' = pyarrow ] && extra=(-p probe_pyarrow)
+          export PYTHONPATH="$PWD/scripts"
+          set +e
+          uv run --no-sync pytest -q -x -p no:cacheprovider "${extra[@]}" > out.txt 2>&1
+          code=$?
+          crash=$(grep -m1 -A3 'fatal exception' out.txt | tr '\n' ' ' | cut -c1-400)
+          last=$(tail -1 out.txt | cut -c1-200)
+          echo "::notice title=${{ matrix.variant }} #${{ matrix.attempt }}::exit $code · ${crash:-no crash} · $last"

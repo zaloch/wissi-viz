@@ -406,6 +406,36 @@
    "licence": "CC-BY-4.0",
    "commercial_use": true,
    "attribution": "Data: 10x Genomics, licensed under CC BY 4.0"
+  },
+  {
+   "id": "codex-pancreas-if",
+   "title": "Human pancreas, 39 markers (PhenoCycler / CODEX)",
+   "kind": "if",
+   "url": "https://zenodo.org/api/records/15757766/files/if-cutout.ome.tif/content",
+   "file": "if-cutout.ome.tif",
+   "size": 198270242,
+   "md5": "1092ba066d26e378ac112ac517ac724e",
+   "set": "codex",
+   "segment": false,
+   "source": "PhenoCycler (CODEX) demo cut-out, Zenodo 15757766",
+   "licence": "CC-BY-4.0",
+   "commercial_use": true,
+   "attribution": "Sergii Domanskyi (2025), Demo Cutout Dataset of Multimodal Tissue Profiling (PhenoCycler, H&E, and Cell Segmentation), Zenodo, https://doi.org/10.5281/zenodo.15757766, licensed under CC BY 4.0"
+  },
+  {
+   "id": "codex-pancreas-he",
+   "title": "Human pancreas, H&E of the same tissue",
+   "kind": "he",
+   "url": "https://zenodo.org/api/records/15757766/files/he-cutout.ome.tif/content",
+   "file": "he-cutout.ome.tif",
+   "size": 141417630,
+   "md5": "e6c6181ad3fe1cfbdf73ef66ea1c6c28",
+   "set": "codex",
+   "segment": false,
+   "source": "PhenoCycler (CODEX) demo cut-out, Zenodo 15757766",
+   "licence": "CC-BY-4.0",
+   "commercial_use": true,
+   "attribution": "Sergii Domanskyi (2025), Demo Cutout Dataset of Multimodal Tissue Profiling (PhenoCycler, H&E, and Cell Segmentation), Zenodo, https://doi.org/10.5281/zenodo.15757766, licensed under CC BY 4.0"
   }
  ],
  "quick": [
@@ -416,5 +446,9 @@
   "xenium-kidney-protein"
  ],
  "total_bytes": 7086512038,
- "note": "Every image allows reuse including commercial use; see each item's licence and attribution."
+ "note": "Every image allows reuse including commercial use; see each item's licence and attribution.",
+ "codex": [
+  "codex-pancreas-if",
+  "codex-pancreas-he"
+ ]
 }

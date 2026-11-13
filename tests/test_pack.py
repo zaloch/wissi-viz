@@ -217,3 +217,16 @@ def test_measuring_without_resolution_says_so():
     assert pack._mpp_of(src, SimpleNamespace(mpp=0.25), 'a', said.append) == 0.25 and not said  # from its cells
     assert pack._mpp_of(src, None, 'b', said.append) == 0.5 and 'assumed 0.5' in said[0]
     assert pack._mpp_of(SimpleNamespace(info=SimpleNamespace(mpp=(0.24, 0.24))), None, 'c', said.append) == 0.24
+
+
+def test_codex_is_a_set_of_its_own():
+    """``--demo codex``: the 39-marker PhenoCycler image and its H&E; the 32-image pack is unchanged by it."""
+    from wissi_viz import pack
+
+    cx = pack.items('codex')
+    assert [x['id'] for x in cx] == ['codex-pancreas-if', 'codex-pancreas-he']
+    assert all(x['licence'] == 'CC-BY-4.0' and x['md5'] and x['segment'] is False for x in cx)
+    assert len(pack.items('full')) == 32 and not any(x.get('set') for x in pack.items('full'))
+    assert not any(x.get('set') for x in pack.items('quick'))
+    assert pack._collection(cx[0]).startswith('CODEX')
+    assert set(pack.status()) >= {'quick', 'full', 'codex'}

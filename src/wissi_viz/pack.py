@@ -3,6 +3,7 @@ and run through wissi-viz's analyses, opened as one 32-pane session.
 
     uv run wissi-viz --demo            # quick: 5 images (~1 GB), opens in the desktop app
     uv run wissi-viz --demo full       # all 32 (~20 GB)
+    uv run wissi-viz --demo codex      # a 39-marker PhenoCycler (CODEX) image and the H&E of the same tissue (~340 MB)
     uv run wissi-viz --benchmark       # benchmarks on the same images, report written to ./wissi-viz-benchmark.md
     wissi-viz pack status | download | prepare | segment | analyze | open    (step by step, --set quick|full)
 
@@ -50,6 +51,10 @@ UA = {'User-Agent': 'wissi-viz sample pack'}
 CAMELYON_GROUPS = {'_0': 'Tumor', '_1': 'Tumor', '_2': 'Exclusion', 'Tumor': 'Tumor', 'Exclusion': 'Exclusion'}
 
 
+#: the sample sets: quick (5 images), full (32), codex (a 39-marker PhenoCycler image and its H&E)
+SETS = ('quick', 'full', 'codex')
+
+
 def manifest() -> dict:
     if not MANIFEST.exists():
         raise FileNotFoundError('the sample-pack manifest is missing from this install (wissi_viz/data/pack32.json)')
@@ -58,9 +63,9 @@ def manifest() -> dict:
 
 def items(which: str = 'quick') -> list[dict]:
     m = manifest()
-    if which == 'full':
-        return m['items']
-    ids = set(m.get('quick') or [])
+    if which == 'full':  # the 32-image pack; sets of their own (codex) are asked for by name
+        return [x for x in m['items'] if not x.get('set')]
+    ids = set(m.get(which) or [])
     return [x for x in m['items'] if x['id'] in ids]
 
 
@@ -309,6 +314,8 @@ def segment(sel: list[dict], d: Path, model: str = 'auto', log=print) -> None:
             continue
         if (ld / f'{x["id"]}.cells-10x.parquet').exists() and model == 'auto':
             continue  # Xenium bundles bring their own cell segmentation
+        if x.get('segment') is False and model == 'auto':
+            continue  # shown as images only (the CODEX set: 39 markers, a matching H&E)
         segment_slide(_slide(x, d), out, model=model, log=log)
 
 
@@ -429,7 +436,7 @@ def session(sel: list[dict], d: Path) -> Path:
         groups.setdefault(_collection(x), []).append(x['id'])
     p = d / f'session-{len(sel)}.json'
     doc = {
-        'name': 'wissi-viz sample pack',
+        'name': 'wissi-viz CODEX demo' if all(x.get('set') == 'codex' for x in sel) else 'wissi-viz sample pack',
         'slides': entries,
         'show': [e['id'] for e in entries][:32],
         'projects': [{'name': f'Sample pack · {k}', 'slides': v} for k, v in groups.items()],
@@ -440,6 +447,8 @@ def session(sel: list[dict], d: Path) -> Path:
 
 def _collection(x: dict) -> str:
     src = (x.get('source') or '').lower()
+    if x.get('set') == 'codex':
+        return 'CODEX / PhenoCycler (39 markers)'
     if 'xenium' in src or x.get('kind') == 'if':
         return 'Multiplex IF (Xenium)'
     if 'camelyon' in src or 'camelyon' in x.get('id', ''):
@@ -510,7 +519,7 @@ def publish(d: Path) -> str:
 def status(directory: str | None = None) -> dict:
     d = pack_dir(directory)
     out = {}
-    for which in ('quick', 'full'):
+    for which in SETS:
         sel = items(which)
         out[which] = {
             'images': len(sel),
@@ -526,7 +535,7 @@ def status(directory: str | None = None) -> dict:
 def main(argv: list[str]) -> None:
     ap = argparse.ArgumentParser(prog='wissi-viz pack')
     ap.add_argument('step', choices=['status', 'download', 'prepare', 'segment', 'analyze', 'open', 'publish', 'all'])
-    ap.add_argument('--set', default='quick', choices=['quick', 'full'])
+    ap.add_argument('--set', default='quick', choices=list(SETS))
     ap.add_argument('--dir', default=None, help='where the pack lives (default: the user cache, or $WISSI_PACK_DIR)')
     ap.add_argument('--model', default='auto', choices=['auto', 'cellpose', 'classpose', 'classic'])
     ap.add_argument('--yes', action='store_true')

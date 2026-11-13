@@ -1,0 +1,43 @@
+{
+ "licence": "cc-by-4.0",
+ "files": [
+  {
+   "key": "if-matrix.csv",
+   "size": 101,
+   "checksum": "md5:c85a0b1a024e03d2229e2f7d80b35a33",
+   "url": "https://zenodo.org/api/records/15757766/files/if-matrix.csv/content"
+  },
+  {
+   "key": "he-cutout.ome.tif",
+   "size": 141417630,
+   "checksum": "md5:e6c6181ad3fe1cfbdf73ef66ea1c6c28",
+   "url": "https://zenodo.org/api/records/15757766/files/he-cutout.ome.tif/content"
+  },
+  {
+   "key": "if-cutout.ome.tif",
+   "size": 198270242,
+   "checksum": "md5:1092ba066d26e378ac112ac517ac724e",
+   "url": "https://zenodo.org/api/records/15757766/files/if-cutout.ome.tif/content"
+  },
+  {
+   "key": "he-matrix.csv",
+   "size": 126,
+   "checksum": "md5:3832e368400ad0185814b502eb2b5185",
+   "url": "https://zenodo.org/api/records/15757766/files/he-matrix.csv/content"
+  },
+  {
+   "key": "mask-cutout.ome.tif",
+   "size": 52663553,
+   "checksum": "md5:18d162852c2e0f5c3757ea9c2c224896",
+   "url": "https://zenodo.org/api/records/15757766/files/mask-cutout.ome.tif/content"
+  }
+ ],
+ "title": "Demo Cutout Dataset of Multimodal Tissue Profiling (PhenoCycler, H&E, and Cell Segmentation)",
+ "creators": [
+  {
+   "name": "Domanskyi, Sergii",
+   "affiliation": null,
+   "orcid": "0000-0002-6847-6019"
+  }
+ ]
+}

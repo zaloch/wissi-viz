@@ -1,0 +1,451 @@
+{
+ "channels": 39,
+ "tiles": {
+  "overview level": {
+   "first_ms": 3,
+   "median_ms": 2,
+   "max_ms": 6,
+   "all_channels_s": 0.11
+  },
+  "full resolution": {
+   "first_ms": 2,
+   "median_ms": 2,
+   "max_ms": 3,
+   "all_channels_s": 0.08
+  }
+ },
+ "histogram_s": 0.17,
+ "peak_mb": 302.65234375,
+ "info": {
+  "width": 21139,
+  "height": 22553,
+  "levels": [
+   {
+    "width": 21139,
+    "height": 22553,
+    "downsample": 1.0,
+    "virtual": false,
+    "remote_level": "0"
+   },
+   {
+    "width": 10569,
+    "height": 11276,
+    "downsample": 2.0000946163307787,
+    "virtual": false,
+    "remote_level": "1"
+   },
+   {
+    "width": 5284,
+    "height": 5638,
+    "downsample": 4.000567751703255,
+    "virtual": false,
+    "remote_level": "2"
+   },
+   {
+    "width": 2642,
+    "height": 2819,
+    "downsample": 8.00113550340651,
+    "virtual": false,
+    "remote_level": "3"
+   },
+   {
+    "width": 1321,
+    "height": 1409,
+    "downsample": 16.00227100681302,
+    "virtual": false,
+    "remote_level": "4"
+   },
+   {
+    "width": 660,
+    "height": 704,
+    "downsample": 32.02878787878788,
+    "virtual": false,
+    "remote_level": "5"
+   },
+   {
+    "width": 330,
+    "height": 352,
+    "downsample": 64.05757575757576,
+    "virtual": false,
+    "remote_level": "6"
+   },
+   {
+    "width": 165,
+    "height": 176,
+    "downsample": 128.11515151515152,
+    "virtual": false,
+    "remote_level": "7"
+   }
+  ],
+  "mode": "channels",
+  "dtype": "uint8",
+  "channels": [
+   {
+    "name": "DAPI",
+    "color": "#0000ff",
+    "window": [
+     6.0,
+     164.0
+    ],
+    "visible": true
+   },
+   {
+    "name": "CD45RA",
+    "color": "#00ff00",
+    "window": [
+     1.0,
+     224.20000000000073
+    ],
+    "visible": true
+   },
+   {
+    "name": "S100B",
+    "color": "#ff0000",
+    "window": [
+     1.0,
+     105.7030000000002
+    ],
+    "visible": true
+   },
+   {
+    "name": "Insulin",
+    "color": "#ff00ff",
+    "window": [
+     1.0,
+     255.0
+    ],
+    "visible": true
+   },
+   {
+    "name": "Carbonic Anhydrase 9",
+    "color": "#00ffff",
+    "window": [
+     1.0,
+     255.0
+    ],
+    "visible": true
+   },
+   {
+    "name": "Vimentin",
+    "color": "#ffff00",
+    "window": [
+     1.0,
+     255.0
+    ],
+    "visible": true
+   },
+   {
+    "name": "Glucagon",
+    "color": "#ff8000",
+    "window": [
+     1.0,
+     255.0
+    ],
+    "visible": true
+   },
+   {
+    "name": "CD45RO",
+    "color": "#ffffff",
+    "window": [
+     1.0,
+     32.0
+    ],
+    "visible": true
+   },
+   {
+    "name": "Collagen I",
+    "color": "#0000ff",
+    "window": [
+     1.0,
+     255.0
+    ],
+    "visible": true
+   },
+   {
+    "name": "p21",
+    "color": "#00ff00",
+    "window": [
+     1.0,
+     255.0
+    ],
+    "visible": true
+   },
+   {
+    "name": "MPO",
+    "color": "#ff0000",
+    "window": [
+     1.0,
+     51.320000000006985
+    ],
+    "visible": true
+   },
+   {
+    "name": "MECOM",
+    "color": "#ff00ff",
+    "window": [
+     1.0,
+     18.0
+    ],
+    "visible": true
+   },
+   {
+    "name": "CFTR",
+    "color": "#00ffff",
+    "window": [
+     1.0,
+     101.0
+    ],
+    "visible": true
+   },
+   {
+    "name": "PGP9.5",
+    "color": "#ffff00",
+    "window": [
+     1.0,
+     96.75000000000614
+    ],
+    "visible": true
+   },
+   {
+    "name": "Keratin 19",
+    "color": "#ff8000",
+    "window": [
+     1.0,
+     255.0
+    ],
+    "visible": true
+   },
+   {
+    "name": "53BP1",
+    "color": "#ffffff",
+    "window": [
+     1.0,
+     210.20400000000518
+    ],
+    "visible": true
+   },
+   {
+    "name": "p16",
+    "color": "#0000ff",
+    "window": [
+     1.0,
+     117.22200000000157
+    ],
+    "visible": true
+   },
+   {
+    "name": "Cadherin 11",
+    "color": "#00ff00",
+    "window": [
+     1.0,
+     13.284000000000106
+    ],
+    "visible": true
+   },
+   {
+    "name": "Somatostatin",
+    "color": "#ff0000",
+    "window": [
+     1.0,
+     255.0
+    ],
+    "visible": true
+   },
+   {
+    "name": "CD8",
+    "color": "#ff00ff",
+    "window": [
+     1.0,
+     229.65600000000404
+    ],
+    "visible": true
+   },
+   {
+    "name": "Lamin B1",
+    "color": "#00ffff",
+    "window": [
+     1.0,
+     118.87500000002149
+    ],
+    "visible": true
+   },
+   {
+    "name": "CD3e",
+    "color": "#ffff00",
+    "window": [
+     1.0,
+     255.0
+    ],
+    "visible": true
+   },
+   {
+    "name": "C-Peptide",
+    "color": "#ff8000",
+    "window": [
+     1.0,
+     255.0
+    ],
+    "visible": true
+   },
+   {
+    "name": "HMGB1",
+    "color": "#ffffff",
+    "window": [
+     1.0,
+     57.76100000000224
+    ],
+    "visible": true
+   },
+   {
+    "name": "Perilipin",
+    "color": "#0000ff",
+    "window": [
+     1.0,
+     54.10700000000361
+    ],
+    "visible": true
+   },
+   {
+    "name": "Podoplanin",
+    "color": "#00ff00",
+    "window": [
+     1.0,
+     116.42600000000152
+    ],
+    "visible": true
+   },
+   {
+    "name": "Pancreatic Polypeptide",
+    "color": "#ff0000",
+    "window": [
+     1.0,
+     153.82100000004675
+    ],
+    "visible": true
+   },
+   {
+    "name": "CD4",
+    "color": "#ff00ff",
+    "window": [
+     1.0,
+     86.32900000000154
+    ],
+    "visible": true
+   },
+   {
+    "name": "E-cadherin",
+    "color": "#00ffff",
+    "window": [
+     1.0,
+     88.65600000000268
+    ],
+    "visible": true
+   },
+   {
+    "name": "CD31",
+    "color": "#ffff00",
+    "window": [
+     1.0,
+     241.38600000000451
+    ],
+    "visible": true
+   },
+   {
+    "name": "CD68",
+    "color": "#ff8000",
+    "window": [
+     1.0,
+     209.52900000001864
+    ],
+    "visible": true
+   },
+   {
+    "name": "Ki67",
+    "color": "#ffffff",
+    "window": [
+     1.0,
+     165.8060000000023
+    ],
+    "visible": true
+   },
+   {
+    "name": "EpCAM",
+    "color": "#0000ff",
+    "window": [
+     1.0,
+     66.0
+    ],
+    "visible": true
+   },
+   {
+    "name": "CD45",
+    "color": "#00ff00",
+    "window": [
+     1.0,
+     115.70500000000175
+    ],
+    "visible": true
+   },
+   {
+    "name": "CD56",
+    "color": "#ff0000",
+    "window": [
+     0.0,
+     1.0
+    ],
+    "visible": true
+   },
+   {
+    "name": "CD20",
+    "color": "#ff00ff",
+    "window": [
+     1.0,
+     59.0470000000023
+    ],
+    "visible": true
+   },
+   {
+    "name": "FOXP3",
+    "color": "#00ffff",
+    "window": [
+     1.0,
+     18.0
+    ],
+    "visible": true
+   },
+   {
+    "name": "gH2AX",
+    "color": "#ffff00",
+    "window": [
+     0.0,
+     1.0
+    ],
+    "visible": true
+   },
+   {
+    "name": "SMA",
+    "color": "#ff8000",
+    "window": [
+     1.0,
+     232.89200000000346
+    ],
+    "visible": true
+   }
+  ],
+  "mpp": [
+   0.5065161017163349,
+   0.5065161017163349
+  ],
+  "name": "if-cutout.ome.tif",
+  "tile_size": 512,
+  "background": "#000000",
+  "tile_url": null,
+  "overlap": 0,
+  "level_ids": null,
+  "extra": {},
+  "id": "if-cutout.ome.tif-79118dbc",
+  "version": "1794544322-198270242",
+  "annotations": [],
+  "annotations_pending": false
+ }
+}

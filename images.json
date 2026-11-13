@@ -1,0 +1,92 @@
+{
+ "if-cutout.ome.tif": {
+  "open_s": 0.03,
+  "mode": "channels",
+  "size": [
+   21139,
+   22553
+  ],
+  "mpp": [
+   0.5065161017163349,
+   0.5065161017163349
+  ],
+  "levels": 8,
+  "dtype": "uint8",
+  "channels": [
+   "DAPI",
+   "CD45RA",
+   "S100B",
+   "Insulin",
+   "Carbonic Anhydrase 9",
+   "Vimentin",
+   "Glucagon",
+   "CD45RO",
+   "Collagen I",
+   "p21",
+   "MPO",
+   "MECOM",
+   "CFTR",
+   "PGP9.5",
+   "Keratin 19",
+   "53BP1",
+   "p16",
+   "Cadherin 11",
+   "Somatostatin",
+   "CD8",
+   "Lamin B1",
+   "CD3e",
+   "C-Peptide",
+   "HMGB1",
+   "Perilipin",
+   "Podoplanin",
+   "Pancreatic Polypeptide",
+   "CD4",
+   "E-cadherin",
+   "CD31",
+   "CD68",
+   "Ki67",
+   "EpCAM",
+   "CD45",
+   "CD56",
+   "CD20",
+   "FOXP3",
+   "gH2AX",
+   "SMA"
+  ],
+  "tile": 512
+ },
+ "he-cutout.ome.tif": {
+  "open_s": 0.01,
+  "mode": "rgb",
+  "size": [
+   44853,
+   41590
+  ],
+  "mpp": [
+   0.25,
+   0.25
+  ],
+  "levels": 9,
+  "dtype": "uint8",
+  "channels": [],
+  "tile": 512
+ },
+ "mask-cutout.ome.tif": {
+  "open_s": 0.01,
+  "mode": "channels",
+  "size": [
+   51120,
+   54418
+  ],
+  "mpp": [
+   1.0,
+   1.0
+  ],
+  "levels": 9,
+  "dtype": "uint16",
+  "channels": [
+   "Channel:0:0"
+  ],
+  "tile": 512
+ }
+}

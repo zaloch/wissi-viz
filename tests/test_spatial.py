@@ -248,3 +248,21 @@ def test_tissue_mask_and_stain_vectors(rng):
     v = sp.estimate_stain_vectors(Mem())
     ang = lambda a, b: np.degrees(np.arccos(abs(np.dot(a, b)) / np.linalg.norm(a) / np.linalg.norm(b)))
     assert ang(v['hematoxylin'], h_vec) < 6 and ang(v['second'], e_vec) < 6
+
+
+def test_tissue_on_a_black_canvas(tmp_path):
+    """A cut-out kept at its place on an empty (black) canvas: black is no data, the tissue is found on its glass."""
+    import tifffile
+
+    from wissi_viz.sources import open_slide
+
+    img = np.zeros((2000, 3000, 3), np.uint8)
+    img[1300:1900, 200:900] = (240, 235, 240)  # glass
+    yy, xx = np.mgrid[1300:1900, 200:900]
+    img[1300:1900, 200:900][(xx - 550) ** 2 + (yy - 1600) ** 2 < 220**2] = (190, 110, 170)  # tissue
+    tifffile.imwrite(tmp_path / 'c.tif', img, tile=(256, 256), photometric='rgb', resolution=(5000, 5000),
+                     resolutionunit='CENTIMETER')  # fmt: skip
+    g, _ = sp.tissue_mask(open_slide(tmp_path / 'c.tif'))
+    x0, y0, x1, y1 = g.bounds
+    assert 300 < x0 < 360 and 740 < x1 < 800 and 1350 < y0 < 1410 and 1790 < y1 < 1850
+    assert g.area == pytest.approx(np.pi * 220**2, rel=0.1)

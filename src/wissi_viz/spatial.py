@@ -1055,6 +1055,10 @@ def tissue_mask(
         mode = 'brightfield' if info.mode == 'rgb' else 'fluorescence'
     if mode == 'brightfield':
         a = source.read_region(lvl, 0, 0, lv.width, lv.height).astype(np.float32)
+        # pure black is "no data" (the empty canvas around a cut-out, unscanned margins), not dark tissue
+        nodata = a.max(2) == 0
+        if nodata.mean() > 0.01:
+            a[nodata] = 255.0
         od = -np.log10(np.clip(a / 255.0, 1 / 255, 1)).sum(2)
         img = od
     else:
@@ -1063,7 +1067,8 @@ def tissue_mask(
         ]
         img = np.log1p(np.max(np.stack(chans), 0))
     img = filters.gaussian(img, sigma=max(0.5, smooth_um / (mpp * ds) / 2))
-    t = threshold if threshold is not None else filters.threshold_otsu(img)
+    data = img[~nodata] if mode == 'brightfield' and nodata.any() and not nodata.all() else img
+    t = threshold if threshold is not None else filters.threshold_otsu(data)
     m = img > t
     px_area = (mpp * ds) ** 2
     n_px = max(1, int(min_area_um2 / px_area))

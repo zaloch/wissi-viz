@@ -428,9 +428,11 @@ def session(sel: list[dict], d: Path) -> Path:
     entries = []
     for x in sel:
         layers = [str(p) for p in sorted(ld.glob(f'{x["id"]}.*.parquet'))]
-        entries.append(
-            {'id': x['id'], 'title': x['title'], 'slide': str(_slide(x, d)), 'layers': layers, 'licence': x['licence']}
-        )
+        e = {'id': x['id'], 'title': x['title'], 'slide': str(_slide(x, d)), 'layers': layers, 'licence': x['licence']}
+        view = _tissue_view(x, d)
+        if view:
+            e['view'] = view
+        entries.append(e)
     groups: dict[str, list[str]] = {}
     for x in sel:  # the slide list's projects: one per collection
         groups.setdefault(_collection(x), []).append(x['id'])
@@ -443,6 +445,23 @@ def session(sel: list[dict], d: Path) -> Path:
     }
     p.write_text(json.dumps(doc, indent=1), encoding='utf-8')
     return p
+
+
+def _tissue_view(x: dict, d: Path) -> list[float] | None:
+    """Where to open an image whose tissue fills little of its canvas (a cut-out kept at its place in the whole
+    slide): the tissue's bounding box with a margin, or None when the tissue fills most of the image."""
+    tis = d / 'layers' / f'{x["id"]}.tissue.parquet'
+    if not tis.exists():
+        return None
+    try:
+        x0, y0, x1, y1 = annio.load(tis).compiled().bbox
+        info = open_slide(_slide(x, d)).info
+    except Exception:  # noqa: BLE001  (a view is a convenience)
+        return None
+    if (x1 - x0) * (y1 - y0) > 0.35 * info.width * info.height or x1 <= x0 or y1 <= y0:
+        return None
+    m = 0.06 * max(x1 - x0, y1 - y0)
+    return [max(0.0, x0 - m), max(0.0, y0 - m), min(float(info.width), x1 + m), min(float(info.height), y1 + m)]
 
 
 def _collection(x: dict) -> str:

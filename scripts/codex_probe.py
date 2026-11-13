@@ -108,14 +108,18 @@ def main(argv=None) -> int:
     finally:
         s.shutdown()
 
-    # the app in a browser: the channel list with 39 markers, a few switched on, zoomed in
+    # the demo itself, end to end (download, prepare, tissue + region metrics), then the app on its session
     try:
         from playwright.sync_api import sync_playwright
 
         from wissi_viz import desktop as D
+        from wissi_viz import pack
 
+        t0 = time.time()
+        sess = pack.run_demo('codex', str(work / 'pack'), yes=True, open_app=False)
+        demo_s = round(time.time() - t0)
         s = Session(cache_dir=work / 'cache2', remember=False)
-        s.open([str(work / 'if-cutout.ome.tif'), str(work / 'he-cutout.ome.tif')], trusted=True)
+        s.load_session(sess)
         srv = D._Server(s.app())
         url = srv.start()
         errors = []
@@ -126,25 +130,32 @@ def main(argv=None) -> int:
             pg.on('console', lambda m: errors.append(m.text) if m.type == 'error' else None)
             pg.goto(url + '/app')
             g = '() => document.getElementById("grid")'
-            pg.wait_for_function(f'() => ({g})().panes.every(p => p.slide && p.slide.info)', timeout=120000)
-            pg.wait_for_timeout(6000)
+            pg.wait_for_function(f'() => ({g})().panes.length >= 2 && ({g})().panes.every(p => p.slide && p.slide.info)',
+                                 timeout=120000)  # fmt: skip
+            pg.wait_for_timeout(8000)
             pg.screenshot(path=str(out / 'app-1-opened.png'))
             pg.keyboard.press('i')  # the Image tab: channels, histograms
             pg.wait_for_timeout(8000)
             pg.screenshot(path=str(out / 'app-2-image-tab.png'))
-            shown = pg.evaluate(f'() => {{ const p = ({g})().panes[0]; return {{n: p.channels.length, '
-                                'visible: p.channels.filter(c => c.visible).map(c => c.name)}; }')  # fmt: skip
-            pg.evaluate(f'() => {{ const e = ({g})(), p = e.panes[0]; e.zoomTo ? 0 : 0; '
-                        'p.view.scale = Math.min(1, p.view.scale * 8); e.requestRender(); }')  # fmt: skip
-            pg.wait_for_timeout(6000)
-            pg.screenshot(path=str(out / 'app-3-zoomed.png'))
+            shown = pg.evaluate(f"""() => ({g})().panes.map(p => ({{name: p.slide.info.name, mode: p.slide.info.mode,
+                mpp: p.slide.info.mpp, n: p.channels?.length || 0,
+                visible: (p.channels || []).filter(c => c.visible).map(c => c.name)}}))""")
+            # the islets: zoom both panes to 10× in the middle of the tissue
+            pg.evaluate(f"""() => {{ const e = ({g})(); for (const p of e.panes) {{ const i = p.slide.info;
+                e.goTo(p.index, i.width / 2, i.height / 2, {{magnification: 10, animate: false}}); }} }}""")
+            pg.wait_for_timeout(9000)
+            pg.screenshot(path=str(out / 'app-3-10x.png'))
+            with pg.expect_download() as dl:
+                pg.click('#vtools [data-v=snapgrid]')
+            dl.value.save_as(str(out / 'figure.png'))
             b.close()
         srv.stop()
         s.shutdown()
-        notice('codex in the app', f'{shown["n"]} channels listed, shown at first: {shown["visible"]}; '
+        notice('codex demo in the app', f'demo ready in {demo_s} s; panes: {json.dumps(shown)}; '
                f'page errors: {errors[:5] or "none"}')  # fmt: skip
-    except Exception as e:  # noqa: BLE001
-        notice('codex in the app', f'screenshots failed: {type(e).__name__}: {e}')
+    except BaseException as e:  # noqa: BLE001
+        notice('codex demo in the app', f'failed: {type(e).__name__}: {e}')
+        return 1
     return 0
 
 

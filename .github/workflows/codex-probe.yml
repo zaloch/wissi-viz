@@ -20,7 +20,7 @@ jobs:
       - name: Install
         run: |
           uv venv -p 3.12
-          uv pip install -e ".[analysis,io,server]" playwright httpx
+          uv pip install -e ".[analysis,io,server,demo]" playwright httpx
           uv run --no-sync playwright install --with-deps chromium >/dev/null
       - name: Probe
         run: uv run --no-sync python scripts/codex_probe.py --out "$RUNNER_TEMP/out" --work "$RUNNER_TEMP/work"

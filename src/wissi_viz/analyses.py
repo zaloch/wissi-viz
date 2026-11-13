@@ -456,7 +456,7 @@ def _density(ctx: Context, cls, cell_um):
     'nn',
     'Nearest neighbours',
     'Distances',
-    'Distance from each A to the closest B',
+    'Distance from each A cell to the nearest B cell',
     [
         Param('source', 'From', 'class'),
         Param('target', 'To', 'class'),
@@ -484,7 +484,7 @@ def _nn(ctx: Context, source, target, max_um):
     'prox',
     'Proximity',
     'Distances',
-    'How many B within r of each A',
+    'Number of B cells within r of each A cell',
     [
         Param('source', 'Around', 'class'),
         Param('target', 'Count', 'class'),
@@ -601,7 +601,7 @@ def _composition(ctx: Context, regions):
     'ripley',
     "Ripley's L",
     'Patterns',
-    'Clustering against random, across distances',
+    'Clustering compared with a random layout, across distances (Ripley’s L)',
     [Param('a', 'Cells', 'class'), Param('b', 'Against', 'class?', 'all')],
     '~2–5 s',
 )
@@ -633,7 +633,7 @@ def _ripley(ctx: Context, a, b):
     'enrichment',
     'Neighbour enrichment',
     'Patterns',
-    'Which classes sit next to each other more than chance',
+    'Class pairs that are neighbours more or less often than by chance',
     [Param('radius_um', 'Within', 'number', 20, 5, 200, 5, 'µm')],
     '~2–6 s',
 )
@@ -645,7 +645,7 @@ def _enrichment(ctx: Context, radius_um):
     return Result(
         f'Neighbour enrichment · {radius_um:g} µm',
         [('most enriched', top), ('z', _fmt(float(np.nanmax(z)) if k else np.nan))],
-        'z > 2: neighbours more often than by chance; z < −2: avoid each other (199 shuffles).',
+        'z > 2: neighbours more often than by chance; z < −2: less often than by chance (199 random relabellings).',
         [],
         {
             'kind': 'heat',
@@ -672,7 +672,7 @@ def _hoods(ctx: Context, k, n):
     return Result(
         f'{int(n)} neighbourhoods · k = {int(k)}',
         [('cells', f'{len(r.labels):,}'), ('neighbourhoods', str(int(n)))],
-        'Each cell is coloured by the neighbourhood its k nearest cells look like.',
+        'Each cell is coloured by the neighbourhood type of its k nearest cells (k-means on their class shares).',
         [r.layer(name=f'Neighbourhoods · k {int(k)}')],
         {
             'kind': 'heat',
@@ -710,7 +710,7 @@ def _contacts(ctx: Context, max_edge_um):
     'moran',
     "Moran's I",
     'Patterns',
-    'Is a measurement spatially autocorrelated?',
+    'Spatial autocorrelation of a measurement (Moran’s I)',
     [Param('column', 'Measurement', 'column')],
 )
 def _moran(ctx: Context, column):

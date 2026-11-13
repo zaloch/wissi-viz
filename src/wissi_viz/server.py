@@ -794,7 +794,7 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
     def job_status(jid: str):
         job = jobs.get(jid)
         if job is None:
-            raise HTTPException(404, 'no such job (the server restarted?)')
+            raise HTTPException(404, 'no such job (it expired, or the server restarted)')
         return JSONResponse(job.to_dict(), headers=hdrs('no-cache'))
 
     @r.get('/slides/{sid}/jobs')

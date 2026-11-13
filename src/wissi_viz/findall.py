@@ -454,7 +454,7 @@ def rethreshold(registry, rid: str, strictness: float) -> dict:
     """Apply another strictness to a finished similar-object / segment-everything result (no re-measuring)."""
     r = _RESULTS.get(rid)
     if r is None:
-        raise ValueError('that result is gone (the server restarted or it is too old): run it again')
+        raise ValueError('this result is no longer available (it expired, or the server restarted): run it again')
     name, n = _publish(registry, r['slide'], r['F'], r['sim'], strictness, r['name'], r['cls'], r['color'], r['extra'],
                        r.get('classes'), r.get('labels'))  # fmt: skip
     r['strictness'] = strictness
@@ -524,7 +524,9 @@ def find_objects(
     ex = Examples(registry, sid, examples)
     cls, color = ex.cls, ex.color
     if not ex:
-        raise ValueError('no examples: draw or SAM a few objects (or pick some on the slide) first')
+        raise ValueError(
+            'no examples: outline a few objects with SAM or a drawing tool, or pick some on the slide, first'
+        )
     layer = registry.layer(sid, candidates)
     upd(0.05, f'measuring the objects of {candidates}…')
     F_all = annio.from_layer(layer)
@@ -1178,8 +1180,8 @@ def find_by_text(
     if not polys:
         long = [n for n in names if len(n.split()) > 3]
         s3 = getattr(detector, 'name', '') in ('sam3', 'dino-sam3')
-        tip = (f'SAM 3 was asked for "{", ".join(asked)}"; it knows few microscopy words (nuclei and neurons as '
-               '"cell"): try "cell" with a size range, or another object size' if s3 else 'Use a shorter name'
+        tip = (f'SAM 3 prompt: "{", ".join(asked)}". In tissue images SAM 3 detects nuclei and neurons only with the '
+               'prompt "cell": try "cell" with a size range, or another object size' if s3 else 'Use a shorter name'
                if long else 'Try other words or another object size')  # fmt: skip
         raise ValueError(f'{label} found nothing named "{", ".join(names)}" in {where} ({len(tiles)} tile'
                          f'{"s" if len(tiles) != 1 else ""} searched). {tip}.')  # fmt: skip
@@ -1216,7 +1218,7 @@ def find_by_text(
     sim = _text_sim(score)
     note = f'{label} at {f:.2g} level-0 px per model px'
     if renamed:
-        note += '; SAM 3 asked for ' + ', '.join(f'"{a}" (for "{n}")' for n, a in renamed)
+        note += '; SAM 3 prompt ' + ', '.join(f'"{a}" (for "{n}")' for n, a in renamed)
     if n_size:
         note += f'; {n_size:,} outside {d_lo * mpp:.3g}–{d_hi * mpp:.3g} µm left out'
     if ex_names:

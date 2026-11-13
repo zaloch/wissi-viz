@@ -164,7 +164,7 @@ def test_sam3_is_asked_for_cell_at_its_own_scale(session):  # noqa: F811
     r = findall.find_by_text(s.registry, sid, prompt='nucleus', scope={'kind': 'view', 'rect': RECT}, object_um=10,
                              strictness=0.0, detector=det)  # fmt: skip
     assert {tuple(a) for a in det.asked} == {('cell',)} and r['count'] > 0
-    assert 'SAM 3 asked for "cell" (for "nucleus")' in r['note']
+    assert 'SAM 3 prompt "cell" (for "nucleus")' in r['note']
     # 10 µm at 0.5 µm/px = 20 level-0 px → 88 model px: f = 0.5 (at most 2× enlarged); tiles 1008 × 0.5 = 504 px
     assert max(max(sz) for sz in det.sizes) == 1008
     # a name of its own (the SAM 3 name field) is used as given

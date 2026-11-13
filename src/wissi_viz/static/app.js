@@ -1155,7 +1155,7 @@ async function renderAnalyze() {
     const col = h('div', { class: 'an-group' }, h('span', { class: 'lbl' }, g === 'Regions' && !hasRegions ? 'Regions · draw or add a region layer first' : g));
     for (const a of items) {
       const dis = a.needs_regions && !hasRegions;
-      const b = h('button', { class: 'an-card', 'aria-pressed': String(picked === a.id), disabled: dis, title: dis ? 'Needs a region layer: draw one (Draw tab) or add an annotation file' : a.desc },
+      const b = h('button', { class: 'an-card', 'aria-pressed': String(picked === a.id), disabled: dis, title: dis ? 'Requires a region layer: draw one (Annotate tab) or add an annotation file.' : a.desc },
         h('span', { class: 'ic' }, icon(ic[a.group] || 'pattern')), h('span', { class: 'grow' }, h('b', {}, a.name), h('span', { class: 'd' }, a.desc)), h('span', { class: 'sp' }, a.speed));
       b.onclick = () => { picked = picked === a.id ? null : a.id; renderAnalyze(); };
       col.append(b);
@@ -1738,13 +1738,13 @@ async function renderDraw() {
       // SAM 3 gets a name it knows: the description's main noun, and "cell" for nuclei, neurons and cell bodies
       const asks = model === 'sam3' ? words.map((w, i) => (i === 0 && $('f-s3name').value.trim()) || sam3WordOf(w)) : [];
       const renamed = asks.map((a, i) => [words[i], a]).filter(([w, a]) => w.toLowerCase() !== a.toLowerCase());
-      const short = (renamed.length ? ` SAM 3 is asked for ${renamed.map(([w, a]) => `“${a}” (for “${w}”)`).join(', ')}${renamed.some(([, a]) => a === 'cell') ? ': on slides it knows nuclei and neurons only as “cell”, and the size range keeps the kind you mean' : ''}.` : '')
-        + (longs.length && s3need ? ` ⚠ SAM 3 expects short names of one to three words; “${longs[0]}” in Exclude is unlikely to match. Shorten it.` : '');
+      const short = (renamed.length ? ` SAM 3 prompt: ${renamed.map(([w, a]) => `“${a}” (for “${w}”)`).join(', ')}${renamed.some(([, a]) => a === 'cell') ? '. In tissue images SAM 3 detects nuclei and neurons only with the prompt “cell”; the size range selects the intended objects' : ''}.` : '')
+        + (longs.length && s3need ? ` ⚠ SAM 3 prompts should be one to three words; “${longs[0]}” in Exclude is unlikely to match. Shorten it.` : '');
       if (s3need && !s3.accepted) { msg = 'Accept the SAM License to use SAM 3, or select Grounding DINO + SAM 2.1.'; ok = false; }
       else if (!words.length) { msg = 'Enter what to find, such as “nucleus” or “gland. vessel” (one class per phrase).'; ok = false; }
       else if (both) msg = `Grounding DINO marks its best matches for “${words.join('”, “')}” in each tile; SAM 3 uses them as examples of “${s3name}” and outlines every similar object ${sizeText()} across${$('f-exclude').value.trim() ? `, excluding ${$('f-exclude').value.trim()}` : ''}.${$('f-expand').checked && words.length === 1 ? ' Segment everything then adds objects similar to the best of these.' : ''}${short}${exNote}${dlText} Searching the whole slide may take a long time without a GPU.`;
       else if ($('f-expand').checked && words.length === 1) msg = `${name} finds ${words[0]} ${sizeText()} across; the best matches then serve as examples, and SAM outlines every similar object.${short}${exNote}${dlText} Searching the whole slide may take a long time without a GPU.`;
-      else msg = `${name} finds every ${words.join(', ')} ${sizeText()} across${$('f-exclude').value.trim() ? `, excluding ${$('f-exclude').value.trim()}` : ''}.${short}${exNote}${dlText} ${model === 'sam3' ? 'SAM 3 handles dense small objects well.' : 'Grounding DINO detects larger structures (glands, vessels, fat, folds) much better than dense nuclei; for nuclei, use Segment everything with examples, SAM 3 or Grounding DINO → SAM 3.'} Searching the whole slide may take a long time without a GPU.`;
+      else msg = `${name} finds every ${words.join(', ')} ${sizeText()} across${$('f-exclude').value.trim() ? `, excluding ${$('f-exclude').value.trim()}` : ''}.${short}${exNote}${dlText} ${model === 'sam3' ? 'In validation, SAM 3 (prompt “cell”) found 59 % of H&E nuclei and 91 % of rat DRG neurons.' : 'Grounding DINO is suited to larger structures (glands, vessels, fat, folds); in validation it found fewer than 1 in 10 H&E nuclei. For nuclei and cells, use SAM 3 or a cell model.'} Searching the whole slide may take a long time without a GPU.`;
     } else {
       const k = classes.filter((c) => c.n > 0);
       msg = k.length >= 2 ? `Trains on ${k.map((c) => `${c.name} (${c.n})`).join(', ')} in ${drawLayer} and maps those areas.`

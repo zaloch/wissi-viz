@@ -35,6 +35,8 @@ def data(tmp_path_factory):
 
 
 def _names(pg) -> list:
+    """The slide shown in each pane (None: an empty pane), once every pane with a slide has read it."""
+    pg.wait_for_function(f'() => ({G})().panes.every((p) => !p.slide || p.slide.info)')
     return pg.evaluate(f'() => ({G})().panes.map((p) => p.slide?.info?.name ?? null)')
 
 

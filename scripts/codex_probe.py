@@ -140,9 +140,9 @@ def main(argv=None) -> int:
             shown = pg.evaluate(f"""() => ({g})().panes.map(p => ({{name: p.slide.info.name, mode: p.slide.info.mode,
                 mpp: p.slide.info.mpp, n: p.channels?.length || 0,
                 visible: (p.channels || []).filter(c => c.visible).map(c => c.name)}}))""")
-            # the islets: zoom both panes to 10× in the middle of the tissue
-            pg.evaluate(f"""() => {{ const e = ({g})(); for (const p of e.panes) {{ const i = p.slide.info;
-                e.goTo(p.index, i.width / 2, i.height / 2, {{magnification: 10, animate: false}}); }} }}""")
+            # closer: 10× at the middle of what each pane opened on
+            pg.evaluate(f"""() => {{ const e = ({g})(); for (const p of e.panes)
+                e.goTo(p.index, p.view.cx, p.view.cy, {{magnification: 10, animate: false}}); }}""")
             pg.wait_for_timeout(9000)
             pg.screenshot(path=str(out / 'app-3-10x.png'))
             with pg.expect_download() as dl:

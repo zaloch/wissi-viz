@@ -228,3 +228,53 @@ def test_async_client_on_bound_loop(svs):
     src.read_tile(0, 0, 0)
     assert seen and all(lp is loop for lp in seen)
     loop.call_soon_threadsafe(loop.stop)
+
+
+def test_fluorescence_channels_and_scenes_from_an_api():
+    """A connector for a multichannel image (a CZI behind PathCore / HALO Link): mode='channels' with named channels
+    makes wissi-viz ask for each channel's tiles by index (the panel shows one histogram per channel, not R·G·B);
+    each scene is an image id of its own, listed by images()."""
+    from fastapi.testclient import TestClient
+
+    from wissi_viz import create_app
+    from wissi_viz.connectors import PathCoreConnection
+    from wissi_viz.sources.base import Channel
+
+    W, H, T = 600, 400, 256
+    rng = np.random.default_rng(1)
+    data = {s: (rng.random((3, H, W)) * 1000 * (np.arange(3)[:, None, None] + 1)).astype(np.uint16) for s in (0, 1)}
+    asked = []
+
+    class Fluor(PathCoreConnection):
+        def images(self):
+            return [(f'S-1#scene={s}', f'S-1 scene {s + 1}') for s in (0, 1)]
+
+        def image_info(self, image_id):
+            return RemoteImageInfo(width=W, height=H, tile_size=T, downsamples=[1, 2], mpp=0.5, name=image_id,
+                                   mode='channels', dtype='uint16',
+                                   channels=[Channel('DAPI', '#0000ff'), Channel('CD3', '#00ff00'),
+                                             Channel('PanCK', '#ff0000')])  # fmt: skip
+
+        def tile(self, image_id, level, col, row, channel=None):
+            scene = int(image_id.rsplit('=', 1)[1])
+            asked.append((scene, level, channel))
+            f = [1, 2][level]
+            a = data[scene][channel or 0, ::f, ::f]
+            return a[row * T : (row + 1) * T, col * T : (col + 1) * T]
+
+    conn = Fluor()
+    reg = SlideRegistry(warm=False)
+    sids = [conn.register(reg, i, name=n) for i, n in conn.images()]
+    assert sids == ['pathcore-S-1_scene_0', 'pathcore-S-1_scene_1']
+    c = TestClient(create_app(reg))
+    info = c.get(f'/wissi-viz/slides/{sids[1]}/info.json').json()
+    assert info['mode'] == 'channels' and [ch['name'] for ch in info['channels']] == ['DAPI', 'CD3', 'PanCK']
+    for ch in range(3):
+        r = c.get(f'/wissi-viz/slides/{sids[1]}/tiles/0/0/0', params={'c': ch, 'v': info['version']})
+        assert r.status_code == 200, r.text
+    assert {(s, ch) for s, lv, ch in asked if lv == 0} >= {(1, 0), (1, 1), (1, 2)}  # every channel, the right scene
+    src = reg.get(sids[1])[0].source
+    for ch in range(3):
+        assert (src.read_region(0, 10, 20, 30, 40, ch) == data[1][ch, 20:60, 10:40]).all()
+    h = c.get(f'/wissi-viz/slides/{sids[1]}/histogram').json()
+    assert [x['name'] for x in h['channels']] == ['DAPI', 'CD3', 'PanCK']

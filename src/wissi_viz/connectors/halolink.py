@@ -5,6 +5,7 @@ call your existing authenticated client inside the methods, and wissi-viz does t
 rest (pyramid mapping, overlap/padding, caching, GPU rendering, annotations)::
 
     from wissi_viz.connectors import HaloLinkConnection, RemoteImageInfo, AnnotationPayload
+    from wissi_viz.sources.base import Channel
 
     class WissiHaloLink(HaloLinkConnection):
         def __init__(self, client):
@@ -13,13 +14,18 @@ rest (pyramid mapping, overlap/padding, caching, GPU rendering, annotations)::
 
         def image_info(self, image_id):
             m = self.client.image_metadata(image_id)   # ← your call
+            fl = m.get('channels') or []               # fluorescence: one entry per marker
             return RemoteImageInfo(width=m['width'], height=m['height'], tile_size=m['tileSize'],
                                    levels=[(lv['width'], lv['height']) for lv in m['levels']],
                                    level_ids=[lv['index'] for lv in m['levels']],
-                                   mpp=(m['mppX'], m['mppY']), name=m['name'], version=m['modified'])
+                                   mpp=(m['mppX'], m['mppY']), name=m['name'], version=m['modified'],
+                                   # without these every image is treated as brightfield RGB (R·G·B histograms)
+                                   mode='channels' if fl else 'rgb', dtype=m.get('dtype', 'uint8') if fl else 'uint8',
+                                   channels=[Channel(c['name'], c.get('color', '#ffffff')) for c in fl])
 
         def tile(self, image_id, level, col, row, channel=None):
-            return self.client.tile(image_id, level, col, row)      # ← bytes / ndarray / None
+            # fluorescence: ``channel`` is the index in ``channels``; return that one channel as a 2-D array
+            return self.client.tile(image_id, level, col, row, channel=channel)  # ← bytes / ndarray / None
 
         def annotations(self, image_id):
             xml = self.client.annotations_xml(image_id)              # ← HALO .annotations XML text
@@ -32,6 +38,9 @@ rest (pyramid mapping, overlap/padding, caching, GPU rendering, annotations)::
 
     halo = WissiHaloLink(wissi_halolink_client)
     sid = halo.register(registry, 'image-123')                       # → 'halo-image-123'
+
+Multi-scene files: list each scene as an image id of its own in :meth:`images` (e.g. ``'image-123#2'``) and
+read the scene back from the id in :meth:`image_info` and :meth:`tile`.
 
 Pyramid variants are all supported through :class:`RemoteImageInfo` — explicit levels in
 any order with your own level ids, ``downsamples=[1, 4, 16, …]``, or ``deepzoom=True``

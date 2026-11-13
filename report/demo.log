@@ -1,0 +1,39 @@
+wissi-viz demo (quick): 5 images in /home/runner/work/wissi-viz/wissi-viz/pack
+downloading 5 file(s), 1.1 GB → /home/runner/work/wissi-viz/wissi-viz/pack/downloads
+  399.4 MB / 1.1 GB  (79.9 MB/s, ~10 s left)
+  427.4 MB / 1.1 GB  (42.7 MB/s, ~17 s left)
+  459.4 MB / 1.1 GB  (30.6 MB/s, ~23 s left)
+  501.4 MB / 1.1 GB  (25.1 MB/s, ~26 s left)
+  553.4 MB / 1.1 GB  (22.1 MB/s, ~28 s left)
+  617.4 MB / 1.1 GB  (20.6 MB/s, ~27 s left)
+  674.4 MB / 1.1 GB  (19.3 MB/s, ~25 s left)
+  723.4 MB / 1.1 GB  (18.1 MB/s, ~24 s left)
+  774.4 MB / 1.1 GB  (17.2 MB/s, ~23 s left)
+  817.4 MB / 1.1 GB  (16.3 MB/s, ~21 s left)
+  859.7 MB / 1.1 GB  (15.6 MB/s, ~20 s left)
+  914.7 MB / 1.1 GB  (15.2 MB/s, ~16 s left)
+  949.7 MB / 1.1 GB  (14.6 MB/s, ~15 s left)
+  982.7 MB / 1.1 GB  (14.0 MB/s, ~13 s left)
+  1005.7 MB / 1.1 GB  (13.4 MB/s, ~12 s left)
+  1.0 GB / 1.1 GB  (12.8 MB/s, ~11 s left)
+  1.0 GB / 1.1 GB  (12.2 MB/s, ~10 s left)
+  1.0 GB / 1.1 GB  (11.7 MB/s, ~10 s left)
+  1.0 GB / 1.1 GB  (11.3 MB/s, ~8 s left)
+  1.1 GB / 1.1 GB  (10.9 MB/s, ~7 s left)
+  1.1 GB / 1.1 GB  (10.5 MB/s, ~6 s left)
+  1.1 GB / 1.1 GB  (10.1 MB/s, ~5 s left)
+  1.1 GB / 1.1 GB  (9.8 MB/s, ~4 s left)
+  1.1 GB / 1.1 GB  (9.5 MB/s, ~3 s left)
+  1.1 GB / 1.1 GB  (9.3 MB/s, ~1 s left)
+downloaded in 127 s
+xenium-breast: merging Xenium morphology channels
+xenium-kidney-protein: merging Xenium morphology channels
+cmu-1: precomputed cells
+cmu-2: precomputed cells
+cmu-3: precomputed cells
+cmu-1: 4 regions × 125 measurements (12 s)
+cmu-2: 82 regions × 125 measurements (32 s)
+cmu-3: 26 regions × 125 measurements (13 s)
+xenium-breast: 1 regions × 77 measurements (1 s)
+xenium-kidney-protein: 1 regions × 133 measurements (4 s)
+ready: /home/runner/work/wissi-viz/wissi-viz/pack/session-5.json  (metrics: /home/runner/work/wissi-viz/wissi-viz/pack/metrics/all_regions.csv)

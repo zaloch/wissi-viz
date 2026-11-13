@@ -1,0 +1,647 @@
+{
+ "version": "0.13.0",
+ "set": "quick",
+ "images": 5,
+ "platform": "Linux-7.0.0-1017-azure-x86_64-with-glibc2.39",
+ "python": "3.12.3",
+ "cpu": "x86_64",
+ "cpus": 4,
+ "server": [
+  {
+   "slide": "CMU-1.svs",
+   "reader": "TiffSource",
+   "size": "46000x32914",
+   "mode": "rgb",
+   "levels": 6,
+   "file_MB": 169.3,
+   "open_ms": 8.3,
+   "levels_bench": [
+    {
+     "level": 0,
+     "downsample": 1.0,
+     "cold_p50_ms": 1.09,
+     "cold_p95_ms": 2.46,
+     "throughput_x8_tiles_s": 714.9,
+     "n_tiles": 96,
+     "warm_p50_ms": 0.004,
+     "tile_KB": 18.4
+    },
+    {
+     "level": 3,
+     "downsample": 32.0,
+     "cold_p50_ms": 39.79,
+     "cold_p95_ms": 43.85,
+     "throughput_x8_tiles_s": null,
+     "n_tiles": 9,
+     "warm_p50_ms": 1.211,
+     "tile_KB": 25.9
+    },
+    {
+     "level": 5,
+     "downsample": 128.0,
+     "cold_p50_ms": 61.78,
+     "cold_p95_ms": 61.78,
+     "throughput_x8_tiles_s": null,
+     "n_tiles": 1,
+     "warm_p50_ms": 0.02,
+     "tile_KB": 12.7
+    }
+   ]
+  },
+  {
+   "slide": "CMU-2.svs",
+   "reader": "TiffSource",
+   "size": "78000x30462",
+   "mode": "rgb",
+   "levels": 7,
+   "file_MB": 372.6,
+   "open_ms": 10.4,
+   "levels_bench": [
+    {
+     "level": 0,
+     "downsample": 1.0,
+     "cold_p50_ms": 1.21,
+     "cold_p95_ms": 3.13,
+     "throughput_x8_tiles_s": 619.6,
+     "n_tiles": 96,
+     "warm_p50_ms": 0.004,
+     "tile_KB": 32.8
+    },
+    {
+     "level": 3,
+     "downsample": 32.01,
+     "cold_p50_ms": 1.97,
+     "cold_p95_ms": 3.16,
+     "throughput_x8_tiles_s": null,
+     "n_tiles": 10,
+     "warm_p50_ms": 1.74,
+     "tile_KB": 32.3
+    },
+    {
+     "level": 6,
+     "downsample": 256.05,
+     "cold_p50_ms": 118.13,
+     "cold_p95_ms": 118.13,
+     "throughput_x8_tiles_s": null,
+     "n_tiles": 1,
+     "warm_p50_ms": 0.025,
+     "tile_KB": 7.6
+    }
+   ]
+  },
+  {
+   "slide": "CMU-3.svs",
+   "reader": "TiffSource",
+   "size": "66000x45402",
+   "mode": "rgb",
+   "levels": 7,
+   "file_MB": 242.1,
+   "open_ms": 17.3,
+   "levels_bench": [
+    {
+     "level": 0,
+     "downsample": 1.0,
+     "cold_p50_ms": 1.08,
+     "cold_p95_ms": 2.49,
+     "throughput_x8_tiles_s": 627.9,
+     "n_tiles": 96,
+     "warm_p50_ms": 0.003,
+     "tile_KB": 18.5
+    },
+    {
+     "level": 3,
+     "downsample": 32.01,
+     "cold_p50_ms": 1.08,
+     "cold_p95_ms": 2.34,
+     "throughput_x8_tiles_s": 1079.0,
+     "n_tiles": 15,
+     "warm_p50_ms": 0.003,
+     "tile_KB": 14.6
+    },
+    {
+     "level": 6,
+     "downsample": 256.06,
+     "cold_p50_ms": 143.16,
+     "cold_p95_ms": 143.16,
+     "throughput_x8_tiles_s": null,
+     "n_tiles": 1,
+     "warm_p50_ms": 0.023,
+     "tile_KB": 5.8
+    }
+   ]
+  },
+  {
+   "slide": "xenium-breast.ome.tif",
+   "reader": "TiffSource",
+   "size": "5792x3529",
+   "mode": "channels",
+   "levels": 5,
+   "file_MB": 610.2,
+   "open_ms": 6.8,
+   "levels_bench": [
+    {
+     "level": 0,
+     "downsample": 1.0,
+     "cold_p50_ms": 10.95,
+     "cold_p95_ms": 11.9,
+     "throughput_x8_tiles_s": 232.9,
+     "n_tiles": 96,
+     "warm_p50_ms": 0.004,
+     "tile_KB": 366.5
+    },
+    {
+     "level": 2,
+     "downsample": 4.0,
+     "cold_p50_ms": 10.19,
+     "cold_p95_ms": 12.44,
+     "throughput_x8_tiles_s": 247.0,
+     "n_tiles": 18,
+     "warm_p50_ms": 0.003,
+     "tile_KB": 343.3
+    },
+    {
+     "level": 4,
+     "downsample": 16.0,
+     "cold_p50_ms": 8.91,
+     "cold_p95_ms": 9.02,
+     "throughput_x8_tiles_s": null,
+     "n_tiles": 3,
+     "warm_p50_ms": 0.005,
+     "tile_KB": 126.2
+    }
+   ]
+  },
+  {
+   "slide": "xenium-kidney-protein.ome.tif",
+   "reader": "TiffSource",
+   "size": "2963x6915",
+   "mode": "channels",
+   "levels": 5,
+   "file_MB": 77.3,
+   "open_ms": 37.7,
+   "levels_bench": [
+    {
+     "level": 0,
+     "downsample": 1.0,
+     "cold_p50_ms": 1.08,
+     "cold_p95_ms": 1.35,
+     "throughput_x8_tiles_s": 242.4,
+     "n_tiles": 96,
+     "warm_p50_ms": 0.003,
+     "tile_KB": 2.7
+    },
+    {
+     "level": 2,
+     "downsample": 4.0,
+     "cold_p50_ms": 0.8,
+     "cold_p95_ms": 1.63,
+     "throughput_x8_tiles_s": 2019.3,
+     "n_tiles": 24,
+     "warm_p50_ms": 0.003,
+     "tile_KB": 6.3
+    },
+    {
+     "level": 4,
+     "downsample": 15.97,
+     "cold_p50_ms": 3.66,
+     "cold_p95_ms": 3.76,
+     "throughput_x8_tiles_s": null,
+     "n_tiles": 3,
+     "warm_p50_ms": 0.005,
+     "tile_KB": 3.7
+    }
+   ]
+  }
+ ],
+ "browser": {
+  "runs": [
+   {
+    "panes": 1,
+    "open_ms": 840,
+    "zoom_to_sharp_ms": 262,
+    "pan": {
+     "fps_median": 59.9,
+     "frame_p50_ms": 16.7,
+     "frame_p95_ms": 16.8,
+     "frame_p99_ms": 33.4,
+     "long_frames_pct": 1.3,
+     "sharp_while_moving_pct": 100.0,
+     "blank_while_moving_pct": 0.0,
+     "settle_ms": 17,
+     "js_frame_p50_ms": 0.2,
+     "js_frame_p95_ms": 1.15,
+     "tiles_requested": 33,
+     "tiles_cancelled": 0,
+     "MB": 0.2
+    },
+    "revisit": {
+     "fps_median": 59.9,
+     "frame_p50_ms": 16.7,
+     "frame_p95_ms": 16.7,
+     "frame_p99_ms": 16.8,
+     "long_frames_pct": 0.0,
+     "sharp_while_moving_pct": 100.0,
+     "blank_while_moving_pct": 0.0,
+     "settle_ms": 17,
+     "js_frame_p50_ms": 0.1,
+     "js_frame_p95_ms": 0.3,
+     "tiles_requested": 0,
+     "tiles_cancelled": 0,
+     "MB": 0
+    },
+    "stats": {
+     "textures": 73,
+     "textureMB": 66.4,
+     "annotationMB": 0,
+     "inflight": 0,
+     "queuedUploads": 0,
+     "frame": 490,
+     "budgetMB": 1024,
+     "requests": 73,
+     "completed": 73,
+     "bytes": 552229,
+     "aborted": 0,
+     "cancelled": 0,
+     "failed": 0,
+     "uploaded": 73,
+     "wasted": 0,
+     "evicted": 0,
+     "dropped": 0,
+     "duplicate": 0,
+     "coalesced": 2,
+     "maxInflight": 5,
+     "overdraw": 0.967,
+     "drawsPerFrame": 14.8,
+     "lowresFrames": 477,
+     "backingResizes": 7,
+     "renderScale": 0.5,
+     "lod": {
+      "motionBias": 2,
+      "minify": 0.5,
+      "quadtree": true,
+      "background": true,
+      "prefetch": false,
+      "decoupled": true,
+      "destination": true,
+      "overlays": "server",
+      "adaptive": true
+     }
+    }
+   },
+   {
+    "panes": 4,
+    "open_ms": 1130,
+    "zoom_to_sharp_ms": 148,
+    "pan": {
+     "fps_median": 59.9,
+     "frame_p50_ms": 16.7,
+     "frame_p95_ms": 33.4,
+     "frame_p99_ms": 50.0,
+     "long_frames_pct": 3.5,
+     "sharp_while_moving_pct": 99.1,
+     "blank_while_moving_pct": 0.0,
+     "settle_ms": 666,
+     "js_frame_p50_ms": 0.3,
+     "js_frame_p95_ms": 4.76,
+     "tiles_requested": 141,
+     "tiles_cancelled": 0,
+     "MB": 22.2
+    },
+    "revisit": {
+     "fps_median": 59.9,
+     "frame_p50_ms": 16.7,
+     "frame_p95_ms": 16.8,
+     "frame_p99_ms": 33.4,
+     "long_frames_pct": 1.3,
+     "sharp_while_moving_pct": 100.0,
+     "blank_while_moving_pct": 0.0,
+     "settle_ms": 27,
+     "js_frame_p50_ms": 0.2,
+     "js_frame_p95_ms": 0.5,
+     "tiles_requested": 0,
+     "tiles_cancelled": 0,
+     "MB": 0
+    },
+    "stats": {
+     "textures": 317,
+     "textureMB": 208.3,
+     "annotationMB": 0,
+     "inflight": 0,
+     "queuedUploads": 0,
+     "frame": 955,
+     "budgetMB": 1024,
+     "requests": 322,
+     "completed": 317,
+     "bytes": 45813429,
+     "aborted": 5,
+     "cancelled": 5,
+     "failed": 0,
+     "uploaded": 317,
+     "wasted": 0,
+     "evicted": 0,
+     "dropped": 0,
+     "duplicate": 0,
+     "coalesced": 10,
+     "maxInflight": 5,
+     "overdraw": 0.871,
+     "drawsPerFrame": 16.3,
+     "lowresFrames": 931,
+     "backingResizes": 17,
+     "renderScale": 0.5,
+     "lod": {
+      "motionBias": 2,
+      "minify": 0.5,
+      "quadtree": true,
+      "background": true,
+      "prefetch": false,
+      "decoupled": true,
+      "destination": true,
+      "overlays": "server",
+      "adaptive": true
+     }
+    }
+   },
+   {
+    "panes": 16,
+    "open_ms": 6950,
+    "zoom_to_sharp_ms": 400,
+    "pan": {
+     "fps_median": 59.9,
+     "frame_p50_ms": 16.7,
+     "frame_p95_ms": 33.4,
+     "frame_p99_ms": 50.0,
+     "long_frames_pct": 7.1,
+     "sharp_while_moving_pct": 98.9,
+     "blank_while_moving_pct": 0.0,
+     "settle_ms": 1589,
+     "js_frame_p50_ms": 0.6,
+     "js_frame_p95_ms": 6.68,
+     "tiles_requested": 498,
+     "tiles_cancelled": 5,
+     "MB": 55.0
+    },
+    "revisit": {
+     "fps_median": 59.9,
+     "frame_p50_ms": 16.7,
+     "frame_p95_ms": 16.8,
+     "frame_p99_ms": 33.3,
+     "long_frames_pct": 0.0,
+     "sharp_while_moving_pct": 100.0,
+     "blank_while_moving_pct": 0.0,
+     "settle_ms": 23,
+     "js_frame_p50_ms": 0.3,
+     "js_frame_p95_ms": 0.5,
+     "tiles_requested": 38,
+     "tiles_cancelled": 5,
+     "MB": 4.4
+    },
+    "stats": {
+     "textures": 972,
+     "textureMB": 576.2,
+     "annotationMB": 0,
+     "inflight": 0,
+     "queuedUploads": 4,
+     "frame": 1447,
+     "budgetMB": 1024,
+     "requests": 996,
+     "completed": 976,
+     "bytes": 119675803,
+     "aborted": 16,
+     "cancelled": 20,
+     "failed": 0,
+     "uploaded": 972,
+     "wasted": 0,
+     "evicted": 0,
+     "dropped": 0,
+     "duplicate": 0,
+     "coalesced": 27,
+     "maxInflight": 5,
+     "overdraw": 0.774,
+     "drawsPerFrame": 19.9,
+     "lowresFrames": 1390,
+     "backingResizes": 44,
+     "renderScale": 0.5,
+     "lod": {
+      "motionBias": 2,
+      "minify": 0.5,
+      "quadtree": true,
+      "background": true,
+      "prefetch": false,
+      "decoupled": true,
+      "destination": true,
+      "overlays": "server",
+      "adaptive": true
+     }
+    }
+   },
+   {
+    "panes": 32,
+    "open_ms": 7167,
+    "zoom_to_sharp_ms": 610,
+    "pan": {
+     "fps_median": 59.9,
+     "frame_p50_ms": 16.7,
+     "frame_p95_ms": 33.4,
+     "frame_p99_ms": 50.0,
+     "long_frames_pct": 10.1,
+     "sharp_while_moving_pct": 98.8,
+     "blank_while_moving_pct": 0.0,
+     "settle_ms": 1285,
+     "js_frame_p50_ms": 1.0,
+     "js_frame_p95_ms": 6.8,
+     "tiles_requested": 520,
+     "tiles_cancelled": 3,
+     "MB": 58.7
+    },
+    "revisit": {
+     "fps_median": 59.9,
+     "frame_p50_ms": 16.7,
+     "frame_p95_ms": 33.3,
+     "frame_p99_ms": 33.4,
+     "long_frames_pct": 2.2,
+     "sharp_while_moving_pct": 99.4,
+     "blank_while_moving_pct": 0.0,
+     "settle_ms": 38,
+     "js_frame_p50_ms": 0.5,
+     "js_frame_p95_ms": 2.75,
+     "tiles_requested": 110,
+     "tiles_cancelled": 0,
+     "MB": 17.1
+    },
+    "stats": {
+     "textures": 1469,
+     "textureMB": 869.9,
+     "annotationMB": 0,
+     "inflight": 5,
+     "queuedUploads": 3,
+     "frame": 1924,
+     "budgetMB": 1024,
+     "requests": 1749,
+     "completed": 1716,
+     "bytes": 204066949,
+     "aborted": 16,
+     "cancelled": 28,
+     "failed": 0,
+     "uploaded": 1713,
+     "wasted": 168,
+     "evicted": 244,
+     "dropped": 0,
+     "duplicate": 0,
+     "coalesced": 42,
+     "maxInflight": 5,
+     "overdraw": 0.734,
+     "drawsPerFrame": 25,
+     "lowresFrames": 1835,
+     "backingResizes": 73,
+     "renderScale": 0.5,
+     "lod": {
+      "motionBias": 2,
+      "minify": 0.5,
+      "quadtree": true,
+      "background": true,
+      "prefetch": false,
+      "decoupled": true,
+      "destination": true,
+      "overlays": "server",
+      "adaptive": true
+     }
+    }
+   }
+  ],
+  "webgl_renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+  "software_rendering": true,
+  "hardware_concurrency": 4,
+  "http_protocol": "http/1.1",
+  "server_tile_cache": {
+   "memory": {
+    "entries": 11734,
+    "bytes": 402474753,
+    "max_bytes": 2147483648,
+    "hits": 8220,
+    "misses": 11738
+   },
+   "disk": null,
+   "produced": 11734,
+   "avg_produce_ms": 10.63,
+   "inflight": 0,
+   "decoded": {
+    "entries": 3444,
+    "bytes": 1070081694,
+    "max_bytes": 1073741824,
+    "hits": 204,
+    "misses": 3563,
+    "evictions": 0
+   }
+  },
+  "settings": {
+   "pan_seconds": 4.0,
+   "pan_speed_px_s": 900,
+   "magnification": 20,
+   "viewport": [
+    1600,
+    1000
+   ],
+   "headed": false
+  }
+ },
+ "sam": {
+  "status": {
+   "backend": "onnx",
+   "requested": "auto",
+   "model": "sam2.1-tiny (int8, bundled)",
+   "device": "cpu",
+   "loaded": true,
+   "notes": "torch: ModuleNotFoundError: No module named 'torch'",
+   "available": [
+    "onnx",
+    "classic"
+   ]
+  },
+  "rows": [
+   {
+    "slide": "CMU-1.svs",
+    "view": "overview",
+    "backend": "onnx",
+    "device": "cpu",
+    "encode_ms": 2397.8,
+    "first_click_ms": 2471.6,
+    "next_click_ms": 28.9
+   },
+   {
+    "slide": "CMU-1.svs",
+    "view": "20x field",
+    "backend": "onnx",
+    "device": "cpu",
+    "encode_ms": 1318.2,
+    "first_click_ms": 1383.2,
+    "next_click_ms": 25.4
+   },
+   {
+    "slide": "CMU-2.svs",
+    "view": "overview",
+    "backend": "onnx",
+    "device": "cpu",
+    "encode_ms": 1213.1,
+    "first_click_ms": 1267.3,
+    "next_click_ms": 23.7
+   },
+   {
+    "slide": "CMU-2.svs",
+    "view": "20x field",
+    "backend": "onnx",
+    "device": "cpu",
+    "encode_ms": 1206.8,
+    "first_click_ms": 1248.8,
+    "next_click_ms": 25.1
+   },
+   {
+    "slide": "CMU-3.svs",
+    "view": "overview",
+    "backend": "onnx",
+    "device": "cpu",
+    "encode_ms": 1218.6,
+    "first_click_ms": 1265.6,
+    "next_click_ms": 29.6
+   },
+   {
+    "slide": "CMU-3.svs",
+    "view": "20x field",
+    "backend": "onnx",
+    "device": "cpu",
+    "encode_ms": 1294.8,
+    "first_click_ms": 1352.1,
+    "next_click_ms": 26.1
+   }
+  ]
+ },
+ "metrics": [
+  {
+   "image": "cmu-1",
+   "regions": 4,
+   "measurements": 124,
+   "cells": 268373,
+   "tissue_s": 0.4,
+   "load_cells_s": 7.75,
+   "metrics_s": 3.17
+  },
+  {
+   "image": "cmu-2",
+   "regions": 82,
+   "measurements": 124,
+   "cells": 411148,
+   "tissue_s": 2.09,
+   "load_cells_s": 11.29,
+   "metrics_s": 16.96
+  }
+ ],
+ "formats": {
+  "layer": "cmu-2.cells.parquet",
+  "features": 411148,
+  "geoparquet_mb": 64.1,
+  "geojson_mb": 330.7,
+  "geoparquet_read_s": 0.49,
+  "geoparquet_write_s": 1.02,
+  "geojson_write_s": 13.61,
+  "geojson_read_s": 23.26
+ }
+}

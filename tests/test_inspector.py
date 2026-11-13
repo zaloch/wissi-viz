@@ -197,6 +197,19 @@ def test_every_analysis_runs(session):
         out = analyses.run(s.registry, sid, key, 'cells', params.get(key, {}))
         json.dumps(out)  # what the page receives
         assert out['title'] and (out['chart'] or out['kpis']), key
+    # the answer of margin bands: one cell type just inside against just outside one class of regions
+    out = analyses.run(s.registry, sid, 'bands', 'cells', {'regions': 'regions', 'regions_class': 'Tumor',
+                                                           'target': 'Immune', 'width_um': 50})  # fmt: skip
+    assert 'Tumor' in out['title'] and 'Immune' in out['title']
+    labels = [k['label'] for k in out['kpis']]
+    assert labels == ['Immune inside', 'Immune outside', 'outside ÷ inside'] and out['kpis'][0]['value'].endswith(
+        '/mm²'
+    )
+    assert [x['name'] for x in out['chart']['series']] == ['Immune'] and out['chart']['ylabel'] == 'cells / mm²'
+    with pytest.raises(ValueError, match='has no regions'):  # a class with no regions
+        analyses.run(s.registry, sid, 'bands', 'cells', {'regions': 'regions', 'regions_class': 'nothing'})
+    with pytest.raises(ValueError, match='has no regions'):  # a cell table (points) is not a region layer
+        analyses.run(s.registry, sid, 'bands', 'cells', {'regions': 'cells'})
 
 
 # ------------------------------------------------------------------------------------------------ the page

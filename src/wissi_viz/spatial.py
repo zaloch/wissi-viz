@@ -61,19 +61,22 @@ def _tree(xy):
 
 
 # ============================================================================= ROIs
-def roi_geometries(rois: Any, group: bool = False) -> list[tuple[str, Any]]:
+def roi_geometries(rois: Any, group: bool = False, classes: Sequence[str] | None = None) -> list[tuple[str, Any]]:
     """Normalise ROIs to ``[(name, shapely geometry)]``.
 
     Accepts an :class:`AnnotationLayer` (polygons; name = ``properties['name']`` or class), a shapely
     geometry, ``{name: coords|geometry}``, or ``[(name, coords|geometry)]``. Coordinates: level-0 px.
-    ``group=True`` unions features with the same name/class.
+    ``group=True`` unions features with the same name/class; ``classes``: only those classes (a layer).
     """
     out: list[tuple[str, Any]] = []
     if isinstance(rois, AnnotationLayer):
         c = rois.compiled()
         inv = {v: k for k, v in rois._class_index.items()}
+        keep = set(classes) if classes else None
         for f in range(c.n):
             if c.kinds[f] != POLYGON:
+                continue
+            if keep is not None and inv.get(int(c.cls[f])) not in keep:
                 continue
             r0, r1 = c.feat_ring_off[f], c.feat_ring_off[f + 1]
             rings = [c.coords[c.ring_off[r] : c.ring_off[r + 1]].astype(np.float64) for r in range(r0, r1)]

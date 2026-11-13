@@ -340,6 +340,18 @@ def _object_table(slide: str, layer: AnnotationLayer, mpp):
     return objs
 
 
+def _class_only(L: AnnotationLayer, cls: str) -> AnnotationLayer:
+    """The polygons of one class of a region layer, as a layer of their own (named "layer (class)")."""
+    out = AnnotationLayer(name=f'{L.name} ({cls})')
+    for name, g in spatial.roi_geometries(L, classes=[cls]):
+        for poly in getattr(g, 'geoms', [g]):
+            if poly.geom_type == 'Polygon' and not poly.is_empty:
+                out.add_polygon(np.asarray(poly.exterior.coords)[:-1],
+                                holes=[np.asarray(h.coords)[:-1] for h in poly.interiors], cls=cls,
+                                props={'name': name})  # fmt: skip
+    return out
+
+
 def _coerce(spec: Spec, params: dict, ctx: Context) -> dict:
     classes = set(ctx.objects.class_names())
     out = {}
@@ -360,7 +372,15 @@ def _coerce(spec: Spec, params: dict, ctx: Context) -> dict:
         elif p.kind == 'regions':
             L = ctx.registry.layer(ctx.slide, v) if v else None
             if L is None:
-                raise ValueError('pick a region layer (draw one, or add an annotation file)')
+                raise ValueError(
+                    'Select a region layer, or draw a region (Annotate tab) or add an annotation file first.'
+                )
+            want = params.get(f'{p.key}_class') or None  # one class of the region layer (e.g. the tumour)
+            if want:
+                L = _class_only(L, want)
+            if not spatial.roi_geometries(L):
+                raise ValueError(f'{v}{f" ({want})" if want else ""} has no regions (polygons): select a layer of '
+                                 'drawn or imported regions.')  # fmt: skip
             v = L
         out[p.key] = v
     return out
@@ -512,19 +532,36 @@ def _prox(ctx: Context, source, target, radius_um):
     'Margin bands',
     'Regions',
     'Cell density in bands inside and outside a region boundary',
-    [Param('regions', 'Region', 'regions'), Param('width_um', 'Band width', 'number', 100, 10, 1000, 10, 'µm')],
+    [
+        Param('regions', 'Region', 'regions'),
+        Param('width_um', 'Band width', 'number', 100, 10, 1000, 10, 'µm'),
+        Param('target', 'Cell type', 'class?'),
+    ],  # fmt: skip
     '~1 s',
 )
-def _bands(ctx: Context, regions, width_um):
+def _bands(ctx: Context, regions, width_um, target=None):
     edges = [-2 * width_um, -width_um, 0, width_um, 2 * width_um]
-    r = spatial.margin_bands(regions, edges, mpp=ctx.mpp, objs=ctx.objects)
+    r = spatial.margin_bands(regions, edges, mpp=ctx.mpp, objs=ctx.objects, classes=[target] if target else None)
     pd = r.plot_data or {}
     series = pd.get('series') or {}
     items = series.items() if isinstance(series, dict) else ((s.get('name'), s.get('values')) for s in series)
+    # the answer first: density just inside against just outside the boundary (of one cell type, or all cells)
+    t = r.table
+    what = target or 'all cells'
+    if target:
+        dens = [float(v) for v in t[f'density {target} /mm2']]
+    else:
+        dens = [float(n) / a if a > 0 else float('nan') for n, a in zip(t['n_total'], t['area_mm2'])]
+    inner, outer = dens[1], dens[2]  # −width…0 and 0…+width
+    ratio = outer / inner if inner and np.isfinite(inner) and inner > 0 else float('nan')
     return Result(
-        f'Margin bands · {regions.name}',
-        [('bands', str(len(edges) - 1)), ('width', _fmt(width_um, 'µm'))],
-        'Negative distances are inside the region.',
+        f'Margin bands · {regions.name}' + (f' · {target}' if target else ''),
+        [
+            (f'{what} inside', _fmt(inner, '/mm²')),
+            (f'{what} outside', _fmt(outer, '/mm²')),
+            ('outside ÷ inside', _fmt(ratio)),
+        ],  # fmt: skip
+        f'Densities in the {width_um:g} µm just inside and just outside the boundary; negative distances are inside.',
         [r.layer(name=f'Margin bands · {regions.name}')],
         {
             'kind': 'bars',
@@ -543,12 +580,20 @@ def _bands(ctx: Context, regions, width_um):
     'Infiltration',
     'Regions',
     'Density of each class against distance to a region boundary',
-    [Param('regions', 'Region', 'regions'), Param('range_um', 'Out to', 'number', 500, 50, 3000, 50, 'µm')],
+    [
+        Param('regions', 'Region', 'regions'),
+        Param('range_um', 'Out to', 'number', 500, 50, 3000, 50, 'µm'),
+        Param('target', 'Cell type', 'class?'),
+    ],  # fmt: skip
     '~1–2 s',
 )
-def _infiltration(ctx: Context, regions, range_um):
+def _infiltration(ctx: Context, regions, range_um, target=None):
     r = spatial.infiltration_profile(
-        ctx.objects, regions, range_um=(-range_um, range_um), bin_um=max(5.0, range_um / 20)
+        ctx.objects,
+        regions,
+        range_um=(-range_um, range_um),
+        bin_um=max(5.0, range_um / 20),
+        classes=[target] if target else None,
     )
     return Result(
         f'Infiltration · {regions.name}',

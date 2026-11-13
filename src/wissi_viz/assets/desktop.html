@@ -92,7 +92,7 @@
 
   /* ---- viewer + HUD */
   main { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
-  wissi-viz { position: absolute; inset: 0; }
+  wissi-viz { position: absolute; inset: 0; --wv-legend-right: 64px; }  /* the legend clear of the view bar */
   main.objs wissi-viz { bottom: 300px; }
   main.objs #keyflash { bottom: 318px; } main.objs #toolhint { bottom: 364px; }
   #card .shape { display: grid; grid-template-columns: 1fr auto; gap: 3px 12px; font-size: 12px; margin: 8px 0 6px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }

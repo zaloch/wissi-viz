@@ -888,6 +888,7 @@ class AnnotationLayer:
             'name': self.name,
             'version': self.version,
             'count': int(c.n),
+            'polygons': int((c.kinds == POLYGON).sum()) if c.n else 0,  # regions (an analysis can work inside)
             'pyramid': c.pyr_meta,
             'median_size': c.median_size,
             'client_ok': bool(self._block is not None and not self._kinds),

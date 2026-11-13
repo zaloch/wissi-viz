@@ -1123,7 +1123,10 @@ async function ensureCatalog() {
   try { catalog = await api('/analyses'); } catch (e) { catalogError = e.message; }
 }
 function cellLayers(p) { return layersOf(p).filter((L) => L.meta.style?.origin !== 'analysis' && (L.meta.count ?? 0) >= 3); }
-function regionLayers(p, except) { return layersOf(p).filter((L) => L.name !== except && L.meta.style?.origin !== 'analysis'); }
+// layers with regions (polygons): drawn ROIs, imported annotations, found areas — not cell tables of points
+function regionLayers(p, except) { return layersOf(p).filter((L) => L.name !== except && L.meta.style?.origin !== 'analysis' && (L.meta.polygons ?? 1) > 0 && (L.meta.polygons ?? 1) <= 5000); }
+// the default cell layer: the one with the most classes (the cell types an analysis compares), then the most cells
+const bestCells = (cells) => [...cells].sort((a, b) => (b.meta.classes?.length ?? 0) - (a.meta.classes?.length ?? 0) || (b.meta.count ?? 0) - (a.meta.count ?? 0))[0];
 
 async function renderAnalyze() {
   await ensureCatalog();
@@ -1133,7 +1136,7 @@ async function renderAnalyze() {
   const keep = objSel.value;
   objSel.replaceChildren(...cells.map((L) => h('option', { value: L.name }, `${L.name} · ${(L.meta.count ?? 0).toLocaleString('en-US')}`)));
   if (cells.some((L) => L.name === keep)) objSel.value = keep;
-  else if (cells.length) objSel.value = [...cells].sort((a, b) => (b.meta.count ?? 0) - (a.meta.count ?? 0))[0].name;
+  else if (cells.length) objSel.value = bestCells(cells).name;
   const ws = $('an-within'), keepW = ws.value;
   const regs = regionLayers(p, objSel.value).filter((R) => (R.meta.count ?? 0) > 0);
   ws.replaceChildren(h('option', { value: '' }, 'the whole slide'), ...regs.map((R) => h('option', { value: R.name }, R.name)));
@@ -1176,7 +1179,7 @@ function analysisForm(p, a) {
     let input;
     if (prm.kind === 'class' || prm.kind === 'class?') {
       const opts = (prm.kind === 'class?' ? ['all'] : []).concat(classes);
-      input = h('select', { 'aria-label': prm.label }, ...opts.map((c) => h('option', {}, c)));
+      input = h('select', { 'aria-label': prm.label }, ...opts.map((c) => h('option', { value: c }, c === 'all' && prm.kind === 'class?' ? 'all cells' : c)));
       input.value = prm.kind === 'class?' ? 'all' : classes[Math.min(classIdx++, classes.length - 1)] || '';
     } else if (prm.kind === 'number') {
       const out = h('output', {}, `${fmt(prm.default)} ${prm.unit || ''}`.trim());
@@ -1189,7 +1192,22 @@ function analysisForm(p, a) {
       input = h('select', { 'aria-label': prm.label }, h('option', { value: '' }, 'loading…'));
       getSummary(activeSlide(), L).then((sm) => input.replaceChildren(...(sm.numeric || []).map((c) => h('option', {}, c)))).catch(() => {});
     } else if (prm.kind === 'regions') {
-      input = h('select', { 'aria-label': prm.label }, ...regionLayers(p, objName).map((R) => h('option', {}, R.name)));
+      const regs = regionLayers(p, objName);
+      input = h('select', { 'aria-label': prm.label }, ...(regs.length ? regs.map((R) => h('option', {}, R.name)) : [h('option', { value: '' }, 'no region layer: draw a region first')]));
+      if (regs.length > 1) input.value = ($('an-within').value && regs.find((R) => R.name === $('an-within').value)?.name) || [...regs].sort((a, b) => (a.meta.count ?? 0) - (b.meta.count ?? 0))[0].name;
+      // which of the layer's regions: one class (e.g. the tumour) or all of them
+      const cls = h('select', { 'aria-label': `${prm.label}: which regions` });
+      const fill = () => {
+        const names = (p.slide.layers.get(input.value)?.meta.classes || []).map((c) => c.name);
+        cls.replaceChildren(h('option', { value: '' }, 'every region'), ...names.map((n) => h('option', {}, n)));
+        cls.hidden = names.length < 2;
+      };
+      fill();
+      input.addEventListener('change', fill);
+      values[prm.key] = () => input.value;
+      values[`${prm.key}_class`] = () => (cls.hidden ? '' : cls.value);
+      form.append(h('label', { class: 'field', style: 'grid-template-columns: 84px 1fr' }, prm.label, h('span', { class: 'row', style: 'gap: 6px' }, input, cls)));
+      continue;
     }
     values[prm.key] = () => input.value;
     form.append(h('label', { class: 'field', style: 'grid-template-columns: 84px 1fr' }, prm.label, input));
@@ -1350,7 +1368,8 @@ function chart(c) {
     wrap.append(h('div', { class: 'panel-note' }, lo < 0 ? `${c.label || ''}: blue below 0, amber above` : c.label || ''));
     return wrap;
   }
-  const L = 36, R = 6, T = 8, B = 22, pw = W - L - R, ph = H - T - B;
+  const L = 36, R = 6, T = c.ylabel ? 18 : 8, B = 22, pw = W - L - R, ph = H - T - B;
+  if (c.ylabel) svg.append(txt(2, 9, c.ylabel));   // the unit of the values
   const series = (c.series || []).filter((x) => x && x.values);
   const all = series.flatMap((x) => x.values).filter((x) => x != null && Number.isFinite(x));
   let lo = Math.min(0, ...all), hi = Math.max(...all, 1e-9);

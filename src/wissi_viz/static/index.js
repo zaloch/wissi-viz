@@ -1034,7 +1034,7 @@ canvas.ov { pointer-events:none; }
          font:11px ui-monospace, Menlo, Consolas, monospace; color:#fff; }
 .scale i { display:block; height:4px; background:#fff; box-shadow:0 0 2px #000; margin-top:3px; border:solid #fff; border-width:0 1px; }
 :host([scalebar=false]) .scale { display:none !important; }
-.legend { position:absolute; right:6px; bottom:34px; max-width:min(240px, 45%); max-height:45%; overflow:hidden; pointer-events:none;
+.legend { position:absolute; right:var(--wv-legend-right, 6px); bottom:34px; max-width:min(240px, 45%); max-height:45%; overflow:hidden; pointer-events:none;
   padding:5px 7px; border-radius:6px; background:rgba(0,0,0,.6); font-size:11px; line-height:1.35; }
 .legend:empty { display:none; }
 .legend b { display:block; font-weight:600; opacity:.85; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }

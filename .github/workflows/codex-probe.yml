@@ -1,0 +1,35 @@
+# A 39-marker CODEX / PhenoCycler image (Zenodo 15757766, CC BY 4.0) in wissi-viz: does it open, how fast are its
+# channels, what does the app show? Screenshots and numbers go to lab/codex-probe-out.
+name: codex-probe
+on:
+  workflow_dispatch:
+  push:
+    branches: ['lab/**', '!lab/*-out']
+    paths: [scripts/codex_probe.py, .github/workflows/codex-probe.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - name: Install
+        run: |
+          uv venv -p 3.12
+          uv pip install -e ".[analysis,io,server]" playwright httpx
+          uv run --no-sync playwright install --with-deps chromium >/dev/null
+      - name: Probe
+        run: uv run --no-sync python scripts/codex_probe.py --out "$RUNNER_TEMP/out" --work "$RUNNER_TEMP/work"
+      - name: To the lab/codex-probe-out branch
+        if: always()
+        run: |
+          cd "$RUNNER_TEMP/out" 2>/dev/null || exit 0
+          printf 'wissi-viz showing a 39-marker PhenoCycler cut-out (Domanskyi 2025, https://doi.org/10.5281/zenodo.15757766, CC BY 4.0).\n' > README.md
+          git init -q -b lab/codex-probe-out
+          git -c user.name=github-actions -c user.email=github-actions@users.noreply.github.com add -A
+          git -c user.name=github-actions -c user.email=github-actions@users.noreply.github.com commit -qm "codex probe for ${GITHUB_SHA::7}"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" lab/codex-probe-out

@@ -81,10 +81,10 @@ def scope_geometry(registry, sid: str, scope: dict | None, tissue: bool = False)
         except KeyError:
             missing = True
         if missing:
-            raise ValueError(f'no layer {e["layer"]!r} on this slide to leave out')
+            raise ValueError(f'no layer {e["layer"]!r} to exclude on this slide')
         eg = layerops.geometry(registry, sid, e['layer'], e.get('classes') or None)
         if eg is None:
-            raise ValueError(f'{e["layer"]} has no regions (polygons) to leave out')
+            raise ValueError(f'{e["layer"]} has no regions (polygons) to exclude')
         src = _source(registry, sid)
         base = g if g is not None else shapely.box(0, 0, src.info.width, src.info.height)
         g = shapely.make_valid(base.difference(eg))
@@ -105,7 +105,7 @@ def _scope_geometry(registry, sid: str, scope: dict | None, tissue: bool = False
         x0, y0, x1, y1 = [float(v) for v in scope['rect']]
         g = shapely.box(max(0, x0), max(0, y0), min(W, x1), min(H, y1))
         if g.is_empty or g.area < 4:
-            raise ValueError('the view is outside the slide')
+            raise ValueError('view outside slide')
         return g, 'this view'
     if kind == 'region':
         L = registry.layer(sid, scope['layer'])
@@ -454,7 +454,7 @@ def rethreshold(registry, rid: str, strictness: float) -> dict:
     """Apply another strictness to a finished similar-object / segment-everything result (no re-measuring)."""
     r = _RESULTS.get(rid)
     if r is None:
-        raise ValueError('this result is no longer available (it expired, or the server restarted): run it again')
+        raise ValueError('result expired (or server restarted) · Run again')
     name, n = _publish(registry, r['slide'], r['F'], r['sim'], strictness, r['name'], r['cls'], r['color'], r['extra'],
                        r.get('classes'), r.get('labels'))  # fmt: skip
     r['strictness'] = strictness
@@ -524,9 +524,7 @@ def find_objects(
     ex = Examples(registry, sid, examples)
     cls, color = ex.cls, ex.color
     if not ex:
-        raise ValueError(
-            'no examples: outline a few objects with SAM or a drawing tool, or pick some on the slide, first'
-        )
+        raise ValueError('no examples · Outline objects with SAM or drawing tool, or pick objects')
     layer = registry.layer(sid, candidates)
     upd(0.05, f'measuring the objects of {candidates}…')
     F_all = annio.from_layer(layer)
@@ -619,7 +617,7 @@ def segment_everything(
     if not tiles:
         raise ValueError(f'nothing to segment in {where}')
     if len(tiles) > max_tiles:
-        raise ValueError(f'{len(tiles):,} tiles at this object size: pick a region or a larger object size')
+        raise ValueError(f'{len(tiles):,} tiles at this object size · Select region or larger object size')
     if geom is not None:
         shapely.prepare(geom)
     if ex:
@@ -666,7 +664,7 @@ def segment_everything(
     lname, n = _publish(registry, sid, F, sim, strictness, name, cls, color)
     if sim is not None:
         _remember(rid, slide=sid, F=F, sim=sim, name=lname, cls=cls, color=color, extra={}, strictness=strictness)
-    why = (f'None of the {len(polys):,} outlines is similar to the examples. Lower the strictness, or clear '
+    why = (f'None of {len(polys):,} outlines similar to examples · Lower strictness, or clear '
            '“use as examples”.' if n == 0 and ex else '')  # fmt: skip
     rects = [(x * f, y * f, (x + w) * f, (y + h) * f) for x, y, w, h in tiles]
     return _summary(
@@ -1041,7 +1039,7 @@ def find_by_text(
     expand = bool(expand) and len(names) == 1
     upd = (_Sub(job, 0.0, 0.5) if expand else job).update if job else (lambda *a, **k: None)
     if not names:
-        raise ValueError('type what to find, e.g. "nucleus" or "gland. vessel" (one class per phrase)')
+        raise ValueError('enter objects to find, e.g. "nucleus" or "gland. vessel" (one class per phrase)')
     src = _source(registry, sid)
     info = src.info
     ex = Examples(registry, sid, examples) if examples else None
@@ -1092,9 +1090,7 @@ def find_by_text(
     if not tiles:
         raise ValueError(f'nothing to search in {where}')
     if len(tiles) > max_tiles:
-        raise ValueError(
-            f'{len(tiles):,} tiles at this object size: pick a region or the view, or a larger object size'
-        )
+        raise ValueError(f'{len(tiles):,} tiles at this object size · Select region, view or larger object size')
     if geom is not None:
         shapely.prepare(geom)
     svc = impl = None
@@ -1180,9 +1176,9 @@ def find_by_text(
     if not polys:
         long = [n for n in names if len(n.split()) > 3]
         s3 = getattr(detector, 'name', '') in ('sam3', 'dino-sam3')
-        tip = (f'SAM 3 prompt: "{", ".join(asked)}". In tissue images SAM 3 detects nuclei and neurons only with the '
-               'prompt "cell": try "cell" with a size range, or another object size' if s3 else 'Use a shorter name'
-               if long else 'Try other words or another object size')  # fmt: skip
+        tip = (f'SAM 3 prompt: "{", ".join(asked)}" · Tissue: SAM 3 detects nuclei and neurons only as "cell" · '
+               'Try "cell" with size range, or other object size' if s3 else 'Use shorter name'
+               if long else 'Try other words or object size')  # fmt: skip
         raise ValueError(f'{label} found nothing named "{", ".join(names)}" in {where} ({len(tiles)} tile'
                          f'{"s" if len(tiles) != 1 else ""} searched). {tip}.')  # fmt: skip
     upd(0.95, f'{len(polys):,} matches: removing duplicates…')
@@ -1208,7 +1204,7 @@ def find_by_text(
             None, lname, 0, len(every), strictness, where, t0, 'text', note=f'{label}; {why} left out',
             kpis=[['found', '0'], ['matches', f'{len(every):,}'], ['tiles', str(len(tiles))]],
             companions=_companions(registry, sid, lname, every, tiles),
-            why=f'All {len(every):,} matches were excluded ({why}). Widen the size range or shorten Exclude.',
+            why=f'All {len(every):,} matches were excluded ({why}). Widen size range or shorten Exclude.',
         )  # fmt: skip
     polys = [polys[i] for i in keep]
     score = np.asarray(scores, float)[keep]
@@ -1250,9 +1246,9 @@ def find_by_text(
               strictness=strictness, classes=classes, labels=lab)  # fmt: skip
     why = ''
     if n == 0:
-        why = (f'None of the {len(polys):,} matches is similar to the examples. Lower the strictness, or clear '
+        why = (f'None of {len(polys):,} matches similar to examples · Lower strictness, or clear '
                '“use as examples”.') if ex else (
-               f'No match scores above this strictness. Lower it to include the {len(polys):,} weaker matches.')  # fmt: skip
+               f'No match above this strictness · Lower it to include {len(polys):,} weaker matches.')  # fmt: skip
     return _summary(
         rid, lname, n, len(polys), strictness, where, t0, 'text', note=note,
         kpis=[['found', f'{n:,}'], ['matches', f'{len(polys):,}'], ['tiles', str(len(tiles))]],
@@ -1307,8 +1303,8 @@ def find_cells(
         e = registry.get(sid)[0]
         path = e.path
         if e.factory is not None or path is None or not Path(path).is_file():
-            raise ValueError('Classpose reads slide files, and this slide comes from a tile API: use Cellpose-SAM '
-                             'or the classic threshold, which read the tiles')  # fmt: skip
+            raise ValueError('Classpose reads slide files only; this slide is from a tile API · Use Cellpose-SAM '
+                             'or classic threshold')  # fmt: skip
         upd(0.02, 'Classpose: the whole slide in its own environment (the first run installs it)…')
         L = segment.classpose_layer(path, log=lambda m: upd(None, str(m)[:200]))
         F = annio.from_layer(L)
@@ -1371,8 +1367,8 @@ def find_areas(
     labels = sorted({str(names[i]) for i in keep})
     if len(labels) < 2:
         raise ValueError(
-            f'{training} has {len(labels)} class{"" if len(labels) == 1 else "es"} of shapes: brush examples of at '
-            'least two (e.g. Area 1 and Area 2) — draw each with its class set in the Annotate tab'
+            f'{training} has {len(labels)} class{"" if len(labels) == 1 else "es"} of shapes · Draw 2+ classes '
+            '(e.g. Area 1, Area 2): set class (Annotate tab) · draw · repeat'
         )
     geom, where = scope_geometry(registry, sid, scope, tissue=True)
     if geom is not None and (scope or {}).get('kind', 'slide') == 'slide':  # tissue: keep faint edges (fat, stroma)
@@ -1440,11 +1436,11 @@ def find_areas(
         ys.append(np.full(len(sel), labels.index(str(names[i])), np.int16))
         upd(0.02 + 0.13 * (j + 1) / len(keep))
     if not Xs:
-        raise ValueError('the training shapes are too small at this detail: draw larger ones or pick "fine"')
+        raise ValueError('training shapes too small at this detail · Draw larger shapes or select "fine"')
     X, y = np.concatenate(Xs), np.concatenate(ys)
     got = sorted(set(y.tolist()))
     if len(got) < 2:
-        raise ValueError('need pixels of at least two classes: draw larger shapes')
+        raise ValueError('requires pixels of 2+ classes · Draw larger shapes')
     upd(0.16, f'training on {len(X):,} pixels of {len(got)} classes…')
     clf = RandomForestClassifier(n_estimators=60, max_depth=16, min_samples_leaf=2, class_weight='balanced',
                                  n_jobs=-1, random_state=0)  # fmt: skip
@@ -1557,7 +1553,7 @@ def run(registry, sid: str, body: dict, job: Job | None = None) -> dict:
     mode = body.get('mode') or 'objects'
     if mode == 'objects':
         if not body.get('candidates'):
-            raise ValueError('pick the layer to search (e.g. detected cells), or use "Segment everything"')
+            raise ValueError('select layer to search (e.g. detected cells), or use "Segment everything"')
         return find_objects(registry, sid, examples=body.get('examples') or {}, candidates=body['candidates'],
                             scope=body.get('scope'), strictness=float(body.get('strictness', 0.5)),
                             name=body.get('name'), job=job)  # fmt: skip
@@ -1571,7 +1567,7 @@ def run(registry, sid: str, body: dict, job: Job | None = None) -> dict:
                                   object_um_max=body.get('object_um_max'))  # fmt: skip
     if mode == 'areas':
         if not body.get('training'):
-            raise ValueError('pick the layer with the training shapes')
+            raise ValueError('select layer with training shapes')
         return find_areas(registry, sid, training=body['training'], classes=body.get('classes'),
                           scope=body.get('scope'), detail=body.get('detail') or 'medium', name=body.get('name'),
                           job=job)  # fmt: skip

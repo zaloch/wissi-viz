@@ -424,10 +424,10 @@
   <label>Sync <select id="sync"><option>none</option><option>all</option><option>pan</option><option>zoom</option></select></label>
   <button id="fit" class="btn" title="Fit every pane (F)">Fit</button>
   <span class="sep"></span>
-  <button id="b-connect" class="btn" title="Show the images of a tile API (HALO Link, PathCore, OMERO, any HTTP tile service)" hidden>Connect…</button>
-  <button id="b-layer" class="btn icon" title="Add a cell table or annotation file to the active pane's slide (Ctrl/⌘+L)" aria-label="Add cells or annotations" disabled>
+  <button id="b-connect" class="btn" title="Connect tile API (HALO Link, PathCore, OMERO, HTTP tile service)" hidden>Connect…</button>
+  <button id="b-layer" class="btn icon" title="Add cell table or annotation file to active slide (Ctrl/⌘+L)" aria-label="Add cells or annotations" disabled>
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5z"></path><path d="M3 13l9 5 4-2.2M19 15v6M16 18h6"></path></svg></button>
-  <button id="b-folder" class="btn icon" title="Open every slide in a folder (Ctrl/⌘+Shift+O)" aria-label="Open folder">
+  <button id="b-folder" class="btn icon" title="Open all slides in folder (Ctrl/⌘+Shift+O)" aria-label="Open folder">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h6l2 2h10v11H3z"></path></svg></button>
   <button id="b-open" class="btn primary" title="Open slides (Ctrl/⌘+O)">Open…</button>
   <button id="b-help" class="btn icon ghost" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
@@ -437,11 +437,11 @@
 
 <aside id="side">
   <div class="side-head"><h2 class="lbl">Slides</h2><span class="grow"></span><span class="dim mono" id="s-count" style="font-size: 11px"></span>
-    <button id="s-newproj" class="btn icon ghost" title="New project: your own group of slides (drag slides onto it)" aria-label="New project">
+    <button id="s-newproj" class="btn icon ghost" title="New project: group of slides · Drag slides onto it" aria-label="New project">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M3 7h6l2 2h10v10H3zM15 14h6M18 11v6"></path></svg></button></div>
   <label class="search" id="s-filter-box"><input id="s-filter" placeholder="Filter slides" aria-label="Filter slides"></label>
   <div id="slides" role="list"></div>
-  <div class="hint">Click a slide to show it in the active pane; double-click adds a pane. Drop files anywhere to open them.</div>
+  <div class="hint">Click: show in active pane · Double-click: add pane · Drop files: open</div>
 </aside>
 
 <main id="main">
@@ -458,7 +458,7 @@
       <button id="objs-prev" class="btn icon" title="Previous object in this order ([)" aria-label="Previous object">◀</button>
       <span id="objs-pos" class="mono dim"></span>
       <button id="objs-next" class="btn icon" title="Next object in this order (])" aria-label="Next object">▶</button>
-      <button id="objs-csv" class="btn" title="Save every object of this layer with its measurements (CSV)">CSV</button>
+      <button id="objs-csv" class="btn" title="Save all objects of layer with measurements (CSV)">CSV</button>
       <button id="objs-close" class="btn icon ghost" title="Close the objects table (T)" aria-label="Close the objects table">✕</button>
     </div>
     <div class="row" id="objs-filters">
@@ -467,7 +467,7 @@
       <select id="objs-col" aria-label="Measurement to filter by"></select>
       <input id="objs-min" type="number" step="any" placeholder="min" aria-label="Smallest value kept" style="width: 84px">
       <input id="objs-max" type="number" step="any" placeholder="max" aria-label="Largest value kept" style="width: 84px">
-      <button id="objs-add" class="btn" title="Keep only objects whose value lies in this range">Filter</button>
+      <button id="objs-add" class="btn" title="Keep objects with value in range">Filter</button>
     </div>
     <div id="objs-wrap" tabindex="0"><table id="objs-table"><thead></thead><tbody></tbody></table></div>
   </section>
@@ -498,8 +498,8 @@
     <hr>
     <button data-v="map" title="Overview map (O)" aria-label="Overview map" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2z"></path><path d="M9 4v14M15 6v14"></path></svg></button>
     <button data-v="scale" title="Scale bar" aria-label="Scale bar" aria-pressed="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M3 16h18M3 12v4M21 12v4M12 14v2M7.5 14v2M16.5 14v2"></path></svg></button>
-    <button data-v="snap" title="Save a picture of the selected pane (PNG, with the scale bar)" aria-label="Snapshot of the selected pane"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"></path><circle cx="12" cy="13" r="3.5"></circle></svg></button>
-    <button data-v="snapgrid" title="Save a figure of every pane, laid out as on screen (PNG: panels lettered A, B, C… with the slide names and scale bars)" aria-label="Snapshot of all panes"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="8" height="7" rx="1"></rect><rect x="13" y="4" width="8" height="7" rx="1"></rect><rect x="3" y="13" width="8" height="7" rx="1"></rect><rect x="13" y="13" width="8" height="7" rx="1"></rect></svg></button>
+    <button data-v="snap" title="Save selected pane (PNG, scale bar)" aria-label="Snapshot of the selected pane"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"></path><circle cx="12" cy="13" r="3.5"></circle></svg></button>
+    <button data-v="snapgrid" title="Save all panes as figure, screen layout (PNG: panels A, B, C…, slide names, scale bars)" aria-label="Snapshot of all panes"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="8" height="7" rx="1"></rect><rect x="13" y="4" width="8" height="7" rx="1"></rect><rect x="3" y="13" width="8" height="7" rx="1"></rect><rect x="13" y="13" width="8" height="7" rx="1"></rect></svg></button>
     <button data-v="full" title="Full screen" aria-label="Full screen"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"></path></svg></button>
   </div>
   <div id="minimap" class="hud" hidden><img alt=""><canvas></canvas></div>
@@ -553,7 +553,7 @@
         <button aria-pressed="false" data-mode="flat" title="One compact line per layer">Flat</button></span></div>
     <div class="chips" id="l-chips" role="group" aria-label="Show layers from"></div>
     <div id="l-list" style="display: flex; flex-direction: column; gap: 8px"></div>
-    <div id="l-empty" class="panel-note" hidden>No layers on this slide yet. Add a cell table or annotation file, draw, or run an analysis.</div>
+    <div id="l-empty" class="panel-note" hidden>No layers · Add cell table or annotation file, draw, or run analysis.</div>
     <div class="row"><button class="btn grow" id="l-add">Add cells / annotations…</button>
       <label class="dim" style="font-size: 12px; display: flex; gap: 6px; align-items: center">Export as <select id="a-fmt">
         <option value="geoparquet">GeoParquet</option><option value="qupath">QuPath GeoJSON</option><option value="geojson">GeoJSON</option>
@@ -562,18 +562,18 @@
 
   <section id="p-analyze" class="pane-body" role="tabpanel" aria-labelledby="t-analyze">
     <div class="f2">Cells <select id="an-objects" aria-label="Cell layer to analyse"></select></div>
-    <div class="f2" title="Analyse only the cells inside these regions (find areas, Make regions…, drawn ROIs)">Only inside <span class="row">
+    <div class="f2" title="Analyse only cells in these regions (Find areas, Make regions, drawn ROIs)">Only inside <span class="row">
       <select id="an-within" aria-label="Analyse only inside" style="flex: 1"><option value="">the whole slide</option></select>
       <select id="an-within-cls" aria-label="Region class" hidden></select></span></div>
     <div id="an-catalog" style="display: flex; flex-direction: column; gap: 10px"></div>
     <div id="an-form" hidden></div>
     <div class="row"><span class="lbl">Results</span><span class="grow"></span><span class="dim" id="an-count" style="font-size: 12px"></span></div>
-    <div id="an-results" style="display: flex; flex-direction: column; gap: 10px"><div class="panel-note" id="an-none">No results yet. Each analysis adds its layers to the slide and its result here.</div></div>
+    <div id="an-results" style="display: flex; flex-direction: column; gap: 10px"><div class="panel-note" id="an-none">No results · Select analysis · Select Run.</div></div>
   </section>
 
   <section id="p-measure" class="pane-body" role="tabpanel" aria-labelledby="t-measure">
     <div class="f2">Summary of <select id="ms-layer" aria-label="Layer to summarise"></select></div>
-    <div class="row"><span class="grow"></span><button id="ms-objs" class="btn" title="Every object of this layer with its size and measurements: sort, filter, step through (T)">Objects table</button></div>
+    <div class="row"><span class="grow"></span><button id="ms-objs" class="btn" title="Objects table: size, measurements · Sort, filter, step through (T)">Objects table</button></div>
     <div id="ms-body" style="display: flex; flex-direction: column; gap: 10px"></div>
     <span class="lbl" style="margin-top: 6px">Measure regions</span>
     <div class="f2">Regions <select id="m-regions"></select></div>
@@ -590,8 +590,8 @@
     <div class="row"><span class="lbl" id="i-title">Image</span><span class="grow"></span><span class="dim" id="disp-sum" style="font-size: 12px"></span></div>
     <div class="f2">Histogram of <select id="i-scope" aria-label="Histogram of"><option value="slide">the whole image</option><option value="view">this view</option></select></div>
     <div class="img-tools">
-      <button id="i-auto" class="btn" title="Contrast every channel from its histogram (0.1–99.9 %)">Auto all</button>
-      <button id="i-link" class="btn" aria-pressed="false" title="Linked: one minimum / maximum for every channel">Link channels</button>
+      <button id="i-auto" class="btn" title="Auto contrast all channels from histogram (0.1–99.9 %)">Auto all</button>
+      <button id="i-link" class="btn" aria-pressed="false" title="Linked: one minimum / maximum for all channels">Link channels</button>
       <button id="i-reset" class="btn ghost" title="Back to the slide's own settings">Reset</button>
       <span class="grow"></span>
       <label class="dim" style="font-size: 12px; display: flex; gap: 5px; align-items: center"><input type="checkbox" id="i-log" checked> log</label>
@@ -608,14 +608,14 @@
   <section id="p-draw" class="pane-body" role="tabpanel" aria-labelledby="t-draw">
     <div class="step" id="st-ex">
       <div class="sh"><span class="num">1</span><b>Mark examples</b><span class="grow"></span><span class="dim mono" id="ex-count" style="font-size: 11px"></span>
-        <label class="dim" style="font-size: 11px; display: inline-flex; gap: 4px; align-items: center; margin-left: 8px" title="Use the outlines of this layer and class, and the picked objects, as examples (clear to search without them)"><input type="checkbox" id="ex-use" checked>use as examples</label></div>
+        <label class="dim" style="font-size: 11px; display: inline-flex; gap: 4px; align-items: center; margin-left: 8px" title="Use outlines of this layer and class, and picked objects, as examples · Clear: search without"><input type="checkbox" id="ex-use" checked>use as examples</label></div>
       <div class="f2">Save to layer <input type="text" id="a-layer" value="Annotations" list="a-layers"></div>
       <div class="f2">Class <span class="row"><input type="text" id="a-class" value="Area 1" list="a-classes" style="flex: 1">
         <input type="color" id="a-color" value="#ff4d6d" title="Class colour"></span></div>
       <datalist id="a-layers"></datalist><datalist id="a-classes"></datalist>
       <div class="row" style="flex-wrap: wrap">
-        <button id="a-sam" class="btn" title="SAM: click an object to include it, Shift-click to exclude, drag to draw a box (9)">SAM <span class="kc">9</span></button>
-        <button id="a-pick" class="btn" title="Pick objects of a layer as examples: click to mark as similar, Shift-click as dissimilar (P)">Pick objects <span class="kc">P</span></button>
+        <button id="a-sam" class="btn" title="SAM · Click: include · Shift-click: exclude · Drag: box (9)">SAM <span class="kc">9</span></button>
+        <button id="a-pick" class="btn" title="Pick objects as examples · Click: similar · Shift-click: dissimilar (P)">Pick objects <span class="kc">P</span></button>
         <button id="a-accept" class="btn primary" title="Save the SAM mask (Enter / double-click)">Accept <span class="kc">↵</span></button>
         <button id="a-discard" class="btn" title="Discard the SAM mask (Esc)">Discard <span class="kc">Esc</span></button></div>
       <div class="ex-chips" id="ex-picks"></div>
@@ -626,10 +626,10 @@
     <div class="step find" id="st-find">
       <div class="sh"><span class="num">2</span><b id="f-head">Find all like them</b></div>
       <div class="modes" id="f-modes" role="group" aria-label="How to find">
-        <button class="mode" data-mode="objects" aria-pressed="true" title="Score every object of a layer, such as detected cells, against the examples"><b>Similar objects</b><span>in a layer of detected cells</span></button>
-        <button class="mode" data-mode="segment" aria-pressed="false" title="SAM (or the classic fill) outlines every object, keeping those like the examples"><b>Segment everything</b><span>outlines every object, keeps similar ones</span></button>
-        <button class="mode" data-mode="areas" aria-pressed="false" title="Train a pixel classifier on shapes of two or more classes and map those areas"><b>Areas</b><span>two or more classes, from brushed shapes</span></button>
-        <button class="mode" data-mode="text" aria-pressed="false" title="Enter the object type (nucleus, gland…): a text-prompted detector locates the objects and SAM outlines them; or select a cell model (Cellpose-SAM, classic, Classpose) to outline every nucleus"><b>By text</b><span>nucleus, gland… or a cell model</span></button>
+        <button class="mode" data-mode="objects" aria-pressed="true" title="Score all objects of layer (e.g. detected cells) against examples"><b>Similar objects</b><span>in a layer of detected cells</span></button>
+        <button class="mode" data-mode="segment" aria-pressed="false" title="SAM (or classic fill) outlines all objects · Keeps those like examples"><b>Segment everything</b><span>outlines every object, keeps similar ones</span></button>
+        <button class="mode" data-mode="areas" aria-pressed="false" title="Train pixel classifier on shapes of 2+ classes · Map those areas"><b>Areas</b><span>two or more classes, from brushed shapes</span></button>
+        <button class="mode" data-mode="text" aria-pressed="false" title="Describe objects (nucleus, gland…): detector locates, SAM outlines · Or select cell model (Cellpose-SAM, classic, Classpose): outlines all nuclei"><b>By text</b><span>nucleus, gland… or a cell model</span></button>
       </div>
       <div class="f2" id="f-model-row" hidden>Model <select id="f-model" aria-label="Model">
         <optgroup label="Name it (text prompt)">
@@ -641,17 +641,17 @@
           <option value="classic">Classic stain threshold · no model</option>
           <option value="classpose">Classpose · whole slide files</option></optgroup></select></div>
       <div class="f2" id="f-text-row" hidden>Find <input type="text" id="f-prompt" placeholder="nucleus. gland. blood vessel" aria-label="What to find (one class per phrase)" spellcheck="false"></div>
-      <div class="f2" id="f-s3name-row" hidden>SAM 3 name <input type="text" id="f-s3name" placeholder="auto" aria-label="Short name for SAM 3 (one to three words)" title="The SAM 3 prompt (one to three words). Empty: the main noun of the description, or “cell” for nuclei, neurons and cell bodies (in tissue images SAM 3 detects these only with that prompt)" spellcheck="false"></div>
+      <div class="f2" id="f-s3name-row" hidden>SAM 3 name <input type="text" id="f-s3name" placeholder="auto" aria-label="Short name for SAM 3 (one to three words)" title="SAM 3 prompt, 1–3 words · Empty: main noun of description, or “cell” for nuclei, neurons, cell bodies (SAM 3 detects these in tissue only as “cell”)" spellcheck="false"></div>
       <label class="panel-note" id="f-expand-row" hidden style="display: flex; gap: 6px; align-items: flex-start"><input type="checkbox" id="f-expand" checked>
         <span>Then find more like the best matches: they serve as examples for <i>segment everything</i>, which detects dense small objects, such as nuclei, that a text prompt does not (one phrase only)</span></label>
       <div class="panel-note" id="f-lic-row" hidden><span id="f-lic-msg"></span> <button id="f-lic" class="btn" style="margin-left: 4px">Read the licence…</button></div>
       <div class="f2" id="f-cand-row">Search <select id="f-cand" aria-label="Objects to search"></select></div>
       <div class="f2" id="f-size-row" hidden>Object size <span class="row" style="gap: 6px; align-items: center"><input type="number" id="f-size" min="1" max="1000" step="0.5" value="10" aria-label="Smallest object size (µm)" style="width: 64px">
-        <span class="dim">to</span><input type="number" id="f-size-max" min="1" max="2000" step="0.5" placeholder="any" aria-label="Largest object size (µm); empty: about the smallest" title="Optional largest size. Matches outside the range are excluded." style="width: 64px"><span class="dim">µm</span></span></div>
-      <div class="f2" id="f-excl-row" hidden>Exclude <input type="text" id="f-exclude" placeholder="objects to exclude (optional)" aria-label="What not to find (one phrase each, separated by full stops)" title="Matches mostly covered by one of these are left out" spellcheck="false"></div>
+        <span class="dim">to</span><input type="number" id="f-size-max" min="1" max="2000" step="0.5" placeholder="any" aria-label="Largest object size (µm); empty: about the smallest" title="Largest size (optional) · Excludes matches outside range" style="width: 64px"><span class="dim">µm</span></span></div>
+      <div class="f2" id="f-excl-row" hidden>Exclude <input type="text" id="f-exclude" placeholder="objects to exclude (optional)" aria-label="What not to find (one phrase each, separated by full stops)" title="Excludes matches mostly covered by these" spellcheck="false"></div>
       <div class="f2" id="f-detail-row" hidden>Detail <select id="f-detail" aria-label="Detail"><option value="coarse">coarse · 8 µm/px</option><option value="medium" selected>medium · 4 µm/px</option><option value="fine">fine · 2 µm/px</option></select></div>
       <div class="f2">Where <select id="f-where" aria-label="Where"><option value="view">this view</option><option value="slide">the whole slide</option></select></div>
-      <div class="f2">Not inside <select id="f-notin" aria-label="Exclude the regions of a layer" title="Exclude the regions (polygons) of this layer, such as areas to ignore"><option value="">—</option></select></div>
+      <div class="f2">Not inside <select id="f-notin" aria-label="Exclude the regions of a layer" title="Exclude regions (polygons) of this layer, e.g. areas to ignore"><option value="">—</option></select></div>
       <div class="f2" id="f-strict-row">Strictness <span class="row"><input type="range" id="f-strict" min="0" max="1" step="0.05" value="0.5" aria-label="Strictness"><output id="f-strict-o" class="mono" style="width: 52px; text-align: right">0.50</output></span></div>
       <div class="panel-note" id="f-hint"></div>
       <button class="run find" id="f-run">Find all</button>
@@ -741,7 +741,7 @@
   <form method="dialog" class="row" style="justify-content: flex-end"><button class="btn">Close</button></form>
 </dialog>
 
-<footer><span id="log"></span><span id="fps" title="Frames per second while the slide is moving (click: show on the slide)">– fps</span><span>v__VERSION__</span></footer>
+<footer><span id="log"></span><span id="fps" title="Frames per second while moving · Click: show on slide">– fps</span><span>v__VERSION__</span></footer>
 <script>window.WISSI_APP = { api: '__API__', base: '__BASE__', token: '__TOKEN__', mode: '__MODE__', caps: __CAPS__ };</script>
 <script type="module" src="__API__/static/app.js"></script>
 </body>

@@ -214,7 +214,7 @@ def test_awkward_slide(slides, tmp_path, name):
         try:
             findall.segment_everything(s.registry, sid, scope={'kind': 'view', 'rect': rect}, object_um=8)
         except ValueError as e:
-            assert any(w in str(e) for w in ('no objects', 'nothing to segment', 'outside the slide')), e
+            assert any(w in str(e) for w in ('no objects', 'nothing to segment', 'outside slide')), e
     finally:
         s.shutdown()
 

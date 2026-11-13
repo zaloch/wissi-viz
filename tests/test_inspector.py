@@ -361,7 +361,7 @@ def test_drawing_measuring_undo_delete_in_the_browser(session):
             # tooltip and hint
             pg.hover('#tools .slot[data-tool=measure]')
             pg.wait_for_selector('#ttip', state='visible')
-            assert 'Measure length' in pg.inner_text('#ttip') and 'Enter keeps it' in pg.inner_text('#ttip')
+            assert 'Measure length' in pg.inner_text('#ttip') and 'Enter: keep' in pg.inner_text('#ttip')
             shot('tooltip')
             # a rectangle keeps its size in µm; Shift makes a square
             pg.keyboard.press('3')

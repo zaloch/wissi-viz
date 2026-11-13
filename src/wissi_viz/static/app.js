@@ -431,9 +431,9 @@ function showPathBox(why) {
   $('pk-open').textContent = pk.mode === 'layer' ? 'Add to the slide' : 'Open selected';
   if (CAPS.browse) { $('picker').classList.add('on'); browse(pk.dir || ''); setTimeout(() => $('pk-filter').focus(), 50); }
   else $('paths').focus();
-  log(pk.mode === 'folder' ? 'Select a folder: open it, then choose “Open this folder”.'
-    : pk.mode === 'layer' ? 'Select cell tables or annotation files for the active slide.'
-      : SERVER ? 'Select slides on the server.' : 'Select slides: click to select, double-click to open. System file dialogs require the desktop app.');
+  log(pk.mode === 'folder' ? 'Open folder · Select “Open this folder”.'
+    : pk.mode === 'layer' ? 'Select cell tables or annotation files for active slide.'
+      : SERVER ? 'Select slides on the server.' : 'Click: select · Double-click: open · System file dialogs: desktop app only.');
 }
 function closePicker() {
   $('picker').classList.remove('on');
@@ -528,17 +528,18 @@ function renderEntries() {
 
 // ------------------------------------------------------------------------------------------------ toolbar
 // [tool, name, how to use it]; drawings are saved to the layer and class set in Annotate, measurements are not
-const SAVED = 'Saved to the layer and class set in Annotate; ⌘Z undoes.'.replace('⌘', isMac ? '⌘' : 'Ctrl+');
+// how to use each tool, as in a manual: action: effect · …
+const SAVED = 'Saves to Annotate layer and class · ⌘Z: undo'.replace('⌘', isMac ? '⌘' : 'Ctrl+');
 const TOOLS = [
-  ['pan', 'Pan', 'Drag to move, scroll to zoom. Click an object for its details; Delete removes a selected drawing.'],
-  ['point', 'Point', `Click to place a point. ${SAVED}`],
-  ['rect', 'Rectangle', `Drag to draw; hold Shift for a square. The size shows while you draw. ${SAVED}`],
-  ['ellipse', 'Ellipse', `Drag to draw; hold Shift for a circle. The size shows while you draw. ${SAVED}`],
-  ['polygon', 'Polygon', `Click to add points; double-click or Enter finishes, Backspace removes the last point, Shift keeps edges at 45° steps. ${SAVED}`],
-  ['freehand', 'Freehand', `Drag to draw an outline; it closes when you release. ${SAVED}`],
-  ['measure', 'Measure length', 'Drag for a straight line, or click points for a path (double-click or Enter finishes); Shift keeps 45° steps. Not saved: Enter keeps it in the Measurements layer, Esc clears it.'],
-  ['area', 'Measure area', 'Drag to outline freehand, or click points (double-click or Enter finishes): area, perimeter, width and height. Not saved: Enter keeps it in the Measurements layer, Esc clears it.'],
-  ['sam', 'SAM: click an object', 'Click an object to outline it; Shift-click excludes a part, drag draws a box. Enter accepts, Esc discards.'],
+  ['pan', 'Pan', 'Drag: move · Scroll: zoom · Click object: details · Delete: remove selected drawing'],
+  ['point', 'Point', `Click: place point · ${SAVED}`],
+  ['rect', 'Rectangle', `Drag: draw · Shift: square · ${SAVED}`],
+  ['ellipse', 'Ellipse', `Drag: draw · Shift: circle · ${SAVED}`],
+  ['polygon', 'Polygon', `Click: add point · Double-click or Enter: finish · Backspace: remove last point · Shift: 45° steps · ${SAVED}`],
+  ['freehand', 'Freehand', `Drag: draw outline · Release: close · ${SAVED}`],
+  ['measure', 'Measure length', 'Drag: straight line · Click: path points · Double-click or Enter: finish · Shift: 45° steps · Enter: keep (Measurements layer) · Esc: clear'],
+  ['area', 'Measure area', 'Drag: freehand outline · Click: polygon points · Double-click or Enter: finish · Enter: keep (Measurements layer) · Esc: clear'],
+  ['sam', 'SAM: click an object', 'Click object: outline · Shift-click: exclude part · Drag: box · Enter: accept · Esc: discard'],
 ];
 function buildTools() {
   const nav = $('tools');
@@ -575,9 +576,8 @@ function setTool(t) {
   // the tool's how-to on the slide while it is in use
   const tool = TOOLS.find((x) => x[0] === t), hint = $('toolhint');
   if (t === 'pan' || !tool) hint.style.display = 'none';
-  else {   // the first sentence (the tooltip has the rest); measurements also say how to keep or clear them
-    const first = tool[2].split(/(?<=\.) /)[0] + (t === 'measure' || t === 'area' ? ' Enter keeps it, Esc clears it.' : '');
-    hint.replaceChildren(h('b', {}, tool[1]), h('span', { class: 'dim' }, first));
+  else {
+    hint.replaceChildren(h('b', {}, tool[1]), h('span', { class: 'dim' }, tool[2]));
     hint.style.display = 'block';
   }
 }
@@ -748,7 +748,7 @@ function channelCard(p, sid, i, c, hh) {
   vis.onchange = () => { grid.setChannel(panesOf(sid), i, { visible: vis.checked }); renderImage(); };
   const col = h('input', { type: 'color', value: toHex(c.color), 'aria-label': `${c.name} colour` });
   col.oninput = () => { grid.setChannel(panesOf(sid), i, { color: col.value }); draw(); };
-  const soloB = h('button', { class: 'solo-b', title: 'Show only this channel (click again to show all)' }, 'S');
+  const soloB = h('button', { class: 'solo-b', title: 'Show only this channel · Click again: show all' }, 'S');
   soloB.onclick = () => {
     const only = p.channels.every((x, k) => x.visible === (k === i));
     p.channels.forEach((_, k) => grid.setChannel(panesOf(sid), k, { visible: only || k === i }));
@@ -1073,7 +1073,7 @@ function chainDialog(mode, sid, L) {
   let collect;
   if (mode === 'regions') {
     $('lo-h').textContent = `Make regions from ${L.name}`;
-    $('lo-p').textContent = 'Objects closer than the joining distance are merged into one region, closing gaps and small holes; regions smaller than the minimum area are removed. The result is a region layer, inside which cells can be analysed or measured.';
+    $('lo-p').textContent = 'Merges objects closer than joining distance (closes gaps, small holes) · Removes regions below smallest area · Result: region layer for Analyze and Measure.';
     const cs = clsSel(classes);
     const join = h('input', { type: 'range', min: 0, max: 200, step: 5, value: 20, 'aria-label': 'Join objects closer than' });
     const jo = h('output', { class: 'mono' }, '20 µm');
@@ -1084,7 +1084,7 @@ function chainDialog(mode, sid, L) {
     collect = () => ['/layers/regions', { layer: L.name, classes: cs.value ? [cs.value] : null, join_um: +join.value, min_area_um2: +minA.value }];
   } else {
     $('lo-h').textContent = `Keep only the ${L.name} inside…`;
-    $('lo-p').textContent = 'Creates a layer with the objects whose centre lies inside the selected regions, keeping their measurements, so that analyses, find all and exports can use only those.';
+    $('lo-p').textContent = 'Creates layer of objects centred in selected regions, with measurements · Use in Analyze, Find all, export.';
     const regs = regionLayers(p, L.name).filter((R) => (R.meta.count ?? 0) > 0);
     const rs = h('select', { 'aria-label': 'Regions' }, ...regs.map((R) => h('option', {}, R.name)));
     const rc = h('select', { 'aria-label': 'Region class' });
@@ -1092,7 +1092,7 @@ function chainDialog(mode, sid, L) {
     rs.onchange = fill;
     fill();
     body.replaceChildren(field('Regions', rs), field('Only class', rc));
-    if (!regs.length) $('lo-msg').textContent = 'This slide has no region layer. Create one first with Areas, Make regions or the drawing tools.';
+    if (!regs.length) $('lo-msg').textContent = 'No region layer · Create one: Areas, Make regions or drawing tools.';
     $('lo-run').textContent = 'Keep inside';
     collect = () => ['/layers/inside', { objects: L.name, regions: rs.value, classes: rc.value ? [rc.value] : null }];
   }
@@ -1149,7 +1149,7 @@ async function renderAnalyze() {
   const box = $('an-catalog');
   box.replaceChildren();
   if (catalogError) { box.append(h('div', { class: 'panel-note' }, catalogError)); return; }
-  if (!cells.length) { box.append(h('div', { class: 'panel-note' }, 'Spatial analyses require cells. Add a cell table, or find cells in the Annotate tab.')); $('an-form').hidden = true; return; }
+  if (!cells.length) { box.append(h('div', { class: 'panel-note' }, 'Requires cells · Add cell table, or find cells (Annotate tab).')); $('an-form').hidden = true; return; }
   const hasRegions = regionLayers(p, objSel.value).length > 0;
   const groups = {};
   for (const a of catalog) (groups[a.group] ||= []).push(a);
@@ -1158,7 +1158,7 @@ async function renderAnalyze() {
     const col = h('div', { class: 'an-group' }, h('span', { class: 'lbl' }, g === 'Regions' && !hasRegions ? 'Regions · draw or add a region layer first' : g));
     for (const a of items) {
       const dis = a.needs_regions && !hasRegions;
-      const b = h('button', { class: 'an-card', 'aria-pressed': String(picked === a.id), disabled: dis, title: dis ? 'Requires a region layer: draw one (Annotate tab) or add an annotation file.' : a.desc },
+      const b = h('button', { class: 'an-card', 'aria-pressed': String(picked === a.id), disabled: dis, title: dis ? 'Requires region layer · Draw one (Annotate tab) or add annotation file.' : a.desc },
         h('span', { class: 'ic' }, icon(ic[a.group] || 'pattern')), h('span', { class: 'grow' }, h('b', {}, a.name), h('span', { class: 'd' }, a.desc)), h('span', { class: 'sp' }, a.speed));
       b.onclick = () => { picked = picked === a.id ? null : a.id; renderAnalyze(); };
       col.append(b);
@@ -1298,7 +1298,7 @@ function renderResults(fresh = false) {
   const box = $('an-results');
   box.replaceChildren();
   $('an-count').textContent = results.length ? `${results.length}` : '';
-  if (!results.length) { box.append(h('div', { class: 'panel-note', id: 'an-none' }, 'No results yet. Each analysis adds its layers to the slide and its result here.')); return; }
+  if (!results.length) { box.append(h('div', { class: 'panel-note', id: 'an-none' }, 'No results · Select analysis · Select Run.')); return; }
   results.forEach((r, i) => box.append(resultCard(r, fresh && i === 0)));
 }
 
@@ -1575,7 +1575,7 @@ function setPicking(on) {
   $('a-pick').classList.toggle('on', on);
   $('a-pick').setAttribute('aria-pressed', String(on));
   document.body.classList.toggle('picking', on);
-  if (on) { setTool('pan'); log('Pick objects: click to mark as similar, Shift-click to mark as dissimilar. Press P or Esc to stop.'); }
+  if (on) { setTool('pan'); log('Pick objects · Click: similar · Shift-click: dissimilar · P or Esc: stop'); }
 }
 $('a-pick').onclick = () => setPicking(!picking);
 function addPick(d) {
@@ -1728,46 +1728,47 @@ async function renderDraw() {
     const pos = use ? n + mine.filter((x) => !x.neg).length : 0;
     const exLabel = `${n} outline${n === 1 ? '' : 's'} in ${drawLayer} · ${$('a-class').value.trim() || 'any class'}${mine.length ? ` + ${mine.length} picked` : ''}`;
     $('ex-count').textContent = use ? exLabel : `${exLabel} · not used`;
-    $('ex-count').title = use && (n || mine.length) ? 'Used as examples: only objects similar to these are kept' : '';
-    const exNote = pos ? ` Only matches similar to the ${pos} example${pos === 1 ? '' : 's'} (${drawLayer} · ${$('a-class').value.trim() || 'any class'}${mine.length ? ', picked objects' : ''}) are kept, and the examples’ size replaces the object size. Clear “use as examples” to search without them.` : '';
+    $('ex-count').title = use && (n || mine.length) ? 'Examples: keeps only similar objects' : '';
+    const exNote = pos ? ` Keeps matches similar to ${pos} example${pos === 1 ? '' : 's'} (${drawLayer} · ${$('a-class').value.trim() || 'any class'}${mine.length ? ', picked objects' : ''}); example size replaces object size. To ignore examples: clear “use as examples”.` : '';
+    const NOGPU = ' Without GPU: limit search to view or region.';
     let msg = '', ok = !!sid && !caps.error && !findJob;
     if (caps.error) msg = caps.error;
     else if (findMode === 'objects') {
-      if (!cands.length) { msg = 'No object layer to search. Add a cell table, or use Segment everything.'; ok = false; }
-      else if (!pos) { msg = $('ex-use').checked ? `Mark at least one example of “${$('a-class').value || 'a class'}” with SAM, a drawing tool or Pick objects.` : 'Similar objects requires examples. Select “use as examples”.'; ok = false; }
-      else msg = `Finds every object in ${cs.value} similar to the ${pos} example${pos === 1 ? '' : 's'}.`;
+      if (!cands.length) { msg = 'No object layer. Add cell table, or use Segment everything.'; ok = false; }
+      else if (!pos) { msg = $('ex-use').checked ? `Mark “${$('a-class').value || 'class'}” examples: SAM, drawing tool or Pick objects.` : 'Select “use as examples” first.'; ok = false; }
+      else msg = `Finds objects in ${cs.value} similar to ${pos} example${pos === 1 ? '' : 's'}.`;
     } else if (findMode === 'segment') {
-      msg = pos ? `${caps.sam || 'SAM'} outlines every object.${exNote} Searching the whole slide may take a long time without a GPU.`
-        : `${caps.sam || 'SAM'} outlines every object ${sizeText()} across. Without examples, all outlines are kept. Searching the whole slide may take a long time without a GPU.`;
+      msg = pos ? `${caps.sam || 'SAM'} outlines all objects.${exNote}${NOGPU}`
+        : `${caps.sam || 'SAM'} outlines all objects ${sizeText()} across; keeps all.${NOGPU}`;
     } else if (findMode === 'text' && cellModel) {
       const where = $('f-where').selectedOptions[0]?.textContent || 'this view';
       msg = model === 'classpose'
-        ? `Classpose outlines and classifies every cell of the whole slide file, then keeps those in ${where}. The first run installs it with uv; without a GPU it is slow. Its weights were trained on datasets with non-commercial terms: review them before commercial use.`
-        : `${CELL_MODELS[model]} outlines every nucleus in ${where} and measures its area, shape and stain. Nuclei are classed by size (or by brightest marker in fluorescence), and the result is a cell layer for the analyses.${model === 'cellpose' ? ' Searching the whole slide may take a long time without a GPU.' : ''}`;
+        ? `Classpose outlines and classes all cells in slide file; keeps those in ${where}. First run: installs via uv. Without GPU: slow. Weights trained on non-commercial data: check before commercial use.`
+        : `${CELL_MODELS[model]} outlines nuclei in ${where}: area, shape, stain. Classes by size (fluorescence: brightest marker). Result: cell layer for Analyze.${model === 'cellpose' ? NOGPU : ''}`;
     } else if (findMode === 'text') {
       const words = $('f-prompt').value.split(/[.,;\n]+/).map((w) => w.trim()).filter(Boolean);
       const g = tx.grounding || {};
       const both = model === 'dino-sam3', s3need = model === 'sam3' || both;
       const name = { grounding: 'Grounding DINO + SAM 2.1', sam3: 'SAM 3', 'dino-sam3': 'Grounding DINO → SAM 3' }[model] || model;
       const dl = [s3need && !s3.downloaded ? 'SAM 3 (about 3.3 GB, from Hugging Face)' : '', model !== 'sam3' && !g.downloaded ? `Grounding DINO (about ${g.size_mb || 250} MB)` : ''].filter(Boolean);
-      const dlText = dl.length ? ` The first run downloads ${dl.join(' and ')}.` : '';
+      const dlText = dl.length ? ` First run downloads ${dl.join(' and ')}.` : '';
       const s3name = $('f-s3name').value.trim() || sam3WordOf(words[0] || '');
       $('f-s3name').placeholder = words[0] ? `auto: ${sam3WordOf(words[0])}` : 'auto';
       const longs = $('f-exclude').value.split(/[.,;\n]+/).map((w) => w.trim()).filter(Boolean).filter((w) => w.split(/\s+/).length > 3);
       // SAM 3 gets a name it knows: the description's main noun, and "cell" for nuclei, neurons and cell bodies
       const asks = model === 'sam3' ? words.map((w, i) => (i === 0 && $('f-s3name').value.trim()) || sam3WordOf(w)) : [];
       const renamed = asks.map((a, i) => [words[i], a]).filter(([w, a]) => w.toLowerCase() !== a.toLowerCase());
-      const short = (renamed.length ? ` SAM 3 prompt: ${renamed.map(([w, a]) => `“${a}” (for “${w}”)`).join(', ')}${renamed.some(([, a]) => a === 'cell') ? '. In tissue images SAM 3 detects nuclei and neurons only with the prompt “cell”; the size range selects the intended objects' : ''}.` : '')
-        + (longs.length && s3need ? ` ⚠ SAM 3 prompts should be one to three words; “${longs[0]}” in Exclude is unlikely to match. Shorten it.` : '');
-      if (s3need && !s3.accepted) { msg = 'Accept the SAM License to use SAM 3, or select Grounding DINO + SAM 2.1.'; ok = false; }
-      else if (!words.length) { msg = 'Enter what to find, such as “nucleus” or “gland. vessel” (one class per phrase).'; ok = false; }
-      else if (both) msg = `Grounding DINO marks its best matches for “${words.join('”, “')}” in each tile; SAM 3 uses them as examples of “${s3name}” and outlines every similar object ${sizeText()} across${$('f-exclude').value.trim() ? `, excluding ${$('f-exclude').value.trim()}` : ''}.${$('f-expand').checked && words.length === 1 ? ' Segment everything then adds objects similar to the best of these.' : ''}${short}${exNote}${dlText} Searching the whole slide may take a long time without a GPU.`;
-      else if ($('f-expand').checked && words.length === 1) msg = `${name} finds ${words[0]} ${sizeText()} across; the best matches then serve as examples, and SAM outlines every similar object.${short}${exNote}${dlText} Searching the whole slide may take a long time without a GPU.`;
-      else msg = `${name} finds every ${words.join(', ')} ${sizeText()} across${$('f-exclude').value.trim() ? `, excluding ${$('f-exclude').value.trim()}` : ''}.${short}${exNote}${dlText} ${model === 'sam3' ? 'In validation, SAM 3 (prompt “cell”) found 59 % of H&E nuclei and 91 % of rat DRG neurons.' : 'Grounding DINO is suited to larger structures (glands, vessels, fat, folds); in validation it found fewer than 1 in 10 H&E nuclei. For nuclei and cells, use SAM 3 or a cell model.'} Searching the whole slide may take a long time without a GPU.`;
+      const short = (renamed.length ? ` SAM 3 prompt: ${renamed.map(([w, a]) => `“${a}” (for “${w}”)`).join(', ')}${renamed.some(([, a]) => a === 'cell') ? '. Tissue images: SAM 3 detects nuclei and neurons only as “cell”; size range selects objects' : ''}.` : '')
+        + (longs.length && s3need ? ` ⚠ Exclude: use 1–3 words (“${longs[0]}” too long).` : '');
+      if (s3need && !s3.accepted) { msg = 'Accept SAM License to use SAM 3, or select Grounding DINO + SAM 2.1.'; ok = false; }
+      else if (!words.length) { msg = 'Enter objects to find, e.g. “nucleus” or “gland. vessel” (one class per phrase).'; ok = false; }
+      else if (both) msg = `Grounding DINO marks best “${words.join('”, “')}” matches per tile · SAM 3 outlines similar “${s3name}” objects, ${sizeText()} across${$('f-exclude').value.trim() ? `, excluding ${$('f-exclude').value.trim()}` : ''}.${$('f-expand').checked && words.length === 1 ? ' Then: Segment everything adds similar objects.' : ''}${short}${exNote}${dlText}${NOGPU}`;
+      else if ($('f-expand').checked && words.length === 1) msg = `${name} finds “${words[0]}”, ${sizeText()} across · Best matches become examples · SAM outlines similar objects.${short}${exNote}${dlText}${NOGPU}`;
+      else msg = `${name} finds “${words.join('”, “')}”, ${sizeText()} across${$('f-exclude').value.trim() ? `, excluding ${$('f-exclude').value.trim()}` : ''}.${short}${exNote}${dlText} ${model === 'sam3' ? 'Validation: SAM 3 (“cell”) found 59 % of H&E nuclei, 91 % of DRG neurons.' : 'Best for large structures (glands, vessels, fat, folds). Validation: under 10 % of H&E nuclei found; for nuclei, use SAM 3 or cell model.'}${NOGPU}`;
     } else {
       const k = classes.filter((c) => c.n > 0);
-      msg = k.length >= 2 ? `Trains on ${k.map((c) => `${c.name} (${c.n})`).join(', ')} in ${drawLayer} and maps those areas.`
-        : `Draw shapes of at least two classes in ${drawLayer}, such as Area 1 and Area 2: set the class, draw, then repeat for the next class.`;
+      msg = k.length >= 2 ? `Trains on ${k.map((c) => `${c.name} (${c.n})`).join(', ')} in ${drawLayer}; maps those areas.`
+        : `Draw 2+ classes in ${drawLayer} (e.g. Area 1, Area 2): set class · draw · repeat.`;
       ok = ok && k.length >= 2;
     }
     hint.textContent = msg;
@@ -1936,7 +1937,7 @@ function showCard(d, f) {
   const nums = order.filter((k) => typeof props[k] === 'number' && !(shape.length && SIZE_KEYS.test(k))).slice(0, 6);
   const sizeText = (r) => r.unit === 'µm²' && r.value >= 1e5 ? `${(r.value / 1e6).toFixed(3)} mm²` : r.unit === 'µm' && r.value >= 1000 ? `${(r.value / 1000).toFixed(2)} mm`
     : `${r.value >= 100 ? Math.round(r.value).toLocaleString('en-US') : r.value >= 10 ? r.value.toFixed(1) : r.value.toFixed(2)}${r.unit ? ` ${r.unit}` : ''}`;
-  const table = h('button', { class: 'btn grow', title: 'Show this object in the objects table of its layer' }, 'In table');
+  const table = h('button', { class: 'btn grow', title: 'Show object in objects table' }, 'In table');
   table.onclick = () => { hideCard(); openObjects(d.layer); objs.sel = d.index; setTimeout(() => loadObjects(0, { find: d.index }).then((t) => { if (t?.position != null) pickRowOnly(t.position); }), 50); };
   const text = Object.keys(props).filter((k) => typeof props[k] === 'string' && k !== 'classification').slice(0, 3);
   const close = h('button', { class: 'btn icon ghost', 'aria-label': 'Close' }, icon('close', 14));
@@ -2218,7 +2219,7 @@ const objsUrl = (extra = {}) => {
 function openObjects(layerName) {
   const p = curPane(), sid = activeSlide();
   const ls = layersOf(p);
-  if (!sid || !ls.length) { toast({ title: 'No layer to list', sub: 'Add a cell table or annotations, draw, or run a detection first.' }); return; }
+  if (!sid || !ls.length) { toast({ title: 'No layer to list', sub: 'No objects · Add cell table or annotations, draw, or run detection.' }); return; }
   Object.assign(objs, { sid, layer: layerName || (ls.find((L) => L.name === objs.layer) || ls[0]).name, sort: 'index', desc: false, classes: null, where: {}, sel: null, pos: null });
   $('objs').hidden = false;
   $('main').classList.add('objs');
@@ -2453,10 +2454,10 @@ async function start() {
   if (SERVER) {
     document.querySelector('#empty h1').textContent = slides.length ? 'Pick a slide'
       : CAPS.open ? 'Open a slide from this server' : CAPS.connect ? 'Connect to a tile API' : 'No slides on this server';
-    document.querySelector('#side .hint').textContent = 'Click a slide to show it in the active pane; double-click to add a pane.'
+    document.querySelector('#side .hint').textContent = 'Click: show in active pane · Double-click: add pane'
       + (CAPS.open || CAPS.connect ? ' The list is shared by everyone using this server.' : '');
     log(`${slides.length} slide${slides.length === 1 ? '' : 's'} on this server · press ? for shortcuts`);
-  } else if (!(await nativeReady)) log('Browser window: paste paths to open files. Press ? for keyboard shortcuts.');
+  } else if (!(await nativeReady)) log('Browser window: paste paths to open files · ?: keyboard shortcuts');
   else log('Press ? for keyboard shortcuts');
 }
 start();

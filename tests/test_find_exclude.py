@@ -128,7 +128,7 @@ def test_matches_and_tiles_beside_the_result(session):  # noqa: F811
     big = [{'layer': 'cells', 'index': int(i)} for i in range(len(L))][:2]
     zero = findall.find_by_text(reg, sid, prompt='nucleus', scope={'kind': 'view', 'rect': RECT}, strictness=1.0,
                                 examples={'picks': big}, detector=_Phrases())  # fmt: skip
-    assert zero['count'] == 0 and 'similar to the examples' in zero['why']
+    assert zero['count'] == 0 and 'similar to examples' in zero['why']
 
 
 def test_sam3_words():

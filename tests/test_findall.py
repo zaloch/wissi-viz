@@ -230,7 +230,7 @@ def test_find_by_text(session, monkeypatch, masks):
     out2 = findall.find_by_text(reg, sid, prompt='nucleus', examples={'picks': picks},
                                 scope={'kind': 'view', 'rect': rect}, strictness=0.0, object_um=20, detector=det)  # fmt: skip
     assert out2['layer'] == 'Text · nucleus' and 0 < out2['count'] < out['count'] and 'examples' in out2['note']
-    with pytest.raises(ValueError, match='type what to find'):
+    with pytest.raises(ValueError, match='enter objects to find'):
         findall.find_by_text(reg, sid, prompt=' ,. ', detector=det)
 
 
@@ -320,7 +320,7 @@ def test_areas_from_two_classes(session):
         area[c] = area.get(c, 0) + shapely.Polygon(rs[0], rs[1:]).area
     total = sum(area.values())
     assert set(area) == {'Left', 'Right'} and 0.35 < area['Left'] / total < 0.65, area  # the two halves
-    with pytest.raises(ValueError, match='two'):
+    with pytest.raises(ValueError, match=r'2\+ classes'):
         T1 = AnnotationLayer(name='One')
         T1.add_rect(320, 400, 380, 400, cls='Left')
         reg.add_annotations(sid, T1)

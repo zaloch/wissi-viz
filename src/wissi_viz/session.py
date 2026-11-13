@@ -178,7 +178,7 @@ class Session:
         )
         for p in extras:
             if target is None:
-                errors.append(f'{p.name}: open a slide first, then add cells / annotations to it')
+                errors.append(f'{p.name}: open a slide first · Then add cells / annotations')
                 continue
             try:
                 name = self.add_layer(target, p)
@@ -322,7 +322,7 @@ class Session:
         label = getattr(conn, 'kind', None) or conn.id_prefix
         pairs = image_list(conn, images)
         if not pairs:
-            raise ValueError('the service lists no images: give image ids')
+            raise ValueError('service lists no images · Give image ids')
         errors = []
         if len(pairs) > MAX_CONNECT_IMAGES:
             errors.append(f'{label}: showing the first {MAX_CONNECT_IMAGES} of {len(pairs)} images')

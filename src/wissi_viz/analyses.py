@@ -368,18 +368,16 @@ def _coerce(spec: Spec, params: dict, ctx: Context) -> dict:
                 raise ValueError(f'{p.label}: between {p.min:g} and {p.max:g} {p.unit}'.strip())
         elif p.kind == 'column':
             if v not in ctx.objects.columns:
-                raise ValueError(f'{p.label}: choose a measurement column')
+                raise ValueError(f'{p.label}: select measurement column')
         elif p.kind == 'regions':
             L = ctx.registry.layer(ctx.slide, v) if v else None
             if L is None:
-                raise ValueError(
-                    'Select a region layer, or draw a region (Annotate tab) or add an annotation file first.'
-                )
+                raise ValueError('No region layer · Draw region (Annotate tab) or add annotation file.')
             want = params.get(f'{p.key}_class') or None  # one class of the region layer (e.g. the tumour)
             if want:
                 L = _class_only(L, want)
             if not spatial.roi_geometries(L):
-                raise ValueError(f'{v}{f" ({want})" if want else ""} has no regions (polygons): select a layer of '
+                raise ValueError(f'{v}{f" ({want})" if want else ""} has no regions (polygons) · Select layer of '
                                  'drawn or imported regions.')  # fmt: skip
             v = L
         out[p.key] = v

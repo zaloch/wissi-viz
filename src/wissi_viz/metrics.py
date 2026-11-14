@@ -447,7 +447,10 @@ def region_metrics(
     keys: dict[str, None] = {}
     for r in rows:
         keys.update(dict.fromkeys(r))
-    return _df({k: [r.get(k, np.nan) for r in rows] for k in keys})
+    df = _df({k: [r.get(k, np.nan) for r in rows] for k in keys})
+    measures = list(objects.columns) if objects is not None else []
+    df.attrs['labels'] = [region_column_info(k, classes, measures) for k in keys]  # how the Measure tab shows them
+    return df
 
 
 def object_metrics(
@@ -531,6 +534,109 @@ def column_info(name: str) -> dict:
         if name.endswith(suf):
             return {'name': name, 'label': name[: -len(suf)].replace('_', ' '), 'unit': unit}
     return {'name': name, 'label': name.replace('_', ' '), 'unit': ''}
+
+
+#: region measurements: section and label of each column, as shown in the Measure tab
+SECTIONS = ('Region', 'Shape', 'Stain and intensity', 'Texture', 'Cells', 'Cell types', 'Diversity', 'Spatial',
+            'Distances and contacts', 'Cell measurements')  # fmt: skip
+_SHAPE = {
+    'area': 'Area', 'perimeter': 'Perimeter', 'circularity': 'Circularity (1 = circle)', 'solidity': 'Solidity (1 = no dents)',
+    'convexity': 'Convexity', 'extent': 'Extent (area ÷ box)', 'major_axis': 'Major axis', 'minor_axis': 'Minor axis',
+    'eccentricity': 'Eccentricity (0 = circle)', 'orientation': 'Orientation', 'min_feret': 'Shortest diameter',
+    'max_feret': 'Longest diameter', 'aspect_ratio': 'Aspect ratio', 'holes': 'Holes', 'hole_area': 'Hole area',
+    'centroid_x': 'Centre x', 'centroid_y': 'Centre y',
+}  # fmt: skip
+_STATS = {'mean': 'mean', 'sd': 'SD', 'median': 'median', 'p10': '10th percentile', 'p90': '90th percentile',
+          'integrated': 'integrated', 'pos_frac': 'positive fraction'}  # fmt: skip
+_CHANNELS = {'R': 'Red', 'G': 'Green', 'B': 'Blue', 'hematoxylin_od': 'Hematoxylin OD', 'eosin_od': 'Eosin OD',
+             'dab_od': 'DAB OD'}  # fmt: skip
+_TEXTURE = {'contrast': 'Contrast', 'dissimilarity': 'Dissimilarity', 'homogeneity': 'Homogeneity', 'energy': 'Energy',
+            'correlation': 'Correlation', 'ASM': 'Angular second moment', 'entropy': 'Entropy'}  # fmt: skip
+_DIVERSITY = {'shannon': 'Shannon diversity', 'simpson': 'Simpson diversity', 'richness': 'Cell types present',
+              'evenness': 'Evenness (1 = equal shares)'}  # fmt: skip
+
+
+def _split_unit(rest: str) -> tuple[str, str]:
+    for suf, unit in _UNITS:
+        if rest.endswith(suf):
+            return rest[: -len(suf)], unit
+        if f'{suf}_' in rest:  # a unit before a class: density_mm2_Tumor
+            a, b = rest.split(f'{suf}_', 1)
+            return f'{a}_{b}', unit
+    return rest, ''
+
+
+def region_column_info(name: str, classes: Sequence[str] = (), measures: Sequence[str] = ()) -> dict:
+    """Section, label and unit of a region measurement column (:func:`region_metrics`): ``obj_density_mm2_CD8_T_cell``
+    → {'section': 'Cell types', 'label': 'CD8 T cell per mm²', 'unit': '/mm²'}. ``classes`` and ``measures`` (the
+    cells' classes and measurement columns) let their names read as written."""
+    names = {_slug(c): str(c) for c in classes}
+    cols = {_slug(c): str(c) for c in measures}
+    cls = lambda k: names.get(k, k.replace('_', ' '))
+    out = {'name': name, 'section': 'Region', 'label': name.replace('_', ' '), 'unit': ''}
+    if name in ('region', 'index', 'type'):
+        out['label'] = {'region': 'Region', 'index': 'Index', 'type': 'Geometry'}[name]
+        return out
+    if name == 'analysis_mpp':
+        return {**out, 'label': 'Analysed at', 'unit': 'µm/px'}
+    if name.startswith('shape_'):
+        base, unit = _split_unit(name[6:])
+        return {**out, 'section': 'Shape', 'label': _SHAPE.get(base, base.replace('_', ' ')), 'unit': unit}
+    if name.startswith('int_'):
+        rest = name[4:]
+        if rest == 'tissue_frac':
+            return {**out, 'section': 'Stain and intensity', 'label': 'Tissue fraction'}
+        for st in sorted(_STATS, key=len, reverse=True):
+            if rest.endswith(f'_{st}'):
+                ch = rest[: -len(st) - 1]
+                return {
+                    **out,
+                    'section': 'Stain and intensity',
+                    'label': f'{_CHANNELS.get(ch, ch.replace("_", " "))}, {_STATS[st]}',
+                }
+        return {**out, 'section': 'Stain and intensity', 'label': rest.replace('_', ' ')}
+    if name.startswith('tex_'):
+        return {**out, 'section': 'Texture', 'label': _TEXTURE.get(name[4:], name[4:].replace('_', ' '))}
+    if not name.startswith('obj_'):
+        return out
+    rest = name[4:]
+    if rest == 'count':
+        return {**out, 'section': 'Cells', 'label': 'Cells'}
+    if rest == 'density_mm2':
+        return {**out, 'section': 'Cells', 'label': 'Cells per mm²', 'unit': '/mm²'}
+    for pre, label, unit in (('n_', '{} count', ''), ('pct_', '{} share', '%'), ('density_mm2_', '{} per mm²', '/mm²')):
+        if rest.startswith(pre):
+            return {**out, 'section': 'Cell types', 'label': label.format(cls(rest[len(pre) :])), 'unit': unit}
+    if rest in _DIVERSITY:
+        return {**out, 'section': 'Diversity', 'label': _DIVERSITY[rest]}
+    for pre, sep, label, unit in (('dist_mean_um_', '_to_', '{} → nearest {}', 'µm'),
+                                  ('contact_frac_', '_with_', '{} touching {}', 'fraction')):  # fmt: skip
+        if rest.startswith(pre):
+            pair = rest[len(pre) :]
+            ab = next(((x, y) for x in names for y in names if pair == f'{x}{sep}{y}'), None)
+            if ab is None and sep in pair:  # classes not given: split at the first separator
+                ab = tuple(pair.split(sep, 1))
+            lab = label.format(cls(ab[0]), cls(ab[1])) if ab else pair.replace('_', ' ')
+            return {**out, 'section': 'Distances and contacts', 'label': lab, 'unit': unit}
+    spatial = {'nn_mean_um': 'Nearest neighbour, mean', 'nn_median_um': 'Nearest neighbour, median',
+               'clark_evans': 'Clark–Evans R (1 = random, < 1 clustered)', 'morisita': 'Morisita index (1 = random)',
+               'depth_mean_um': 'Depth inside region, mean'}  # fmt: skip
+    if rest in spatial:
+        return {**out, 'section': 'Spatial', 'label': spatial[rest], 'unit': 'µm' if rest.endswith('_um') else ''}
+    m = re.fullmatch(r'ripley_L_minus_r_(\d+)um', rest)
+    if m:
+        return {**out, 'section': 'Spatial', 'label': f'Ripley L − r at {m[1]} µm (> 0 clustered)', 'unit': 'µm'}
+    for pre, label in (
+        ('nn_mean_um_', '{}: nearest neighbour, mean'),
+        ('depth_mean_um_', '{}: depth inside region, mean'),
+    ):
+        if rest.startswith(pre):
+            return {**out, 'section': 'Spatial', 'label': label.format(cls(rest[len(pre) :])), 'unit': 'µm'}
+    for pre, stat in (('mean_', 'mean'), ('median_', 'median')):
+        if rest.startswith(pre):
+            k = rest[len(pre) :]
+            return {**out, 'section': 'Cell measurements', 'label': f'{cols.get(k, k.replace("_", " "))}, {stat}'}
+    return {**out, 'section': 'Cells', 'label': rest.replace('_', ' ')}
 
 
 def object_page(

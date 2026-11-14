@@ -471,7 +471,10 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
             [None if isinstance(v, float) and not math.isfinite(v) else _jsonable(v) for v in r]
             for r in df.itertuples(index=False, name=None)
         ]
-        return JSONResponse({'columns': list(df.columns), 'rows': rows}, headers=hdrs('no-cache'))
+        out = {'columns': list(df.columns), 'rows': rows}
+        if df.attrs.get('labels'):  # section, label and unit per column
+            out['labels'] = df.attrs['labels']
+        return JSONResponse(out, headers=hdrs('no-cache'))
 
     @r.get('/slides/{sid}/annotations/metrics')
     def ann_metrics(

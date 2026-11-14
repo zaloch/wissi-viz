@@ -1712,18 +1712,21 @@ function refreshDrawLists() {
   const classes = new Set(ls.flatMap((L) => (L.meta.classes || []).map((c) => c.name)));
   $('a-classes').replaceChildren(...[...classes].filter(Boolean).map((n) => h('option', { value: n })));
   const keep = (sel, extra) => { const v = sel.value; sel.replaceChildren(...extra, ...names.map((n) => h('option', { value: n }, n))); if ([...sel.options].some((o) => o.value === v)) sel.value = v; };
-  const regionsWas = $('m-regions').value;
-  keep($('m-regions'), []);
-  if (!regionsWas) {   // regions: the smallest layer that is not an analysis result (drawn ROIs, annotation files)
-    const small = ls.filter((L) => L.meta.style?.origin !== 'analysis').sort((a, b) => (a.meta.count ?? 0) - (b.meta.count ?? 0))[0];
-    if (small) $('m-regions').value = small.name;
-  }
-  keep($('m-objects'), [h('option', { value: '' }, '(none)')]);
-  if (!$('m-objects').value) {
-    const big = ls.filter((L) => (L.meta.count ?? 0) > 500).map((L) => L.name)[0];
-    if (big) $('m-objects').value = big;
-  }
+  // regions: layers of regions (polygons) only; cells: the layer with the most cell types, not the regions themselves
+  const regs = regionLayers(p), mr = $('m-regions'), was = mr.value;
+  mr.replaceChildren(...(regs.length ? regs.map((L) => h('option', { value: L.name }, `${L.name} (${(L.meta.polygons ?? L.meta.count ?? 0).toLocaleString('en-US')})`))
+    : [h('option', { value: '' }, 'No region layer')]));
+  if (regs.some((L) => L.name === was)) mr.value = was;
+  else if (regs.length) mr.value = [...regs].sort((a, b) => (a.meta.polygons ?? a.meta.count ?? 0) - (b.meta.polygons ?? b.meta.count ?? 0))[0].name;
+  const cells = cellLayers(p).filter((L) => L.name !== mr.value), mo = $('m-objects'), owas = mo.value;
+  mo.replaceChildren(h('option', { value: '' }, 'none: regions only'), ...cells.map((L) => h('option', { value: L.name }, L.name)));
+  if (cells.some((L) => L.name === owas)) mo.value = owas;
+  else if (!mo.dataset.chosen && cells.length) mo.value = bestCells(cells).name;
+  $('m-run').disabled = !regs.length;
+  $('m-run').title = regs.length ? 'Measure each region' : 'Requires region layer · Draw region (Annotate tab) or add annotation file';
 }
+$('m-objects').addEventListener('change', () => { $('m-objects').dataset.chosen = '1'; });
+$('m-regions').addEventListener('change', () => refreshDrawLists());
 
 $('m-run').onclick = async () => {
   const sid = activeSlide(), layer = $('m-regions').value;
@@ -1744,17 +1747,68 @@ $('m-run').onclick = async () => {
   } catch (err) { log(`measure: ${err.message || err}`, true); }
   $('m-run').disabled = false;
 };
-function renderMetricsTable(j) {
-  // regions as columns, measurements as rows: hundreds of variables stay readable in a narrow panel
+// region measurements: regions as columns, measurements as rows in sections (folded: their state is remembered)
+const MT_OPEN_KEY = 'wissi-measure-open';
+const mtOpen = new Set((() => { try { return JSON.parse(lsGet(MT_OPEN_KEY, 'null')) || ['Shape', 'Cells', 'Cell types']; } catch (e) { return ['Shape', 'Cells', 'Cell types']; } })());
+let mtLast = null;
+function sectionOf(c) {   // without labels from the server
+  const pre = c.split('_')[0];
+  return { name: c, section: { shape: 'Shape', int: 'Stain and intensity', tex: 'Texture', obj: 'Cells' }[pre] || 'Region', label: c.replace(/_/g, ' '), unit: '' };
+}
+function renderMetricsTable(j = mtLast) {
+  if (!j) return;
+  mtLast = j;
   const ri = j.columns.indexOf('region');
-  const t = h('table', {}, h('tr', {}, h('th', {}, 'measurement'), ...j.rows.map((r) => h('th', { style: 'position: static' }, r[ri]))));
+  const info = j.labels || j.columns.map(sectionOf);
+  const q = ($('m-find').value || '').trim().toLowerCase();
+  const t = h('table', {}, h('thead', {}, h('tr', {}, h('th', { class: 'corner' }, 'Measurement'), ...j.rows.map((r) => h('th', { class: 'reg', title: r[ri] }, String(r[ri] ?? '').split(' · ')[0])))));   // the name (its class: in the tooltip)
+  const secs = new Map();
   j.columns.forEach((c, i) => {
-    if (c === 'region' || c === 'index') return;
-    t.append(h('tr', {}, h('th', {}, c), ...j.rows.map((r) => h('td', {}, typeof r[i] === 'number' ? fmt(r[i], 4) : r[i] ?? '–'))));
+    const m = info[i] || sectionOf(c);
+    if (c === 'region' || c === 'index' || c === 'type') return;
+    if (q && !`${m.label} ${m.section} ${c}`.toLowerCase().includes(q)) return;
+    if (!secs.has(m.section)) secs.set(m.section, []);
+    secs.get(m.section).push([m, i]);
   });
+  for (const [sec, items] of secs) {
+    const open = q || mtOpen.has(sec);
+    const head = h('tr', { class: 'sec' }, h('th', { colspan: j.rows.length + 1 },
+      h('button', { 'aria-expanded': String(!!open), title: open ? 'Collapse' : 'Expand' }, `${open ? '▾' : '▸'} ${sec}`, h('span', { class: 'dim' }, ` ${items.length}`))));
+    head.querySelector('button').onclick = () => { mtOpen.has(sec) ? mtOpen.delete(sec) : mtOpen.add(sec); lsSet(MT_OPEN_KEY, JSON.stringify([...mtOpen])); renderMetricsTable(); };
+    t.append(head);
+    if (!open) continue;
+    for (const [m, i] of items) {
+      t.append(h('tr', {}, h('th', { title: m.name }, m.label, m.unit ? h('span', { class: 'u' }, ` ${m.unit}`) : null),
+        ...j.rows.map((r) => h('td', {}, typeof r[i] === 'number' ? fmt(r[i], 4) : r[i] ?? '–'))));
+    }
+  }
+  if (!secs.size) t.append(h('tr', {}, h('td', { colspan: j.rows.length + 1, style: 'text-align: left' }, `No measurement matches “${q}”.`)));
   $('mtable').replaceChildren(t);
   $('mtable').style.display = 'block';
+  $('m-find').hidden = false;
 }
+$('m-find').oninput = () => renderMetricsTable();
+
+// the inspector's width: drag its left edge (wide tables, charts); remembered; double-click: default
+(() => {
+  const insp = $('insp'), grip = $('insp-grip');
+  const setW = (w) => { if (w) insp.style.width = `${Math.round(Math.max(300, Math.min(window.innerWidth * 0.6, w)))}px`; else insp.style.removeProperty('width'); };
+  setW(+lsGet('wissi-insp-w', '0') || 0);
+  grip.onpointerdown = (e) => {
+    e.preventDefault();
+    grip.setPointerCapture(e.pointerId); grip.classList.add('drag');
+    const x0 = e.clientX, w0 = insp.getBoundingClientRect().width;
+    grip.onpointermove = (ev) => setW(w0 + (x0 - ev.clientX));
+    grip.onpointerup = () => { grip.onpointermove = grip.onpointerup = null; grip.classList.remove('drag'); lsSet('wissi-insp-w', String(Math.round(insp.getBoundingClientRect().width))); };
+  };
+  grip.ondblclick = () => { setW(0); lsSet('wissi-insp-w', '0'); };
+  grip.onkeydown = (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault(); e.stopPropagation();
+    setW(insp.getBoundingClientRect().width + (e.key === 'ArrowLeft' ? 40 : -40));
+    lsSet('wissi-insp-w', String(Math.round(insp.getBoundingClientRect().width)));
+  };
+})();
 
 // ------------------------------------------------------------------------------------------------ Annotate tab
 // ① examples: outlines drawn or made with SAM (saved to the layer + class above) and objects picked on the slide;
@@ -1855,7 +1909,16 @@ function renderPicks() {
 // ---- find all
 let findMode = 'objects', findCaps = null, findJob = null;
 const CELL_MODELS = { cellpose: 'Cellpose-SAM', classic: 'The classic stain threshold', classpose: 'Classpose' };
-for (const b of $('f-modes').children) b.onclick = () => { findMode = b.dataset.mode; renderDraw(); };
+// "Cells" and "By text" are one search (a model finds the objects): the button picks the model group
+const firstUsable = (vals) => vals.find((v) => { const o = $('f-model').querySelector(`option[value="${v}"]`); return o && !o.disabled; }) || vals[vals.length - 1];
+for (const b of $('f-modes').children) b.onclick = () => {
+  const m = b.dataset.mode;
+  findMode = m === 'cells' ? 'text' : m;
+  const cellModel = $('f-model').value in CELL_MODELS;
+  if (m === 'cells' && !cellModel) $('f-model').value = firstUsable(['cellpose', 'classic']);
+  if (m === 'text' && cellModel) $('f-model').value = firstUsable(['grounding', 'sam3']);
+  renderDraw();
+};
 $('f-strict').oninput = () => { $('f-strict-o').textContent = (+$('f-strict').value).toFixed(2); };
 const CONCEPT_STOP = new Set(['and', 'or', 'with', 'without', 'the', 'a', 'an', 'of', 'in', 'on', 'not', 'stained', 'unstained', 'positive', 'negative', 'visible', 'small', 'large', 'big']);
 const CONCEPT_CUT = new Set(['on', 'in', 'with', 'without', 'near', 'under', 'over', 'at', 'inside', 'around', 'between', 'within', 'from', 'that', 'which', 'who', 'where', 'having', 'showing', 'containing']);
@@ -1927,8 +1990,9 @@ async function renderDraw() {
   renderPicks();
   const p = curPane(), sid = activeSlide();
   const caps = await ensureFindCaps();
+  const shownMode = findMode === 'text' ? ($('f-model').value in CELL_MODELS ? 'cells' : 'text') : findMode;
   for (const b of $('f-modes').children) {
-    b.setAttribute('aria-pressed', String(b.dataset.mode === findMode));
+    b.setAttribute('aria-pressed', String(b.dataset.mode === shownMode));
     b.disabled = !!caps.error || (b.dataset.mode === 'areas' && caps.areas === false);
     if (b.dataset.mode === 'areas' && caps.areas === false) b.title = 'Needs scikit-learn: pip install "wissi-viz[analysis]"';
   }
@@ -1953,8 +2017,13 @@ async function renderDraw() {
     const c = cellCaps[o.value];
     if (c) { o.disabled = !c.available; o.title = c.why || ''; o.textContent = o.textContent.replace(/ · not installed$/, '') + (c.available ? '' : ' · not installed'); }
   }
-  if ($('f-model').selectedOptions[0]?.disabled) $('f-model').value = 'grounding';
+  if ($('f-model').selectedOptions[0]?.disabled) $('f-model').value = $('f-model').value in CELL_MODELS ? 'classic' : 'grounding';
   const model = $('f-model').value, cellModel = model in CELL_MODELS;
+  for (const g of $('f-model').querySelectorAll('optgroup')) {   // the group of the button pressed: text prompts or cell models
+    const cellsGroup = [...g.children].some((o) => o.value in CELL_MODELS);
+    g.hidden = cellsGroup !== cellModel;
+    for (const o of g.children) o.hidden = g.hidden;
+  }
   $('f-size-row').hidden = findMode !== 'segment' && (findMode !== 'text' || cellModel);
   $('f-model-row').hidden = findMode !== 'text';
   $('f-text-row').hidden = $('f-expand-row').hidden = $('f-excl-row').hidden = findMode !== 'text' || cellModel;

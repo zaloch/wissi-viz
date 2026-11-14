@@ -655,7 +655,11 @@ def _brightfield(w, data, s):
     pg.fill('#f-size-max', '')
     pg.fill('#f-exclude', '')
     pg.dispatch_event('#f-exclude', 'input')
-    # a cell model: no prompt, a detected cell layer
+    # Cells: a cell model, no prompt, a detected cell layer; text-prompt models are not offered there
+    w.check('#f-modes [data-mode=cells]', '() => document.getElementById("f-model").value in {cellpose: 1, classic: 1}')
+    assert pg.locator('#f-model option[value=grounding]').is_hidden() or pg.evaluate(
+        '() => document.querySelector("#f-model option[value=grounding]").hidden'
+    )
     pg.select_option('#f-model', 'classic')
     pg.wait_for_function(
         '() => document.getElementById("f-text-row").hidden && document.getElementById("f-run").textContent === "Find cells"'
@@ -665,7 +669,8 @@ def _brightfield(w, data, s):
     n_before = pg.locator('#f-results .result').count()
     w.check('#f-run', f'() => document.querySelectorAll("#f-results .result").length > {n_before}', timeout=60000)
     assert pg.locator('#f-results .result >> nth=0').get_attribute('data-layer').startswith('Cells · classic')
-    pg.select_option('#f-model', 'grounding')
+    pg.click('#f-modes [data-mode=text]')
+    pg.wait_for_function('() => document.getElementById("f-model").value === "grounding"')
     w.check('#f-modes [data-mode=objects]', '() => !document.getElementById("f-cand-row").hidden')
     w.check('#a-pick', '() => document.body.classList.contains("picking")')
     for k in (5, 6, 7):

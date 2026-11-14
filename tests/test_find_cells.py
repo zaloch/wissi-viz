@@ -1,4 +1,4 @@
-"""Find all → By text → a cell model: every nucleus of a view, a region or the slide as a detected cell layer, on any
+"""Find all → Cells (a cell model): every nucleus of a view, a region or the slide as a detected cell layer, on any
 slide source (files and tile APIs alike); SAM 3 reports whether its download is published."""
 
 from __future__ import annotations

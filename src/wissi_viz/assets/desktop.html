@@ -166,6 +166,9 @@
   /* ---- inspector */
   #insp { width: 384px; border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
   #insp.hidden { display: none; }
+  #insp { position: relative; }
+  #insp-grip { position: absolute; left: -3px; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 4; }
+  #insp-grip:hover, #insp-grip.drag, #insp-grip:focus-visible { background: color-mix(in srgb, var(--accent) 45%, transparent); outline: none; }
   #tabs { display: flex; gap: 4px; padding: 10px; border-bottom: 1px solid var(--line); }
   #tabs { gap: 2px; padding: 8px; }
   #tabs button { flex: 1; display: flex; align-items: center; justify-content: center; gap: 4px; border-radius: 8px; padding: 7px 2px; font-size: 12px;
@@ -261,7 +264,17 @@
   table.ct td { font-family: var(--mono); }
   table.ct td:first-child { font-family: inherit; }
   .tablebox { max-height: 260px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
-  #mtable { max-height: 340px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; display: none; }
+  #mtable { max-height: 460px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; display: none; }
+  #mtable thead th { position: sticky; top: 0; z-index: 2; background: var(--panel); }
+  #mtable thead th.corner { left: 0; z-index: 3; }
+  #mtable th.reg { text-align: right; max-width: 84px; overflow: hidden; text-overflow: ellipsis; color: var(--text); font-family: Inter, system-ui, sans-serif; }
+  #mtable tr.sec th { position: sticky; left: 0; padding: 0; background: var(--raise); }
+  #mtable tr.sec button { all: unset; cursor: pointer; display: block; width: 100%; padding: 4px 6px; font: 600 11.5px Inter, system-ui, sans-serif; color: var(--soft); }
+  #mtable tr.sec button:focus-visible { outline: 2px solid var(--accent); }
+  #mtable th .u { color: var(--dim); opacity: .8; }
+  #mtable tr:not(.sec) > th { white-space: normal; min-width: 130px; max-width: 170px; font: 11.5px Inter, system-ui, sans-serif; color: var(--soft); }
+  #mtable td { padding: 3px 5px; }
+  #m-find { margin-top: 2px; }
   #mtable table { border-collapse: collapse; font: 11px var(--mono); }
   #mtable th, #mtable td { padding: 3px 6px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
   #mtable th { position: sticky; left: 0; background: var(--panel); text-align: left; color: var(--dim); font-weight: 500; }
@@ -381,6 +394,7 @@
   .mode span { font-size: 10.5px; color: var(--dim); line-height: 1.3; }
   .mode[aria-pressed=true] { border-color: var(--amber); background: var(--amber-deep); box-shadow: 0 0 14px rgba(255,180,84,.2); }
   .mode:disabled { opacity: .45; cursor: default; }
+  .mode.wide { grid-column: 1 / -1; }
   .run.find { background-color: var(--amber-deep); border-color: var(--amber); box-shadow: 0 0 18px rgba(255,180,84,.25); }
   .prog { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
   .prog > span { display: block; height: 100%; background: var(--amber); width: 0; transition: width 200ms ease-out; }
@@ -574,6 +588,7 @@
 </main>
 
 <aside id="insp" aria-label="Inspector">
+  <div id="insp-grip" role="separator" aria-orientation="vertical" aria-label="Inspector width" tabindex="0" title="Drag: inspector width · Double-click: default"></div>
   <div id="tabs" role="tablist">
     <button role="tab" id="t-layers" data-tab="layers" aria-selected="true" title="Layers (L)">Layers <span class="kc">L</span></button>
     <button role="tab" id="t-image" data-tab="image" aria-selected="false" title="Image display: histograms, channels, contrast (I)">Image <span class="kc">I</span></button>
@@ -621,9 +636,9 @@
     <div class="row"><label><input type="checkbox" id="m-int" checked> intensity</label>
       <label><input type="checkbox" id="m-tex" checked> texture</label><span class="grow"></span>
       <a id="m-csv" href="#" hidden style="color: var(--accent)">CSV</a><button id="m-run" class="btn primary">Measure</button></div>
+    <input id="m-find" type="search" placeholder="Filter measurements (e.g. CD8, area)" aria-label="Filter measurements" hidden>
     <div id="mtable"></div>
-    <div class="panel-note">Shape, stain / channel intensity, texture; with cells: counts, density, composition, diversity,
-      neighbour distances, contacts and clustering — one column per region.</div>
+    <div class="panel-note">Per region: shape, stain and intensity, texture · With cells: counts, density, cell types, diversity, distances, contacts, clustering.</div>
   </section>
 
   <section id="p-image" class="pane-body" role="tabpanel" aria-labelledby="t-image">
@@ -660,8 +675,7 @@
         <button id="a-discard" class="btn" title="Discard the SAM mask (Esc)">Discard <span class="kc">Esc</span></button></div>
       <div class="ex-chips" id="ex-picks"></div>
       <div class="panel-note" id="a-sam-status">SAM: checking…</div>
-      <div class="panel-note">Outline a few examples with SAM (click an object, check the cyan outline, Accept) or the drawing
-        tools (2–7), or pick existing objects. They are saved to the layer and class above.</div>
+      <div class="panel-note">Outline examples: SAM (click object · check cyan outline · Accept), drawing tools (2–7) or Pick objects · Saves to layer and class above.</div>
     </div>
     <div class="step find" id="st-find">
       <div class="sh"><span class="num">2</span><b id="f-head">Find all like them</b></div>
@@ -669,7 +683,8 @@
         <button class="mode" data-mode="objects" aria-pressed="true" title="Score all objects of layer (e.g. detected cells) against examples"><b>Similar objects</b><span>in a layer of detected cells</span></button>
         <button class="mode" data-mode="segment" aria-pressed="false" title="SAM (or classic fill) outlines all objects · Keeps those like examples"><b>Segment everything</b><span>outlines every object, keeps similar ones</span></button>
         <button class="mode" data-mode="areas" aria-pressed="false" title="Train pixel classifier on shapes of 2+ classes · Map those areas"><b>Areas</b><span>two or more classes, from brushed shapes</span></button>
-        <button class="mode" data-mode="text" aria-pressed="false" title="Describe objects (nucleus, gland…): detector locates, SAM outlines · Or select cell model (Cellpose-SAM, classic, Classpose): outlines all nuclei"><b>By text</b><span>nucleus, gland… or a cell model</span></button>
+        <button class="mode" data-mode="text" aria-pressed="false" title="Describe objects (gland, vessel…): detector locates, SAM outlines"><b>By text</b><span>gland, vessel… (text prompt)</span></button>
+        <button class="mode wide" data-mode="cells" aria-pressed="false" title="Outline all nuclei: Cellpose-SAM, stain threshold or Classpose · Result: cell layer for Analyze"><b>Cells</b><span>every nucleus: Cellpose-SAM or stain threshold · result: cell layer</span></button>
       </div>
       <div class="f2" id="f-model-row" hidden>Model <select id="f-model" aria-label="Model">
         <optgroup label="Name it (text prompt)">

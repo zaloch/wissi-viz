@@ -22,6 +22,7 @@ import hashlib
 import json
 import logging
 import re
+import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -650,13 +651,16 @@ def _read_delimited(p: Path, engine: str = 'auto'):
         try:
             import polars as pl
 
+            # Windows: the file's bytes, not the file (Polars memory-maps a path; on Windows runners that crashed with
+            # an access violation now and then, never elsewhere)
+            src = p.read_bytes() if sys.platform == 'win32' else p
             # QuPath writes 'NaN' into otherwise-integer columns: read those as missing (→ NaN in numpy); if a type
             # guessed from the first rows still fails later in the file, rescan the whole file; else use pyarrow
             try:  # fast path: types from the first 10k rows, strict UTF-8
-                df = pl.read_csv(p, separator=delim, infer_schema_length=10000)
+                df = pl.read_csv(src, separator=delim, infer_schema_length=10000)
             except Exception:  # noqa: BLE001  ('NaN' in an int column, a late string, Latin-1 bytes …)
                 df = pl.read_csv(
-                    p,
+                    src,
                     separator=delim,
                     infer_schema_length=None,
                     null_values=['NaN', 'nan', 'NA', ''],

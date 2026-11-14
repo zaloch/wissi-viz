@@ -154,3 +154,16 @@ def test_from_table_numeric_columns_kept_columnar():
     t = from_table(cols)
     L = t.to_layer(color_by='CD3', cmap='viridis')
     assert L.properties(3)['CD3'] == 30 and L.colormap['label'] == 'CD3'
+
+
+def test_tables_read_from_bytes_on_windows(tmp_path, monkeypatch):
+    """On Windows the reader gives Polars the file's bytes (a memory-mapped path crashed there now and then)."""
+    pytest.importorskip('polars')
+    from wissi_viz import objects
+
+    p = tmp_path / 'cells.csv'
+    p.write_text('x,y,class,area\n10,20,Tumor,30.5\n40,50,Immune,NaN\n', encoding='utf-8')
+    here = objects._read_delimited(p, 'polars')
+    monkeypatch.setattr(objects.sys, 'platform', 'win32')
+    there = objects._read_delimited(p, 'polars')
+    assert here.columns == there.columns and here['class'].to_list() == there['class'].to_list() == ['Tumor', 'Immune']

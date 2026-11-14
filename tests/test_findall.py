@@ -479,3 +479,19 @@ def test_browse_places_and_sizes(session, data):
     r = s.browse(str(data))
     assert any(e['name'] == 'slide.svs' and e['size'] > 0 for e in r['entries'])
     assert r['places'][0]['name'] == 'Home'
+
+
+def test_search_inside_one_class_of_a_region_layer(session):
+    """Where: inside one class of a region layer (e.g. only the tumour of a layer of ROIs)."""
+    from wissi_viz import findall
+    from wissi_viz.annotations import AnnotationLayer
+
+    s, sid = session
+    L = AnnotationLayer(name='ROIs')
+    L.add_rect(100, 100, 400, 400, cls='Tumor')
+    L.add_rect(600, 600, 900, 900, cls='Stroma')
+    s.registry.add_annotations(sid, L)
+    g, where = findall._scope_geometry(s.registry, sid, {'kind': 'region', 'layer': 'ROIs', 'class': 'Tumor'})
+    assert g.bounds == (100, 100, 500, 500) and where == 'Tumor (ROIs)'  # x, y, width, height
+    with pytest.raises(ValueError, match='no Fat regions'):
+        findall._scope_geometry(s.registry, sid, {'kind': 'region', 'layer': 'ROIs', 'class': 'Fat'})

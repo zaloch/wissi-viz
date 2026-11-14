@@ -92,6 +92,38 @@ def test_object_metrics_inside_regions(slide):
     assert 0 < a['obj_depth_mean_um'] < 250
 
 
+def test_region_measurements_read_as_written(slide):
+    """Each region measurement has a section, a label and a unit for the Measure tab; class names and the cells'
+    own measurement names read as they were written."""
+    from wissi_viz.metrics import SECTIONS, region_column_info
+
+    objs = _grid_objects()
+    L = AnnotationLayer(name='rois')
+    L.add_rect(200, 200, 1000, 1000, cls='All')
+    t = region_metrics(L, objects=objs, intensity=False)
+    labels = {x['name']: x for x in t.attrs['labels']}
+    assert list(labels) == list(t.columns) and {x['section'] for x in labels.values()} <= set(SECTIONS)
+    assert labels['shape_area_um2'] | {} == {
+        'name': 'shape_area_um2',
+        'section': 'Shape',
+        'label': 'Area',
+        'unit': 'µm²',
+    }
+    assert (
+        labels['obj_density_mm2_Tumor']['label'] == 'Tumor per mm²'
+        and labels['obj_density_mm2_Tumor']['unit'] == '/mm²'
+    )
+    assert labels['obj_dist_mean_um_Tumor_to_Immune']['label'] == 'Tumor → nearest Immune'
+    assert labels['obj_mean_marker']['label'] == 'marker, mean'
+    cd8 = region_column_info('obj_contact_frac_CD8_T_cell_with_B_cell', ['CD8 T cell', 'B cell'])
+    assert cd8['label'] == 'CD8 T cell touching B cell' and cd8['section'] == 'Distances and contacts'
+    assert (
+        region_column_info('obj_mean_Nucleus_Area_m_2', measures=['Nucleus: Area µm^2'])['label']
+        == 'Nucleus: Area µm^2, mean'
+    )
+    assert region_column_info('int_hematoxylin_od_p90')['label'] == 'Hematoxylin OD, 90th percentile'
+
+
 def test_clustered_points_score_as_clustered():
     rng = np.random.default_rng(0)
     centres = rng.uniform(300, 1700, (20, 2))

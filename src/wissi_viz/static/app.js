@@ -1367,7 +1367,12 @@ async function ensureCatalog() {
   if (catalog || catalogError) return;
   try { catalog = await api('/analyses'); } catch (e) { catalogError = e.message; }
 }
-function cellLayers(p) { return layersOf(p).filter((L) => L.meta.style?.origin !== 'analysis' && (L.meta.count ?? 0) >= 3); }
+// layers of cells: not analysis results, and not a few drawn or imported regions (all polygons, under 200)
+function cellLayers(p) {
+  return layersOf(p).filter((L) => L.meta.style?.origin !== 'analysis' && (L.meta.count ?? 0) >= 3
+    && !((L.meta.polygons ?? 0) === L.meta.count && L.meta.count < 200 && groupOf(L) !== 'detected'));
+}
+let lastCells = null;   // the cell layer found last: Analyze and Measure take it until another is chosen
 // layers with regions (polygons): drawn ROIs, imported annotations, found areas — not cell tables of points
 function regionLayers(p, except) { return layersOf(p).filter((L) => L.name !== except && L.meta.style?.origin !== 'analysis' && (L.meta.polygons ?? 1) > 0 && (L.meta.polygons ?? 1) <= 5000); }
 // the default cell layer: the one with the most classes (the cell types an analysis compares), then the most cells
@@ -1380,7 +1385,8 @@ async function renderAnalyze() {
   const cells = cellLayers(p);
   const keep = objSel.value;
   objSel.replaceChildren(...cells.map((L) => h('option', { value: L.name }, `${L.name} · ${(L.meta.count ?? 0).toLocaleString('en-US')}`)));
-  if (cells.some((L) => L.name === keep)) objSel.value = keep;
+  if (lastCells && cells.some((L) => L.name === lastCells.name) && lastCells.fresh.analyze) { objSel.value = lastCells.name; lastCells.fresh.analyze = false; }
+  else if (cells.some((L) => L.name === keep)) objSel.value = keep;
   else if (cells.length) objSel.value = bestCells(cells).name;
   const ws = $('an-within'), keepW = ws.value;
   const regs = regionLayers(p, objSel.value).filter((R) => (R.meta.count ?? 0) > 0);
@@ -1588,6 +1594,19 @@ function downloadCsv(t, name) {
   return saveBlob(new Blob([text], { type: 'text/csv' }), name);
 }
 
+// a measurement column as read: "hematoxylin_mean" → "Hematoxylin, mean", "area_um2" → "Area µm²"
+const UNIT_SUFFIX = [['_um2', ' µm²'], ['_mm2', ' mm²'], ['_um', ' µm'], ['_px', ' px'], ['_deg', ' °']];
+const STAT_SUFFIX = { mean: 'mean', sd: 'SD', median: 'median', max: 'max', min: 'min', p10: '10th percentile', p90: '90th percentile', sum: 'sum' };
+function propLabel(k) {
+  let t = String(k), unit = '';
+  for (const [suf, u] of UNIT_SUFFIX) if (t.endsWith(suf)) { t = t.slice(0, -suf.length); unit = u; break; }
+  const m = t.match(/^(.+)_(mean|sd|median|max|min|p10|p90|sum)$/);
+  if (m && !/[:\s]/.test(t)) t = `${m[1].replace(/_/g, ' ')}, ${STAT_SUFFIX[m[2]]}`;
+  else if (!/[:\s]/.test(t)) t = t.replace(/_/g, ' ');   // names from a cell table (e.g. "Nucleus: Area µm^2") stay as written
+  t = t.replace(/\bod\b/i, 'OD').replace(/\bdab\b/i, 'DAB');
+  return t.charAt(0).toUpperCase() + t.slice(1) + unit;
+}
+
 // ---- charts (small, dependency-free SVG)
 const SERIES = ['#b49cff', '#5ed0ff', '#ffb454', '#2ecca0', '#ff7b9b', '#9aa3ad', '#e6e98a', '#7aa7ff'];
 function chart(c) {
@@ -1618,6 +1637,9 @@ function chart(c) {
   const series = (c.series || []).filter((x) => x && x.values);
   const all = series.flatMap((x) => x.values).filter((x) => x != null && Number.isFinite(x));
   let lo = Math.min(0, ...all), hi = Math.max(...all, 1e-9);
+  const stacked = c.kind === 'bars' && c.stacked;
+  if (stacked) hi = Math.max(1e-9, ...(c.x || []).map((_, i) => series.reduce((t, sr) => t + Math.max(0, sr.values[i] ?? 0), 0)));
+  const colorOf = (sr, si) => sr.color || SERIES[si % SERIES.length];
   if (c.kind === 'lines') { lo = Math.min(...all); hi = Math.max(...all); if (lo === hi) { lo -= 1; hi += 1; } }
   const y = (v) => T + ph - ((v - lo) / (hi - lo)) * ph;
   for (const f of [0, 0.5, 1]) {
@@ -1629,11 +1651,15 @@ function chart(c) {
   const x0 = numeric ? xs[0] : 0, x1 = numeric ? (c.x_end ?? xs[xs.length - 1]) : xs.length;
   const xp = (v) => L + ((v - x0) / ((x1 - x0) || 1)) * pw;
   if (c.kind === 'bars') {
-    const n = xs.length || 1, gw = pw / n, k = series.length || 1, bw = Math.max(1, (gw - 2) / k);
+    const n = xs.length || 1, gw = pw / n, k = stacked ? 1 : series.length || 1, bw = Math.max(1, (gw - 2) / k);
+    const base = xs.map(() => 0);
     series.forEach((sr, si) => sr.values.forEach((v, i) => {
       if (v == null) return;
-      svg.append(s('rect', { x: L + gw * i + 1 + bw * si, y: y(Math.max(0, v)), width: Math.max(1, bw - 1), height: Math.abs(y(v) - y(0)), rx: 1,
-        fill: SERIES[si % SERIES.length], opacity: 0.9 }, s('title', {}, `${xs[i]}: ${fmt(v)}`)));
+      const v0 = stacked ? base[i] : 0, v1 = v0 + (stacked ? Math.max(0, v) : v);
+      if (stacked) base[i] = v1;
+      svg.append(s('rect', { x: L + gw * i + 1 + (stacked ? Math.max(0, (gw - 2) * 0.15) : bw * si), y: y(Math.max(v0, v1)),
+        width: Math.max(1, stacked ? (gw - 2) * 0.7 : bw - 1), height: Math.abs(y(v1) - y(v0)), rx: stacked ? 0 : 1,
+        fill: colorOf(sr, si), opacity: 0.9 }, s('title', {}, `${xs[i]} · ${sr.name}: ${fmt(v)}`)));
     }));
     const labels = numeric ? [[0, xs[0]], [n / 2, xs[Math.floor(n / 2)]], [n, c.x_end ?? xs[n - 1]]] : (n <= 8 ? xs.map((v, i) => [i + 0.5, v]) : [[0.5, xs[0]], [n - 0.5, xs[n - 1]]]);
     labels.forEach(([i, v], k) => svg.append(txt(L + gw * i, H - 8, typeof v === 'number' ? fmt(v, 3) : String(v).slice(0, 10),
@@ -1646,7 +1672,7 @@ function chart(c) {
     }
     series.filter((x) => !x.band).forEach((sr, si) => {
       const d = sr.values.map((v, i) => (v == null ? null : `${xp(xs[i])},${y(v)}`)).filter(Boolean);
-      svg.append(s('polyline', { points: d.join(' '), fill: 'none', stroke: SERIES[si % SERIES.length], 'stroke-width': 1.8 }));
+      svg.append(s('polyline', { points: d.join(' '), fill: 'none', stroke: colorOf(sr, si), 'stroke-width': 1.8 }));
     });
     [x0, (x0 + x1) / 2, x1].forEach((v, k) => svg.append(txt(xp(v), H - 8, fmt(v, 3), { 'text-anchor': ['start', 'middle', 'end'][k] })));
     if (lo < 0 && hi > 0) svg.append(s('line', { x1: L, x2: W - R, y1: y(0), y2: y(0), stroke: '#4a5562', 'stroke-dasharray': '3 3' }));
@@ -1658,7 +1684,7 @@ function chart(c) {
   const named = series.filter((x) => !x.band);
   if (named.length > 1 || c.xlabel) {
     wrap.append(h('div', { class: 'row', style: 'flex-wrap: wrap; gap: 4px 10px; font-size: 11px; color: var(--dim)' },
-      ...(named.length > 1 ? named.map((sr, si) => h('span', {}, h('span', { class: 'sw', style: `background: ${SERIES[si % SERIES.length]}; height: 8px; width: 8px; margin-right: 4px` }), sr.name)) : []),
+      ...(named.length > 1 ? named.map((sr, si) => h('span', {}, h('span', { class: 'sw', style: `background: ${colorOf(sr, si)}; height: 8px; width: 8px; margin-right: 4px` }), sr.name)) : []),
       c.xlabel ? h('span', { class: 'grow', style: 'text-align: right' }, c.xlabel) : null));
   }
   return wrap;
@@ -1720,7 +1746,8 @@ function refreshDrawLists() {
   else if (regs.length) mr.value = [...regs].sort((a, b) => (a.meta.polygons ?? a.meta.count ?? 0) - (b.meta.polygons ?? b.meta.count ?? 0))[0].name;
   const cells = cellLayers(p).filter((L) => L.name !== mr.value), mo = $('m-objects'), owas = mo.value;
   mo.replaceChildren(h('option', { value: '' }, 'none: regions only'), ...cells.map((L) => h('option', { value: L.name }, L.name)));
-  if (cells.some((L) => L.name === owas)) mo.value = owas;
+  if (lastCells?.fresh.measure && cells.some((L) => L.name === lastCells.name)) { mo.value = lastCells.name; lastCells.fresh.measure = false; }
+  else if (cells.some((L) => L.name === owas)) mo.value = owas;
   else if (!mo.dataset.chosen && cells.length) mo.value = bestCells(cells).name;
   $('m-run').disabled = !regs.length;
   $('m-run').title = regs.length ? 'Measure each region' : 'Requires region layer · Draw region (Annotate tab) or add annotation file';
@@ -2005,8 +2032,13 @@ async function renderDraw() {
   if (cands.some((L) => L.name === keepC)) cs.value = keepC;
   const ws = $('f-where'), keepW = ws.value;
   const regions = layersOf(p).filter((L) => ['manual', 'imported', 'detected'].includes(groupOf(L)) && (L.meta.count ?? 0) < 500 && L.name !== drawLayer);
+  // a region layer as a whole, and each of its classes (e.g. only the tumour of a layer of ROIs)
   ws.replaceChildren(h('option', { value: 'view' }, 'this view'), h('option', { value: 'slide' }, 'the whole slide'),
-    ...regions.map((L) => h('option', { value: `region:${L.name}` }, `inside ${L.name}`)));
+    ...regions.flatMap((L) => {
+      const cls = (L.meta.classes || []).filter((c) => c.name && (c.count ?? 1) > 0);
+      return [h('option', { value: `region:${L.name}`, dataset: { layer: L.name } }, `inside ${L.name}`),
+        ...(cls.length > 1 ? cls.map((c) => h('option', { value: `region:${L.name}#${c.name}`, dataset: { layer: L.name, cls: c.name } }, `inside ${c.name} (${L.name})`)) : [])];
+    }));
   ws.value = [...ws.options].some((o) => o.value === keepW) ? keepW : 'view';
   const ns = $('f-notin'), keepN = ns.value;
   ns.replaceChildren(h('option', { value: '' }, '—'), ...regions.map((L) => h('option', { value: L.name }, L.name)));
@@ -2098,7 +2130,10 @@ function findScope() {
     const hw = p.rect.w / 2 / p.view.scale, hh = p.rect.h / 2 / p.view.scale;
     return { kind: 'view', rect: [p.view.cx - hw, p.view.cy - hh, p.view.cx + hw, p.view.cy + hh], ...exclude };
   }
-  if (v.startsWith('region:')) return { kind: 'region', layer: v.slice(7), ...exclude };
+  if (v.startsWith('region:')) {
+    const o = $('f-where').selectedOptions[0];
+    return { kind: 'region', layer: o?.dataset.layer ?? v.slice(7), ...(o?.dataset.cls ? { class: o.dataset.cls } : {}), ...exclude };
+  }
   return { kind: 'slide', ...exclude };
 }
 $('f-run').onclick = async () => {
@@ -2146,6 +2181,7 @@ function trackJob(job, sid) {
     if (j.state === 'done') {
       const r = j.result;
       findResults.unshift({ ...r, slide: sid, title: j.title });
+      if (r.mode === 'cells') lastCells = { name: r.layer, fresh: { analyze: true, measure: true } };
       renderFindResults(true);
       toast({ kind: 'analysis', title: `${j.title}: ${r.count.toLocaleString('en-US')} ${r.mode === 'areas' ? 'areas' : r.mode === 'cells' ? 'cells' : 'found'}`, sub: `${r.layer} · ${r.where}`,
         action: { label: 'Show', fn: () => showFound(r.layer, sid) }, ms: 8000 });
@@ -2265,7 +2301,7 @@ function showCard(d, f) {
       h('span', { class: 'grow' }), h('span', { class: 'mono dim', style: 'font-size: 11px' }, `${d.layer} #${d.index.toLocaleString('en-US')}`), close),
     shape.length ? h('div', { class: 'shape' }, ...shape.flatMap((r) => [h('span', { class: 'dim' }, r.label), h('span', { class: 'mono', style: 'text-align: right' }, sizeText(r))])) : null,
     nums.length ? h('div', { class: 'bars' }, ...nums.flatMap((k) => [
-      h('span', { class: 'dim', title: k, style: 'overflow: hidden; text-overflow: ellipsis; white-space: nowrap' }, k),
+      h('span', { class: 'dim', title: k, style: 'overflow: hidden; text-overflow: ellipsis; white-space: nowrap' }, propLabel(k)),
       pct[k] != null ? h('span', { class: 'bar', title: `${pct[k]} percentile in ${d.layer}` }, h('span', { style: `width: ${pct[k]}%; background: ${color}` })) : h('span'),
       h('span', { class: 'mono', style: 'text-align: right' }, fmt(props[k])),
     ])) : null,

@@ -39,7 +39,7 @@ from skimage import measure
 from skimage.color import rgb2lab
 from skimage.feature import multiscale_basic_features, peak_local_max
 
-from . import annio, grounding, layerops, sam3, segment
+from . import annio, grounding, layerops, sam3, segment, spatial
 from .annotations import AnnotationLayer
 from .jobs import Job
 from .metrics import object_metrics
@@ -107,6 +107,12 @@ def _scope_geometry(registry, sid: str, scope: dict | None, tissue: bool = False
         if g.is_empty or g.area < 4:
             raise ValueError('view outside slide')
         return g, 'this view'
+    if kind == 'region' and scope.get('class'):  # the regions of one class, e.g. "Tumor" of a layer of ROIs
+        L = registry.layer(sid, scope['layer'])
+        polys = [g for _, g in spatial.roi_geometries(L, classes=[scope['class']]) if not g.is_empty]
+        if not polys:
+            raise ValueError(f'{scope["layer"]} has no {scope["class"]} regions (polygons) to search in')
+        return shapely.union_all(polys), f'{scope["class"]} ({scope["layer"]})'
     if kind == 'region':
         L = registry.layer(sid, scope['layer'])
         F = annio.from_layer(L)

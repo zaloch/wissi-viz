@@ -621,19 +621,37 @@ def _infiltration(ctx: Context, regions, range_um, target=None):
     'Counts, density and share of each class per region',
     [Param('regions', 'Regions', 'regions')],
 )
+def _class_colors(ctx: Context) -> dict[str, str]:
+    """The cell layer's class colours, {class: '#rrggbb'} (none when the layer has no fixed colours)."""
+    try:
+        meta = ctx.registry.layer(ctx.slide, ctx.layer).meta()
+        return {str(c['name']): c['color'] for c in meta.get('classes', []) if c.get('color')}
+    except Exception:  # noqa: BLE001  (colours are a nicety)
+        return {}
+
+
 def _composition(ctx: Context, regions):
     r = spatial.roi_composition(ctx.objects, regions)
     t = _table(r.table) or {'columns': [], 'rows': []}
     cols = t['columns']
     roi_i = cols.index('roi') if 'roi' in cols else 0
-    pct_cols = [c for c in cols if c.endswith('%') or c.startswith('% ')][:8]
-    series = [{'name': c, 'values': [row[cols.index(c)] for row in t['rows']]} for c in pct_cols]
+    # the share of each class in each region, stacked to 100 % in the classes' own colours ("% of whole": the table)
+    shares = [c for c in cols if c.startswith('% ') and not c.startswith('% of whole')][:12]
+    colors = _class_colors(ctx)
+    series = [{'name': c[2:], 'values': [row[cols.index(c)] for row in t['rows']], **({'color': colors[c[2:]]} if c[2:] in colors else {})}
+              for c in shares]  # fmt: skip
     return Result(
         f'Composition · {regions.name}',
         [('regions', f'{len(r.rois):,}'), ('classes', str(len(r.classes)))],
         '',
         [r.layer(name=f'Composition · {regions.name}')],
-        {'kind': 'bars', 'x': [str(row[roi_i]) for row in t['rows']], 'series': series, 'ylabel': '%'}
+        {
+            'kind': 'bars',
+            'stacked': True,
+            'x': [str(row[roi_i]) for row in t['rows']],
+            'series': series,
+            'ylabel': '% of cells in the region',
+        }
         if series
         else None,
         r.table,

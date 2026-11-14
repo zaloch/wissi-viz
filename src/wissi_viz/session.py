@@ -22,7 +22,7 @@ from typing import Any
 
 import anyio
 from fastapi import HTTPException, Query
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.requests import Request  # module level: FastAPI resolves the string annotations here
 
@@ -34,6 +34,7 @@ from .connectors import RemoteConnection, image_entries, open_connection
 from .objects import cached_object_layer
 from .registry import SLIDE_EXTS, SlideRegistry
 from .server import app_page, create_app
+from .store import Store
 from .tiles import TileService
 
 log = logging.getLogger(__name__)
@@ -121,6 +122,8 @@ class Session:
         self.slide_meta: dict[str, dict] = {}
         self._meta_file = user_dir('config') / 'metadata.json'
         self.meta_tables: list[slidemeta.MetaTable] = []
+        #: saved views (points of interest) and figure recipes: a file for a session that remembers, else in memory
+        self.store = Store(user_dir('config') / 'wissi.db' if remember else ':memory:')
         self._auto_meta: dict[str, dict] = {}
         self._matched: tuple[tuple, list[dict]] | None = None
         if remember:
@@ -428,6 +431,64 @@ class Session:
             self._matched = (key, [t.match(list(slides)) for t in self.meta_tables])
         return self._matched[1]
 
+    # -- saved views (points of interest) and figures
+    def _slide_of(self) -> dict[str, str]:
+        """{key: slide id} for every open slide: its id, name, file name, stem and path (lower case)."""
+        out: dict[str, str] = {}
+        for s in self._paths:
+            if s in self.registry:
+                for k in slidemeta.slide_keys(s, self.registry._entries[s].name, self._paths[s]):
+                    out.setdefault(k, s)
+        return out
+
+    def saved_views(self) -> dict:
+        """Every saved view, with ``sid``: the open slide it is of (None: that slide is not open)."""
+        by = self._slide_of()
+        return {'views': [{**v, 'sid': by.get(str(v['slide']).strip().lower())} for v in self.store.views()]}
+
+    def add_view(self, sid: str, bounds, name: str = '', meta: dict | None = None, display: dict | None = None) -> dict:
+        """Save a view of an open slide (its rectangle in level-0 pixels); the slide is kept by its path."""
+        if sid not in self._paths:
+            raise ValueError(f'no open slide {sid!r}')
+        v = self.store.add_view(self._paths[sid] or sid, bounds, name, meta, display)
+        return {**self.saved_views(), 'view': {**v, 'sid': sid}}
+
+    def update_view(self, vid: int, fields: dict) -> dict:
+        self.store.update_view(int(vid), **{k: fields[k] for k in ('name', 'bounds', 'meta', 'display') if k in fields})
+        return self.saved_views()
+
+    def delete_views(self, ids) -> dict:
+        self.store.delete_views(ids or [])
+        return self.saved_views()
+
+    def import_views(self, paths, *, trusted: bool = False) -> dict:
+        """Add views from tables (CSV / TSV / Parquet): see :mod:`wissi_viz.store` for the columns."""
+        by = self._slide_of()
+
+        def mpp_of(slide: str) -> float | None:
+            sid = by.get(str(slide).strip().lower())
+            try:
+                return (self.registry.get(sid)[1].info.mpp or (None,))[0] if sid else None
+            except Exception:  # noqa: BLE001  (no pixel size: the row says so)
+                return None
+
+        def slide_of(slide: str) -> str:  # an open slide named by its id, file name or stem: kept by its path
+            sid = by.get(str(slide).strip().lower())
+            return (self._paths.get(sid) or str(slide)) if sid else str(slide)
+
+        added, errors = 0, []
+        for raw in paths or []:
+            p = Path(str(raw)).expanduser()
+            try:
+                if not (trusted or self.allowed(p)):
+                    raise PermissionError('outside the folders this server allows')
+                r = self.store.import_views(p, mpp_of, slide_of)
+                added += r['added']
+                errors += [f'{p.name}: {e}' for e in r['errors']]
+            except Exception as e:  # noqa: BLE001  (reported per file)
+                errors.append(f'{p.name}: {e}')
+        return {**self.saved_views(), 'added': added, 'errors': errors[:50]}
+
     # -- metadata tables
     def add_metadata(
         self, paths: Iterable[str | os.PathLike], key: str | None = None, *, trusted: bool = False
@@ -531,6 +592,10 @@ class Session:
 
     def shutdown(self) -> None:
         try:
+            self.store.close()
+        except Exception:  # noqa: BLE001  (best-effort cleanup at exit)
+            pass
+        try:
             self.registry.close()
         except Exception:  # noqa: BLE001  (best-effort cleanup at exit)
             pass
@@ -623,6 +688,8 @@ def create_session_app(
             raise HTTPException(403, str(e)) from e
         except (FileNotFoundError, NotADirectoryError, ValueError) as e:
             raise HTTPException(400, str(e)) from e
+        except KeyError as e:  # no such view / figure
+            raise HTTPException(404, str(e).strip("'")) from e
         except (ConnectionError, ImportError) as e:
             raise HTTPException(502, str(e)) from e
 
@@ -662,6 +729,72 @@ def create_session_app(
         if not session.can_open:
             raise HTTPException(403, 'this server does not open files')
         return await run(lambda: session.add_metadata(body.get('paths') or [], body.get('key')))
+
+    # saved views (points of interest) and figure recipes: the app's own database (wissi_viz.store)
+    @app.get('/app/views')
+    async def app_views(request: Request):
+        check(request)
+        return await run(session.saved_views)
+
+    @app.post('/app/views')
+    async def app_views_add(request: Request):
+        """Save a view {slide (open slide id), bounds [x0, y0, x1, y1], name?, meta?, display?}."""
+        check(request, needs_key=mode == 'server')
+        b = await request.json()
+        return await run(lambda: session.add_view(b.get('slide'), b.get('bounds') or [], b.get('name', ''),
+                                                  b.get('meta'), b.get('display')))  # fmt: skip
+
+    @app.post('/app/views/{vid}')
+    async def app_views_update(vid: int, request: Request):
+        """Change a view: {name?, bounds?, meta? (merged; null removes a field), display?}."""
+        check(request, needs_key=mode == 'server')
+        b = await request.json()
+        return await run(lambda: session.update_view(vid, b))
+
+    @app.post('/app/views-delete')
+    async def app_views_delete(request: Request):
+        """Delete views {ids: [...]}."""
+        check(request, needs_key=mode == 'server')
+        ids = (await request.json()).get('ids') or []
+        return await run(lambda: session.delete_views(ids))
+
+    @app.post('/app/views-import')
+    async def app_views_import(request: Request):
+        """Add views from tables {paths: [...]}: slide, x0, y0, x1, y1 (or x, y, width / width_um), name, metadata."""
+        check(request, needs_key=True)
+        if not session.can_open:
+            raise HTTPException(403, 'this server does not open files')
+        b = await request.json()
+        return await run(lambda: session.import_views(b.get('paths') or []))
+
+    @app.get('/app/views-export')
+    async def app_views_export(request: Request, fmt: str = 'csv'):
+        check(request)
+        pq = fmt == 'parquet'
+        data = await anyio.to_thread.run_sync(lambda: session.store.export_views('parquet' if pq else 'csv'))
+        name = f'wissi-viz views.{"parquet" if pq else "csv"}'
+        return Response(data, media_type='application/vnd.apache.parquet' if pq else 'text/csv',
+                        headers={'Content-Disposition': f'attachment; filename="{name}"'})  # fmt: skip
+
+    @app.get('/app/figures')
+    async def app_figures(request: Request):
+        check(request)
+        return await run(lambda: {'figures': session.store.figures()})
+
+    @app.post('/app/figures')
+    async def app_figures_save(request: Request):
+        """Save a figure recipe {name, recipe, id? (replace)} or delete one {delete: id}."""
+        check(request, needs_key=mode == 'server')
+        b = await request.json()
+
+        def go():
+            if b.get('delete') is not None:
+                session.store.delete_figure(b['delete'])
+                return {'figures': session.store.figures()}
+            f = session.store.save_figure(b.get('name') or 'Figure', b.get('recipe') or {}, b.get('id'))
+            return {'figure': f, 'figures': session.store.figures()}
+
+        return await run(go)
 
     @app.post('/app/close')
     async def app_close(request: Request):

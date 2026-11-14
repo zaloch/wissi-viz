@@ -142,6 +142,11 @@ class Bridge:
     def remove_metadata(self, path: str):
         return self._s.remove_metadata(path)
 
+    def pick_views(self):
+        """A table of views (points of interest): see wissi_viz.store for the columns."""
+        paths = self._dialog('open', True, ('Tables (*.csv;*.tsv;*.txt;*.parquet)', 'All files (*.*)'))
+        return self._s.import_views(paths, trusted=True) if paths else None
+
     def save_file(self, name: str, data_b64: str):
         """Save what the page made (a snapshot, a table, an export) where the person picks, with the system's Save
         dialog: the app window does not download links as a browser does. The path, or None if cancelled."""

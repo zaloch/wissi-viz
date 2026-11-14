@@ -855,3 +855,59 @@ def _slide_list_metadata(w, data, s):
     w.audit('checked slides')
     w.check('#s-clear', '() => !document.querySelector("#slides li.checked")')
     w.check('#deck-close', '() => document.getElementById("deck").hidden')
+    _saved_views(w, data, s)
+
+
+def _saved_views(w, data, s):
+    """The Views list: import a table, save the active pane's view, the row menu, export, back to slides."""
+    pg = w.pg
+    names = [x['name'] for x in s.slides()]
+    (data / 'views.csv').write_text(
+        'slide,x,y,width,name,Region\n' + ''.join(f'{n},300,300,200,{n} core,Core\n' for n in names)
+    )
+    w.check('#side-mode [data-mode=views]', '() => !document.getElementById("v-save").hidden')
+    w.check('#v-import', '() => document.getElementById("picker").classList.contains("on")')
+    pg.fill('#paths', str(data / 'views.csv'))
+    pg.click('#b-paths')
+    pg.wait_for_function(f'() => document.querySelectorAll("#slides li[draggable]").length === {len(names)}')
+    w.check('#v-save', f'() => document.querySelectorAll("#slides li[draggable]").length === {len(names) + 1}')
+    w.audit('views')
+    row = '#slides li[draggable] >> nth=0'
+    pg.hover(row)
+    pg.click(f'{row} >> .more')
+    w.check('.menu button:has-text("Add as a new pane")', None)
+    pg.hover(row)
+    pg.click(f'{row} >> .more')
+    w.check('.menu button:has-text("Show in the active pane")', None)
+    pg.hover(row)
+    pg.click(f'{row} >> .more')
+    w.check('.menu button:has-text("Rename")', '() => document.querySelector("#slides input.gn")')
+    pg.fill('#slides input.gn', 'Renamed view')
+    pg.keyboard.press('Enter')
+    pg.wait_for_function('() => /Renamed view/.test(document.getElementById("slides").textContent)')
+    pg.hover(row)
+    pg.click(f'{row} >> .more')
+    pg.once('dialog', lambda d: pg.once('dialog', lambda d2: d2.accept('3')) or d.accept('Score'))  # field, then value
+    w.check('.menu button:has-text("Set field")', None)
+    pg.wait_for_function('() => [...document.querySelectorAll(".menu button, #s-add-sort")].length >= 0')
+    pg.wait_for_timeout(500)
+    assert any(v['meta'].get('Score') == 3 for v in s.store.views())
+    pg.hover(row)
+    pg.click(f'{row} >> .more')
+    w.check('.menu button:has-text("Update to what pane")', None)
+    with pg.expect_download() as dl:
+        pg.click('#v-more')
+        w.check('.menu button:has-text("Export views (CSV)")', None)
+    assert dl.value.suggested_filename == 'wissi-viz views.csv'
+    with pg.expect_download() as dl:
+        w.check('#v-more', '() => document.querySelector(".menu")')
+        w.check('.menu button:has-text("Export views (Parquet)")', None)
+    assert dl.value.suggested_filename == 'wissi-viz views.parquet'
+    n = len(s.store.views())
+    pg.hover(row)
+    pg.click(f'{row} >> .more')
+    w.check(
+        '.menu button:has-text("Delete view")',
+        f'() => document.querySelectorAll("#slides li[draggable]").length === {n - 1}',
+    )
+    w.check('#side-mode [data-mode=slides]', '() => document.getElementById("v-save").hidden')

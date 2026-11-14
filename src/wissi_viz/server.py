@@ -216,19 +216,46 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
         return Response(data, media_type=mt, headers=hdrs(cache))
 
     @r.get('/slides/{sid}/thumbnail')
-    async def thumbnail(sid: str, size: int = 512):
+    async def thumbnail(sid: str, size: int = 512, bounds: str | None = None):
+        """A small picture of the slide, or of a rectangle of it (``bounds=x0,y0,x1,y1`` in level-0 px: a saved
+        view's preview)."""
         e, pyr = entry(sid)
         size = max(16, min(size, 2048))
+        rect = None
+        if bounds:
+            try:
+                x0, y0, x1, y1 = (float(v) for v in bounds.split(','))
+            except ValueError:
+                raise HTTPException(400, 'bounds: x0,y0,x1,y1') from None
+            W, H = e.source.info.width, e.source.info.height
+            x0, y0, x1, y1 = max(0.0, x0), max(0.0, y0), min(float(W), x1), min(float(H), y1)
+            if x1 - x0 < 1 or y1 - y0 < 1:
+                raise HTTPException(400, 'bounds outside the slide')
+            rect = (x0, y0, x1, y1)
+
+        def pick(ci=None):
+            """The whole slide's thumbnail, or the rectangle read at the coarsest level that still fills ``size``."""
+            src = e.source
+            if rect is None:
+                return src.thumbnail(size) if ci is None else src.thumbnail(size, ci)
+            x0, y0, x1, y1 = rect
+            lv = 0
+            for i, L in enumerate(src.info.levels):
+                if max(x1 - x0, y1 - y0) / L.downsample >= size:
+                    lv = i
+            ds = src.info.levels[lv].downsample
+            args = (lv, int(x0 / ds), int(y0 / ds), max(1, int((x1 - x0) / ds)), max(1, int((y1 - y0) / ds)))
+            return np.asarray(src.read_region(*args) if ci is None else src.read_region(*args, ci))
 
         def make():
             src = e.source
             if src.info.mode == 'rgb':
-                a = src.thumbnail(size)
+                a = np.asarray(pick())[..., :3]
             else:
                 comp = None
                 wins = e.windows or src.channel_stats()
                 for ci, ch in enumerate(src.info.channels):
-                    t = src.thumbnail(size, ci).astype(np.float32)
+                    t = np.asarray(pick(ci)).astype(np.float32)
                     lo, hi = wins[ci]
                     t = np.clip((t - lo) / max(hi - lo, 1), 0, 1)
                     col = np.array([int(ch.color[i : i + 2], 16) for i in (1, 3, 5)], np.float32)

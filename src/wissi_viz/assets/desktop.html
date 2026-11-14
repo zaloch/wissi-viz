@@ -300,6 +300,9 @@
   /* ---- slide groups */
   .side-head { display: flex; align-items: center; gap: 6px; margin: 10px 8px 6px 12px; }
   .side-head .lbl { margin: 0; }
+  #side-mode button { padding: 2px 9px; font-size: 12px; }
+  #slides li.offline { opacity: .6; }
+  #slides li.offline .sub::after { content: ' · slide not open'; }
   #s-filter-box { margin: 0 8px 6px; padding: 4px 8px; }
   #slides { list-style: none; margin: 0; padding: 0 8px 8px; overflow: auto; flex: 1; display: flex; flex-direction: column; gap: 6px; }
   #slides ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
@@ -479,7 +482,16 @@
 </header>
 
 <aside id="side">
-  <div class="side-head"><h2 class="lbl">Slides</h2><span class="grow"></span><span class="dim mono" id="s-count" style="font-size: 11px"></span>
+  <div class="side-head"><span class="seg" id="side-mode" role="group" aria-label="List">
+      <button data-mode="slides" aria-pressed="true" title="Open slides">Slides</button>
+      <button data-mode="views" aria-pressed="false" title="Saved views: regions of slides at set zoom, with metadata">Views</button></span>
+    <span class="grow"></span><span class="dim mono" id="s-count" style="font-size: 11px"></span>
+    <button id="v-save" class="btn icon ghost" hidden title="Save view: active pane’s region (V)" aria-label="Save view">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4M12 9v6M9 12h6"></path></svg></button>
+    <button id="v-import" class="btn icon ghost" hidden title="Import views: table (CSV, TSV, Parquet) · Columns: slide, x0, y0, x1, y1 (or x, y, width / width_um), name, metadata" aria-label="Import views">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 5h16v14H4zM4 10h16M10 10v9"></path></svg></button>
+    <button id="v-more" class="btn icon ghost" hidden title="Export views" aria-label="More for views">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="19" cy="12" r="1.8"></circle></svg></button>
     <button id="s-meta" class="btn icon ghost" title="Add metadata table (CSV, TSV, Parquet): key column names slides · Other columns: fields to group and sort by" aria-label="Add metadata table">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 5h16v14H4zM4 10h16M10 10v9"></path></svg></button>
     <button id="s-newproj" class="btn icon ghost" title="New project: group of slides · Drag slides onto it" aria-label="New project">
@@ -779,6 +791,7 @@
     <span>Keep a measurement (Measurements layer) <span class="mono dim">↵</span></span>
     <span>Undo the last drawing or delete <span class="mono dim">⌘/Ctrl Z</span></span>
     <span>Objects table of a layer · previous / next object <span class="mono dim">T · [ ]</span></span>
+    <span>Save view: active pane’s region · Pages: previous / next <span class="mono dim">V · PgUp PgDn</span></span>
     <span>Delete the selected drawing (click it first) <span class="mono dim">Delete</span></span>
     <span>Layers / Image / Annotate / Analyze / Measure <span class="mono dim">L I D A M</span></span>
     <span>Pick objects as examples <span class="mono dim">P · Shift-click: dissimilar</span></span>

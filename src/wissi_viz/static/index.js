@@ -1553,7 +1553,7 @@ export class WsiGrid extends HTMLElement {
   setPaneTag(pane, tag) {
     const p = this._pane(pane);
     if (!p) return;
-    p.tag = tag && (tag.text || tag.color) ? { text: tag.text || '', color: tag.color || null } : null;
+    p.tag = tag && (tag.text || tag.color) ? { text: tag.text || '', color: tag.color || null, full: !!tag.full } : null;
     if (p.el) p.el.style.boxShadow = p.tag?.color ? `inset 0 0 0 2px ${p.tag.color}` : '';
     this._updateLabel(p);
   }
@@ -1562,7 +1562,7 @@ export class WsiGrid extends HTMLElement {
     if (!p.$label) return;
     const s = p.slide;
     const name = s ? (s.info?.name || s.info?.id || '') : '';
-    p.$label.textContent = p.tag?.text && name ? `${p.tag.text} · ${name}` : name;
+    p.$label.textContent = p.tag?.full ? p.tag.text : p.tag?.text && name ? `${p.tag.text} · ${name}` : name;   // full: the tag is the label
     p.$label.style.borderLeft = p.tag?.color ? `3px solid ${p.tag.color}` : '';
     p.$label.style.display = s && p.$label.textContent ? '' : 'none';
     p.$msg.textContent = !s ? '' : s.error ? `⚠ ${s.error}` : s.info ? '' : 'loading…';

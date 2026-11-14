@@ -173,3 +173,81 @@ def test_metadata_table_by_http(data, tmp_path):
     assert c.post('/app/metadata', json={'paths': [str(Path(data).parent / 'x.csv')]}, headers=h).json()['errors']
     assert c.post('/app/metadata', json={'remove': str(data / 'meta.csv')}, headers=h).json()['meta_tables'] == []
     assert c.post('/app/metadata', json={'paths': []}).status_code == 403  # the page's token is needed
+
+
+def test_saved_views_list_and_pages(data, tmp_path):
+    """Views (points of interest) from a table: listed by metadata, opened as pages at their rectangles and named on
+    their panes; Save view (V) stores the active pane's region; a view whose slide is closed opens it."""
+    from playwright.sync_api import sync_playwright
+
+    from wissi_viz import desktop as D
+
+    rows = ['slide,x,y,width,name,Region']
+    for i in range(6):
+        rows += [f'S{i:02d},400,300,300,S{i:02d} core,Core', f'S{i:02d}.svs,150,150,200,S{i:02d} edge,Edge']
+    (data / 'poi.csv').write_text('\n'.join(rows), encoding='utf-8')
+    s = D.Session(cache_dir=tmp_path / 'cache', remember=False)
+    s.open(sorted(data.glob('*.svs'))[:6])
+    s.add_metadata([data / 'meta.csv'])
+    srv = D._Server(s.app())
+    url = srv.start()
+    errors: list[str] = []
+    try:
+        with sync_playwright() as pw:
+            try:
+                b = pw.chromium.launch(args=['--enable-unsafe-swiftshader'])
+            except Exception as e:
+                pytest.skip(f'no Chromium: {e}')
+            pg = b.new_page(viewport={'width': 1400, 'height': 900})
+            pg.set_default_timeout(60000)
+            pg.on('pageerror', lambda e: errors.append(f'pageerror: {e}'))
+            pg.on('console', lambda m: errors.append(m.text) if m.type == 'error' else None)
+            pg.goto(url + '/app')
+            pg.wait_for_selector('#slides li')
+            pg.evaluate('() => localStorage.clear()')
+            pg.click('#side-mode [data-mode=views]')
+            pg.wait_for_function('() => /No saved views/.test(document.getElementById("slides").textContent)')
+            pg.click('#v-import')
+            pg.wait_for_selector('#picker.on')
+            pg.fill('#paths', str(data / 'poi.csv'))
+            pg.click('#b-paths')
+            pg.wait_for_function('() => document.querySelectorAll("#slides li[draggable]").length === 12')
+            # grouped by slide until chips say otherwise; then by treatment (the slide's field) and region (the view's)
+            assert pg.locator('#slides section .ghead .gn').first.inner_text() == 'S00.svs'
+            pg.click('#s-add-group')
+            pg.click('.menu button:has-text("Region")')
+            heads = pg.eval_on_selector_all('#slides section .ghead .gn', 'els => els.map((e) => e.textContent)')
+            assert heads == ['Core', 'Edge']
+            # the Core views as pages of 4: each pane at its view's rectangle, labelled with the view's name
+            pg.select_option('#n', '4')
+            pg.hover('#slides section >> nth=0 >> .ghead')
+            pg.click('#slides section >> nth=0 >> .ghead .gopen')
+            pg.wait_for_function('() => document.getElementById("deck-pos").textContent === "1 / 2"')
+            pg.wait_for_function(f'() => ({G})().panes.every((p) => p.slide?.info && p.view)')
+            pg.wait_for_function(
+                f'() => ({G})().getViews().every((v) => v && Math.abs(v.x - 400) < 1 && Math.abs(v.y - 300) < 1)'
+            )
+            assert pg.evaluate(f'() => ({G})().panes[0].$label.textContent') == 'Core · S00 core'
+            # Save view (V): the active pane's region, listed with the rest
+            pg.click('#deck-close')
+            pg.evaluate(f'() => ({G})().goTo(0, 600, 200, {{ zoom: 2, animate: false }})')
+            pg.keyboard.press('v')
+            pg.wait_for_function('() => document.getElementById("s-count").textContent === "13"')
+            saved = s.store.views()[-1]
+            assert saved['slide'].endswith('S00.svs') and abs((saved['bounds'][0] + saved['bounds'][2]) / 2 - 600) < 1
+            # a view of a closed slide is greyed; a click opens its slide at the view
+            pg.click('#side-mode [data-mode=slides]')
+            pg.click('#slides li[draggable]:has-text("S00.svs") button[aria-label="Close S00.svs"]', force=True)
+            pg.wait_for_function('() => !/S00\\.svs/.test(document.getElementById("slides").textContent)')
+            pg.click('#side-mode [data-mode=views]')
+            pg.wait_for_selector('#slides li.offline')
+            pg.click('#slides li.offline:has-text("S00 edge")')
+            pg.wait_for_function('() => !document.querySelector("#slides li.offline")')
+            pg.wait_for_function(
+                f'() => ({G})().getViews().some((v) => v && Math.abs(v.x - 150) < 1 && Math.abs(v.y - 150) < 1)'
+            )
+            b.close()
+    finally:
+        srv.stop()
+        s.shutdown()
+    assert not errors, errors

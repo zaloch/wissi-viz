@@ -602,6 +602,24 @@ def run(cases=CASES, methods=None, directory: str | None = None, yes: bool = Fal
 
 
 # ================================================================================================ report, pictures
+def merge(d: Path) -> Path:
+    """One report from the cases run apart (``validation-<case>.json``, e.g. one CI machine per case): writes
+    validation.json and validation.md; returns validation.json."""
+    report: dict = {'when': '', 'cases': {}}
+    for part in sorted(d.glob('validation-*.json')):
+        r = json.loads(part.read_text(encoding='utf-8'))
+        report['cases'].update(r.get('cases', {}))
+        report['when'] = max(report['when'], r.get('when', ''))
+    got = report['cases']  # a case whose machine stopped is said to be missing, not left out
+    report['cases'] = {c: got.get(c, {'error': 'no result: the run for this case did not finish'}) for c in CASES} | {
+        c: v for c, v in got.items() if c not in CASES
+    }
+    p = d / 'validation.json'
+    p.write_text(json.dumps(report, indent=1), encoding='utf-8')
+    (d / 'validation.md').write_text(markdown(report), encoding='utf-8')
+    return p
+
+
 def markdown(rep: dict) -> str:
     lines = [f'# Find all against reference outlines ({rep.get("when", "")})', '']
     names = {k: v[0] for k, v in (NUCLEUS_METHODS | DRG_METHODS).items()} | {'areas': 'Areas (4 brushed boxes)'}
@@ -820,7 +838,7 @@ def open_app(directory: str | None = None, yes: bool = False, browser: bool = Fa
 def main(argv: list[str]) -> None:
     ap = argparse.ArgumentParser(prog='wissi-viz validate', description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)  # fmt: skip
-    ap.add_argument('step', choices=['run', 'open', 'publish-list'])
+    ap.add_argument('step', choices=['run', 'merge', 'open', 'publish-list'])
     ap.add_argument('--cases', default=','.join(CASES))
     ap.add_argument('--methods', default=None, help='comma-separated (default: all that can run here)')
     ap.add_argument('--dir', default=None)
@@ -831,6 +849,8 @@ def main(argv: list[str]) -> None:
     if a.step == 'run':
         p = run(a.cases.split(','), a.methods.split(',') if a.methods else None, a.dir, a.yes)
         print((p.parent / 'validation.md').read_text(encoding='utf-8'))
+    elif a.step == 'merge':  # cases run on separate machines: validation-<case>.json → one report
+        print(merge(vdir(a.dir)).with_name('validation.md').read_text(encoding='utf-8'))
     elif a.step == 'publish-list':
         print('\n'.join(str(p) for p in publish_list(vdir(a.dir))))
     else:

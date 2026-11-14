@@ -95,6 +95,24 @@ def test_nuinsseg_mosaic_and_a_run(tmp_path, monkeypatch):
     assert 'nuinsseg-mosaic.ome.tif' in names and 'SHA256SUMS' in names and 'nuinsseg-mosaic.classic.jpg' in names
 
 
+def test_cases_run_apart_merge_into_one_report(tmp_path):
+    """CI runs each case on a machine of its own; one report merges them, and a case that did not finish says so."""
+    import json
+
+    from wissi_viz import validation as V
+
+    d = tmp_path / 'validation'
+    d.mkdir()
+    nuc = {'methods': {'sam3': {'f1': 0.62, 'precision': 0.66, 'recall': 0.59}}, 'seconds': 10}
+    (d / 'validation-nuinsseg.json').write_text(json.dumps({'when': '2026-11-14 10:00', 'cases': {'nuinsseg': nuc}}))
+    (d / 'validation-drg.json').write_text(json.dumps({'when': '2026-11-14 11:00', 'cases': {'drg': {'methods': {}}}}))
+    rep = json.loads(V.merge(d).read_text())
+    assert rep['when'] == '2026-11-14 11:00' and list(rep['cases']) == list(V.CASES)
+    assert rep['cases']['nuinsseg'] == nuc and 'did not finish' in rep['cases']['camelyon']['error']
+    md = (d / 'validation.md').read_text()
+    assert '| SAM 3 | 0.62 |' in md and 'Not run: no result' in md
+
+
 def test_cli_lists_validate(capsys):
     from wissi_viz import cli
 

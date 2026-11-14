@@ -2,23 +2,28 @@
 # CAMELYON16 metastases
 # (pathologists' outlines) and Xenium nuclei (10x, DAPI). Publishes the layers, the NuInsSeg mosaic, the scores and
 # pictures as the GitHub release `validation` (replaced on every run), which `wissi-viz validate open` shows in the app.
+# Each case runs on a machine of its own (one machine for all took up to four hours and ran out of memory); a last job
+# merges the scores and publishes.
 name: validate
 on:
   workflow_dispatch:
   schedule:
     - cron: '41 7 * * 2'   # weekly
-  push:
+  push:   # changes to the find-all code are checked by the weekly run (or start one by hand): a run takes hours
     branches: [main]
-    paths: [src/wissi_viz/validation.py, src/wissi_viz/evaluate.py, src/wissi_viz/findall.py, src/wissi_viz/sam3.py,
-            .github/workflows/validate.yml]
+    paths: [src/wissi_viz/validation.py, src/wissi_viz/evaluate.py, .github/workflows/validate.yml]
 
 permissions:
   contents: write
 
 jobs:
-  validate:
+  case:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        case: [nuinsseg, drg, camelyon, xenium]
     env:
       WISSI_SAM3_ACCEPT_LICENSE: '1'   # the repository owner accepted the SAM License; SAM 3 itself is not published
       XDG_CACHE_HOME: /mnt/cache
@@ -41,13 +46,47 @@ jobs:
           uv pip install -q -e ".[analysis,io,sam3,cells]" pyarrow
       - name: Run
         run: |
-          uv run --no-sync wissi-viz validate run --yes > "$RUNNER_TEMP/run.txt" 2>&1 || {
-            echo "::error::validate run failed :: $(grep -v -E 'pci_bus_id|unauthenticated|quantization' "$RUNNER_TEMP/run.txt" | tail -c 3500 | tr '\n' ' ')"; exit 1; }
+          uv run --no-sync wissi-viz validate run --yes --cases '${{ matrix.case }}' > "$RUNNER_TEMP/run.txt" 2>&1 || {
+            echo "::error::validate ${{ matrix.case }} failed :: $(grep -v -E 'pci_bus_id|unauthenticated|quantization' "$RUNNER_TEMP/run.txt" | tail -c 3500 | tr '\n' ' ')"; exit 1; }
           grep -v -E "pci_bus_id|unauthenticated|quantization" "$RUNNER_TEMP/run.txt" | tail -80
           echo "::notice::$(grep -E '^  [a-z0-9-]+: ' "$RUNNER_TEMP/run.txt" | tr '\n' '|' | head -c 3800)"
-          echo "::notice::$(tr '\n' ' ' < /mnt/pack/validation/validation.md | head -c 3800)"
-      - name: Publish
+          cd /mnt/pack/validation
+          mv validation.json 'validation-${{ matrix.case }}.json'
+          rm -f validation.md validation-session.json
+      - uses: actions/upload-artifact@v4
         if: always()
+        with:
+          name: validation-${{ matrix.case }}
+          path: |
+            /mnt/pack/validation
+            !/mnt/pack/validation/cache
+          retention-days: 7
+          if-no-files-found: ignore
+
+  publish:
+    needs: case
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      WISSI_PACK_DIR: ${{ github.workspace }}/pack
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: validation-*
+          merge-multiple: true
+          path: pack/validation
+      - name: Merge the cases
+        run: |
+          uv venv -p 3.12 -q
+          uv pip install -q -e . pyarrow
+          ls pack/validation/validation-*.json >/dev/null 2>&1 || { echo "::error::no case finished"; exit 1; }
+          uv run --no-sync wissi-viz validate merge > "$RUNNER_TEMP/scores.md"
+          cat "$RUNNER_TEMP/scores.md"
+          echo "::notice::$(tr '\n' ' ' < "$RUNNER_TEMP/scores.md" | head -c 3800)"
+      - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

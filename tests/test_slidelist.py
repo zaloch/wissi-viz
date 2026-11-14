@@ -209,7 +209,11 @@ def test_saved_views_list_and_pages(data, tmp_path):
             pg.wait_for_function('() => /No saved views/.test(document.getElementById("slides").textContent)')
             pg.click('#v-import')
             pg.wait_for_selector('#picker.on')
+            pg.wait_for_function('() => document.getElementById("pk-open").textContent === "Import views"')
             pg.fill('#paths', str(data / 'poi.csv'))
+            pg.wait_for_function(
+                '() => document.getElementById("paths").value.endsWith("poi.csv")'
+            )  # not reset by the picker
             pg.click('#b-paths')
             pg.wait_for_function('() => document.querySelectorAll("#slides li[draggable]").length === 12')
             # grouped by slide until chips say otherwise; then by treatment (the slide's field) and region (the view's)

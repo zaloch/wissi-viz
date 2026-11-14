@@ -827,7 +827,7 @@ def _slide_list_metadata(w, data, s):
     (data / 'meta.csv').write_text('\n'.join(rows), encoding='utf-8')
     w.check('#s-meta', '() => document.getElementById("picker").classList.contains("on")')
     pg.fill('#paths', str(data / 'meta.csv'))
-    w.check('#b-paths', '() => document.querySelector(".toast")?.textContent.includes("matched")')
+    w.check('#b-paths', '() => [...document.querySelectorAll(".toast")].some((t) => t.textContent.includes("matched"))')
     w.check('#s-add-group', '() => document.querySelector(".menu")')
     w.check(
         '.menu button:has-text("Group")',

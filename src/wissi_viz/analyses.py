@@ -614,13 +614,6 @@ def _infiltration(ctx: Context, regions, range_um, target=None):
     )
 
 
-@analysis(
-    'composition',
-    'Composition',
-    'Regions',
-    'Counts, density and share of each class per region',
-    [Param('regions', 'Regions', 'regions')],
-)
 def _class_colors(ctx: Context) -> dict[str, str]:
     """The cell layer's class colours, {class: '#rrggbb'} (none when the layer has no fixed colours)."""
     try:
@@ -630,6 +623,13 @@ def _class_colors(ctx: Context) -> dict[str, str]:
         return {}
 
 
+@analysis(
+    'composition',
+    'Composition',
+    'Regions',
+    'Counts, density and share of each class per region',
+    [Param('regions', 'Regions', 'regions')],
+)
 def _composition(ctx: Context, regions):
     r = spatial.roi_composition(ctx.objects, regions)
     t = _table(r.table) or {'columns': [], 'rows': []}

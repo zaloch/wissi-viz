@@ -1966,6 +1966,7 @@ const sam3WordOf = (phrase) => {
 const sizeText = () => { const lo = +$('f-size').value, hi = +$('f-size-max').value; return hi && hi !== lo ? `${Math.min(lo, hi)}–${Math.max(lo, hi)} µm` : `about ${lo} µm`; };
 ['f-size', 'f-size-max', 'f-exclude', 'f-s3name'].forEach((id) => { $(id).oninput = () => renderDraw(); });
 $('f-notin').onchange = () => renderDraw();
+$('f-where').onchange = () => renderDraw();   // the hint names where it searches
 $('ex-use').onchange = () => renderDraw();
 $('f-prompt').oninput = () => renderDraw();
 $('f-prompt').onkeydown = (e) => { if (e.key === 'Enter' && !$('f-run').disabled) { e.preventDefault(); $('f-run').click(); } };
@@ -2087,7 +2088,7 @@ async function renderDraw() {
       msg = pos ? `${caps.sam || 'SAM'} outlines all objects.${exNote}${NOGPU}`
         : `${caps.sam || 'SAM'} outlines all objects ${sizeText()} across; keeps all.${NOGPU}`;
     } else if (findMode === 'text' && cellModel) {
-      const where = $('f-where').selectedOptions[0]?.textContent || 'this view';
+      const where = ($('f-where').selectedOptions[0]?.textContent || 'this view').replace(/^inside /, '');
       msg = model === 'classpose'
         ? `Classpose outlines and classes all cells in slide file; keeps those in ${where}. First run: installs via uv. Without GPU: slow. Weights trained on non-commercial data: check before commercial use.`
         : `${CELL_MODELS[model]} outlines nuclei in ${where}: area, shape, stain. Classes by size (fluorescence: brightest marker). Result: cell layer for Analyze.${model === 'cellpose' ? NOGPU : ''}`;

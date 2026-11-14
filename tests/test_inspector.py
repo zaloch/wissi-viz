@@ -167,6 +167,9 @@ def test_catalogue_and_runs(session):
     assert bands['layers'] and bands['chart']['series']
     comp = c.post(url, json={'analysis': 'composition', 'objects': 'cells', 'params': {'regions': 'regions'}})
     assert comp.status_code == 200, comp.text  # its layer used to fail on an unknown style option
+    ch = comp.json()['chart']  # each class's share of the region, stacked to 100 %
+    assert ch['stacked'] and not any(sr['name'].startswith('of whole') for sr in ch['series'])
+    assert all(abs(sum(sr['values'][i] or 0 for sr in ch['series']) - 100) < 0.5 for i in range(len(ch['x'])))
     # clear errors for wrong input
     assert (
         c.post(
@@ -268,7 +271,7 @@ def test_inspector_in_the_browser(session):
                 return [r.left + p.rect.x + p.rect.w / 2, r.top + p.rect.y + p.rect.h / 2]; }}""")
             pg.mouse.click(*box)
             pg.wait_for_selector('#card .bars')
-            assert 'area_um2' in pg.inner_text('#card')
+            assert 'Area µm²' in pg.inner_text('#card')  # its column, area_um2, as read
             pg.keyboard.press('Escape')
             assert not pg.is_visible('#card')
             pg.mouse.click(box[0] - 150, box[1] + 100, button='right')

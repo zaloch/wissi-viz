@@ -816,11 +816,8 @@ def _slide_list(w, data, s):
 def _slide_list_metadata(w, data, s):
     """A metadata table, group / sort chips, checked slides and pages of panes."""
     pg = w.pg
-    pg.click('#b-open')  # two slides at least (pages to step through)
-    pg.wait_for_selector('#picker.on')
-    pg.fill('#paths', f'{data / "he.svs"}\n{data / "fl.czi"}')
-    pg.click('#b-paths')
-    pg.wait_for_function('() => !document.getElementById("picker").classList.contains("on")')
+    s.open([data / 'he.svs', data / 'fl.czi'])  # two slides at least (pages to step through); the picker: above
+    pg.evaluate('(r) => window.wissiApp.onResult(r)', {'slides': s.slides()})
     names = [x['name'] for x in s.slides()]
     assert len(names) >= 2, names
     rows = ['Slide,Group,Rank'] + [f'{n},{"AB"[i % 2]},{i}' for i, n in enumerate(names)]

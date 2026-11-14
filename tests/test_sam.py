@@ -194,8 +194,9 @@ def test_app_sam_accept_export_and_measure(slide, tmp_path):
                 timeout=180_000,
             )
             assert pg.query_selector('#mtable table'), pg.inner_text('#log')
-            txt = pg.inner_text('#mtable')
-            assert 'shape_area_um2' in txt and 'int_hematoxylin_od_mean' in txt
+            assert 'Area µm²' in pg.inner_text('#mtable')  # shape_area_um2, as read
+            pg.fill('#m-find', 'hematoxylin')  # folded sections open for what matches
+            pg.wait_for_function('() => /Hematoxylin OD, mean/.test(document.getElementById("mtable").textContent)')
             assert not errors, errors
             b.close()
     finally:

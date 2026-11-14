@@ -81,7 +81,7 @@ jobs:
       - name: Merge the cases
         run: |
           uv venv -p 3.12 -q
-          uv pip install -q -e . pyarrow
+          uv pip install -q -e ".[analysis]" pyarrow   # validation imports shapely
           ls pack/validation/validation-*.json >/dev/null 2>&1 || { echo "::error::no case finished"; exit 1; }
           uv run --no-sync wissi-viz validate merge > "$RUNNER_TEMP/scores.md"
           cat "$RUNNER_TEMP/scores.md"

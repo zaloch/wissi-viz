@@ -214,7 +214,10 @@ def test_saved_views_list_and_pages(data, tmp_path):
             pg.wait_for_function(
                 '() => document.getElementById("paths").value.endsWith("poi.csv")'
             )  # not reset by the picker
-            pg.click('#b-paths')
+            with pg.expect_response(lambda r: '/app/views-import' in r.url, timeout=30000) as resp:
+                pg.click('#b-paths')
+            got = resp.value.json()
+            assert got.get('added') == 12, (got.get('errors'), pg.inner_text('#log'))
             pg.wait_for_function('() => document.querySelectorAll("#slides li[draggable]").length === 12')
             # grouped by slide until chips say otherwise; then by treatment (the slide's field) and region (the view's)
             assert pg.locator('#slides section .ghead .gn').first.inner_text() == 'S00.svs'

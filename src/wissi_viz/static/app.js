@@ -574,12 +574,17 @@ function slideItem(sl, g, sortChips = []) {
 }
 
 // ---- saved views (points of interest): a slide's rectangle with metadata, kept in the app's database
+let viewsSeq = 0;   // a reply older than the latest change must not overwrite it (a slow listing after an import)
 async function loadViews() {
   if (!TOKEN) return;
-  try { poi = (await http(`${BASE}/app/views`)).views || []; } catch (e) { poi = []; }
+  const seq = ++viewsSeq;
+  let got;
+  try { got = (await http(`${BASE}/app/views`)).views || []; } catch (e) { got = null; }
+  if (seq !== viewsSeq || got == null) return;
+  poi = got;
   if (sideMode === 'views') renderList();
 }
-const viewsResult = (r) => { if (r?.views) { poi = r.views; if (sideMode === 'views') renderList(); } return r; };
+const viewsResult = (r) => { if (r?.views) { viewsSeq++; poi = r.views; if (sideMode === 'views') renderList(); } return r; };
 function goToBoundsWhenReady(k, b) {
   const go = (n = 0) => { const p = grid.panes[k]; if (p?.slide?.info && p.view) grid.goToBounds(k, b[0], b[1], b[2], b[3], { padding: 0, animate: false }); else if (n < 200) setTimeout(() => go(n + 1), 50); };
   go();

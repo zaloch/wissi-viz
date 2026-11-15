@@ -362,6 +362,7 @@ def xenium_nuclei(d: Path, log) -> Path:
     with zipfile.ZipFile(src) as z:
         member = next(n for n in z.namelist() if n.endswith('nucleus_boundaries.parquet'))
         tmp = d / 'downloads' / 'xenium-nucleus_boundaries.parquet'
+        tmp.parent.mkdir(parents=True, exist_ok=True)  # a run of this case alone: nothing else made it
         tmp.write_bytes(z.read(member))
     slide = pack._slide(x, pack.pack_dir(_PACK))
     with tifffile.TiffFile(slide) as tf:

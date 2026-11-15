@@ -2780,7 +2780,13 @@ function openObjects(layerName) {
 }
 function closeObjects() { $('objs').hidden = true; $('main').classList.remove('objs'); objs.layer = null; }
 async function loadObjects(offset, { append = false, find = null } = {}) {
-  if (!objs.layer || objs.busy) return;
+  if (!objs.layer) return;
+  if (objs.busy) {  // a filter changed during a load: load again once it is done (more rows while busy: dropped)
+    if (append) return;
+    const waiting = objs.again?.waiting || [];
+    objs.again = { offset, find, waiting };
+    return new Promise((res) => waiting.push(res));
+  }
   objs.busy = true;
   try {
     const t = await api(objsUrl({ offset, limit: OBJ_PAGE, ...(find != null ? { find } : {}) }));
@@ -2790,7 +2796,11 @@ async function loadObjects(offset, { append = false, find = null } = {}) {
     renderObjects();
     return t;
   } catch (err) { toast({ kind: 'bad', title: 'Objects table', sub: err.message || String(err) }); }
-  finally { objs.busy = false; }
+  finally {
+    objs.busy = false;
+    const a = objs.again;
+    if (a) { objs.again = null; loadObjects(a.offset, { find: a.find }).then((t) => a.waiting.forEach((res) => res(t))); }
+  }
 }
 const objFmt = (v, c) => v == null ? '–' : !c.numeric ? String(v) : Number.isInteger(v) ? v.toLocaleString('en-US') : Math.abs(v) >= 1000 ? Math.round(v).toLocaleString('en-US') : Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(3);
 function renderObjects() {

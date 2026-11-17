@@ -51,6 +51,11 @@ def test_query_keeps_its_members_until_update():
     assert q([{'field': 'n', 'op': '>=', 'values': ['7']}]) == [1, 2, 3]
     assert q([{'field': 'Missing', 'op': 'missing'}]) == [1, 2, 3, 4, 5, 6, 7]
     assert q([{'field': 'Treatment', 'op': 'not in', 'values': ['siRNA']}]) == [1, 2, 3, 4]
+    # field names and values in any case, the tests' other names, one value without a list
+    assert q([{'field': 'treatment', 'op': 'equals', 'values': 'SIRNA'}]) == [5, 6, 7]
+    assert q([{'field': 'Treatment', 'op': '!=', 'values': ['sirna']}]) == q(
+        [{'field': 'Treatment', 'op': 'not in', 'values': ['siRNA']}]
+    )
 
 
 def test_order_labels_and_a_journal_page_by_rows():

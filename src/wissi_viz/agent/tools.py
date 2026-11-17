@@ -217,16 +217,25 @@ def view_image(h: Host, slide: str, bounds=None, size: int = 768, layers=None, c
 
 
 # ------------------------------------------------------------------------------------------------------ layers
-@tool('list_layers', 'The layers of a slide (cells, annotations, analysis results): name, number of objects, '
-      'classes with their colours, where they came from.', {'slide': S('string', 'Slide id or name')}, ['slide'])  # fmt: skip
+@tool('list_layers', 'The layers of a slide (cells, annotations, analysis results): name, number of objects, the '
+      'number of objects of each class, where they came from.', {'slide': S('string', 'Slide id or name')}, ['slide'])  # fmt: skip
 def list_layers(h: Host, slide: str) -> dict:
     sid = h.slide(slide)
     out = []
     for n, L in h.s.registry.layers(sid).items():
-        out.append(
-            {'name': n, 'objects': len(L), 'classes': dict(list(L.classes.items())[:24]), 'origin': L.origin or None}
-        )
+        out.append({'name': n, 'objects': len(L), 'classes': _class_counts(L), 'origin': L.origin or None})
     return {'slide': sid, 'layers': out}
+
+
+def _class_counts(L) -> dict:
+    """{class: number of objects}, the 24 largest classes."""
+    try:
+        ids = np.bincount(np.asarray(L._all_cls(), np.int64))
+        inv = {i: k for k, i in L._class_index.items()}
+    except (AttributeError, TypeError, ValueError):  # a layer kept another way: class names only
+        return dict.fromkeys(list(L.classes)[:24])
+    counts = {inv.get(i, f'class {i}'): int(c) for i, c in enumerate(ids) if c}
+    return dict(sorted(counts.items(), key=lambda kv: -kv[1])[:24])
 
 
 @tool('layer_summary', 'Counts and shares per class, per-class means of the main measurements, region areas and '
@@ -250,10 +259,10 @@ def show_layer(h: Host, slide: str, layer: str, visible: bool, **kw) -> dict:
     return {'ok': True, 'note': note.strip() or None}
 
 
-@tool('set_channels', 'Fluorescence: which channels a slide\'s panes show (names), or split the slide into a pane per '
-      'channel plus the merge, or merge it back.',
-      {'slide': S('string', 'Slide id or name'), 'show': S('array', 'Channel names to show', items={'type': 'string'}),
-       'split': S('boolean', 'true: a pane per channel + merge; false: back to one pane')}, ['slide'], ui=True)  # fmt: skip
+@tool('set_channels', 'Fluorescence slides. Split into a pane per channel plus the merge: {slide, split: true}. Back '
+      'to one pane: {slide, split: false}. Show only some channels: {slide, show: [channel names, e.g. DAPI]}.',
+      {'slide': S('string', 'Slide id or name'), 'split': S('boolean', 'true: a pane per channel + merge; false: one pane'),
+       'show': S('array', 'Channel names to show (not slide names)', items={'type': 'string'})}, ['slide'], ui=True)  # fmt: skip
 def set_channels(h: Host, slide: str, show=None, split=None) -> dict:
     sid = h.slide(slide)
     info = h.s.registry.info(sid)
@@ -262,7 +271,7 @@ def set_channels(h: Host, slide: str, show=None, split=None) -> dict:
     names = [c['name'] for c in info['channels']]
     bad = [c for c in show or [] if c not in names]
     if bad:
-        raise ValueError(f'no channel {bad[0]!r}; channels: {", ".join(names)}')
+        raise ValueError(f'no channel {bad[0]!r}; channels: {", ".join(names)} (to split into panes: split: true)')
     note = h.tell({'type': 'channels', 'slide': sid, 'show': show, 'split': split})
     return {'channels': names, 'note': note.strip() or None}
 
@@ -296,12 +305,20 @@ def run_analysis(h: Host, slide: str, analysis: str, objects: str, params=None, 
       'rules filter them like a figure query.',
       {'rules': S('array', 'Rules: {field, op: in | not in | >= | <= | has | missing, values}', items={'type': 'object'})})  # fmt: skip
 def list_views(h: Host, rules=None) -> dict:
-    vs = h.s.figure_views()
-    if rules:
-        vs = [v for v in vs if figures.matches(v, rules)]
-    return {'views': [{'id': v['id'], 'name': v['name'], 'slide': v['slide'], 'open': bool(v.get('sid')),
-                       'bounds': v['bounds'], 'fields': v['meta']} for v in vs[:200]],
-            'fields': figures.fields_of(vs)}  # fmt: skip
+    every = h.s.figure_views()
+    vs = [v for v in every if figures.matches(v, rules)] if rules else every
+    out = {'views': [{'id': v['id'], 'name': v['name'], 'slide': v['slide'], 'open': bool(v.get('sid')),
+                      'bounds': v['bounds'], 'fields': v['meta']} for v in vs[:200]],
+           'fields': figures.fields_of(vs)}  # fmt: skip
+    if rules and not vs and every:
+        vals: dict[str, set] = {}
+        for v in every:
+            for k, x in (v.get('meta') or {}).items():
+                vals.setdefault(k, set()).add(str(x))
+        out['note'] = f'no view matches; {len(every)} views; their fields and values: ' + '; '.join(
+            f'{k}: {", ".join(sorted(x)[:8])}' for k, x in list(vals.items())[:12]
+        )
+    return out
 
 
 @tool('save_view', 'Save a region of an open slide as a view (point of interest), with a name and metadata fields.',

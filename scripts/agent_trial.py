@@ -19,12 +19,12 @@ import numpy as np
 import tifffile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tests'))
-from czi_writer import write_czi  # noqa: E402
+from czi_writer import write_czi
 
-from wissi_viz.agent import llm, tools  # noqa: E402
-from wissi_viz.agent.ui import UiBus  # noqa: E402
-from wissi_viz.annotations import AnnotationLayer  # noqa: E402
-from wissi_viz.session import Session  # noqa: E402
+from wissi_viz.agent import llm, tools
+from wissi_viz.agent.ui import UiBus
+from wissi_viz.annotations import AnnotationLayer
+from wissi_viz.session import Session
 
 
 class Spy(UiBus):
@@ -128,17 +128,31 @@ def main(argv=None) -> int:
                              'tools': [f"{st['tool']}({json.dumps(st['args'])[:80]})" for st in out['steps']],
                              'errors': [st['result']['error'] for st in out['steps'] if isinstance(st['result'], dict) and 'error' in st['result']],
                              'reply': (out['reply'] or '')[:300], 'error': err})  # fmt: skip
-                print(f"{'✓' if good else '✗'} {i:2d} {sec:6.1f}s {prompt} → {[t.split('(')[0] for t in rows[-1]['tools']]}", flush=True)
+                print(
+                    f'{"✓" if good else "✗"} {i:2d} {sec:6.1f}s {prompt} → {[t.split("(")[0] for t in rows[-1]["tools"]]}',
+                    flush=True,
+                )
         finally:
             s.shutdown()
     n = sum(r['ok'] for r in rows)
-    summary = {'model': a.model, 'passed': n, 'tasks': len(rows), 'seconds': round(sum(r['seconds'] for r in rows), 1), 'rows': rows}
+    summary = {
+        'model': a.model,
+        'passed': n,
+        'tasks': len(rows),
+        'seconds': round(sum(r['seconds'] for r in rows), 1),
+        'rows': rows,
+    }
     line = f'{a.model}: {n}/{len(rows)} tasks, {summary["seconds"]:.0f} s'
     print(line)
-    print(f'::notice::{line} · ' + ' '.join(f"{r['task']}{'✓' if r['ok'] else '✗'}" for r in rows))
+    print(f'::notice::{line} · ' + ' '.join(f'{r["task"]}{"✓" if r["ok"] else "✗"}' for r in rows))
     if a.out:
         Path(a.out).write_text(json.dumps(summary, indent=1, ensure_ascii=False), encoding='utf-8')
-        md = [f'### {a.model}: {n}/{len(rows)}', '', '| # | task | ok | s | tools | reply |', '|---|---|---|---|---|---|']
+        md = [
+            f'### {a.model}: {n}/{len(rows)}',
+            '',
+            '| # | task | ok | s | tools | reply |',
+            '|---|---|---|---|---|---|',
+        ]
         md += [f"| {r['task']} | {r['prompt']} | {'✓' if r['ok'] else '✗'} | {r['seconds']} | {'; '.join(r['tools'])[:160]} | "
                f"{(r['error'] or r['reply']).replace('|', '/').replace(chr(10), ' ')[:160]} |" for r in rows]  # fmt: skip
         Path(a.out).with_suffix('.md').write_text('\n'.join(md) + '\n', encoding='utf-8')

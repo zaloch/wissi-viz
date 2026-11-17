@@ -53,7 +53,7 @@ def test_tools_read_act_and_explain_their_errors(session, tmp_path):
     sl = tools.call(h, 'list_slides', {})['slides']
     assert sl[0]['name'] == 'A1.svs' and sl[0]['mpp'] == 0.5 and sl[0]['mode'] == 'rgb'
     assert tools.call(h, 'list_layers', {'slide': 'A1'})['layers'][0] == {
-        'name': 'cells', 'objects': 30, 'classes': {'Tumour': '#ff0000', 'Immune': '#00ff00'}, 'origin': None}  # fmt: skip
+        'name': 'cells', 'objects': 30, 'classes': {'Tumour': 20, 'Immune': 10}, 'origin': None}  # fmt: skip
     summ = tools.call(h, 'layer_summary', {'slide': 'A1.svs', 'layer': 'cells'})
     assert summ['n'] == 30 if 'n' in summ else json.dumps(summ).count('Tumour') >= 1
     r = tools.call(h, 'go_to', {'slide': 'A1', 'x': 600, 'y': 450, 'width_um': 100})
@@ -71,6 +71,10 @@ def test_tools_read_act_and_explain_their_errors(session, tmp_path):
     # saved views → a figure → a file
     vs = tools.call(h, 'list_views', {'rules': [{'field': 'Region', 'op': 'in', 'values': ['Core']}]})
     assert [v['name'] for v in vs['views']] == ['Core'] and 'Score' in vs['fields']
+    vs = tools.call(h, 'list_views', {'rules': [{'field': 'region', 'op': 'equals', 'values': 'core'}]})
+    assert [v['name'] for v in vs['views']] == ['Core']  # field-name case, op synonyms, a scalar value
+    none = tools.call(h, 'list_views', {'rules': [{'field': 'Region', 'values': ['Middle']}]})
+    assert none['views'] == [] and 'Region: Core, Edge' in none['note']
     v = tools.call(
         h, 'save_view', {'slide': 'A1', 'bounds': [600, 400, 900, 600], 'name': 'Third', 'fields': {'Region': 'Core'}}
     )
@@ -96,7 +100,7 @@ def test_local_model_loop_runs_tools(session, monkeypatch):
         {'choices': [{'message': {'content': '<think>done</think>A1.svs has one layer, cells (30 objects).'}}], 'model': 'qwen3:4b'},
     ])  # fmt: skip
 
-    def fake(cfg, path, body=None, timeout=300):
+    def fake(cfg, path, body=None, timeout=900):
         seen.append(body)
         return next(replies)
 
@@ -109,6 +113,14 @@ def test_local_model_loop_runs_tools(session, monkeypatch):
     assert seen[0]['tools'][0]['function']['name'] == 'list_slides' and seen[0]['messages'][0]['role'] == 'system'
     assert seen[2]['messages'][-1]['role'] == 'tool' and 'cells' in seen[2]['messages'][-1]['content']
     assert llm.text_calls('{"name": "go_to", "arguments": {"slide": "A1"}}')[0]['function']['name'] == 'go_to'
+    names = {'go_to', 'list_layers'}
+    fn = [c['function'] for t in ('list_layers {"slide": "A1"}',
+                                  '[{"type": "function", "function": {"name": "go_to", "arguments": {"slide": "A1"}}}]')
+          for c in llm.text_calls(t, names)]  # fmt: skip
+    assert [f['name'] for f in fn] == ['list_layers', 'go_to'] and json.loads(fn[1]['arguments']) == {'slide': 'A1'}
+    echoed = '{"type": "function", "function": {"name": "go_to", "description": "x", "parameters": {"type": "object", "properties": {}}}}'
+    assert llm.text_calls(echoed, names) == [] and llm.text_calls('{"name": "fly", "arguments": {}}', names) == []
+    assert llm.text_calls('There are 3 slides.', names) == []
     monkeypatch.setattr(llm, '_post', lambda *a, **k: (_ for _ in ()).throw(ConnectionError('refused')))
     assert llm.status(dict(llm.DEFAULT))['ok'] is False
 

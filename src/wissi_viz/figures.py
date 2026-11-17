@@ -144,9 +144,13 @@ def _is_int(v: Any) -> bool:
 def field_value(view: dict, field: str) -> Any:
     """A view's value for a field: ``Name`` (the view's name), ``Slide`` (its slide's file name), else its metadata
     (the slide's fields, overridden by the view's own)."""
-    if field == 'Name':
+    if str(field).lower() == 'name':
         return view.get('name') or view.get('meta', {}).get('Slide') or f'View {view.get("id")}'
-    return (view.get('meta') or {}).get(field)
+    meta = view.get('meta') or {}
+    if field in meta:
+        return meta[field]
+    low = str(field).strip().lower()  # 'region' for 'Region': fields typed by people (or models) in another case
+    return next((v for k, v in meta.items() if str(k).strip().lower() == low), None)
 
 
 def fields_of(views: Iterable[dict]) -> list[str]:
@@ -181,12 +185,20 @@ def _sort_key(v: Any) -> tuple:
     )
 
 
+#: the tests of a rule, and the words people (and models) use for them
+_OPS = {'in': 'in', 'is': 'in', '=': 'in', '==': 'in', 'equals': 'in', 'eq': 'in', 'is any of': 'in', 'one of': 'in',
+        'not in': 'not in', 'is not': 'not in', '!=': 'not in', 'not': 'not in', 'ne': 'not in',
+        '>=': '>=', 'ge': '>=', 'gte': '>=', 'at least': '>=', '<=': '<=', 'le': '<=', 'lte': '<=', 'at most': '<=',
+        'has': 'has', 'exists': 'has', 'is set': 'has', 'missing': 'missing', 'is empty': 'missing'}  # fmt: skip
+
+
 def matches(view: dict, rules: list[dict]) -> bool:
     """Whether a view passes every rule: {'field', 'op': in | not in | >= | <= | has | missing, 'values'}."""
     for q in rules:
         v = field_value(view, q['field'])
-        op = q.get('op') or 'in'
-        vals = q.get('values') or []
+        op = _OPS.get(str(q.get('op') or 'in').strip().lower(), 'in')
+        vals = q.get('values')
+        vals = vals if isinstance(vals, list) else [] if vals is None else [vals]
         if op == 'has':
             ok = v is not None and v != ''
         elif op == 'missing':
@@ -195,7 +207,8 @@ def matches(view: dict, rules: list[dict]) -> bool:
             n, t = _num(v), _num(vals[0] if vals else None)
             ok = n is not None and t is not None and (n >= t if op == '>=' else n <= t)
         else:
-            inside = str(v) in {str(x) for x in vals} if v is not None else ('' in vals or None in vals)
+            want = {str(x).strip().lower() for x in vals}
+            inside = str(v).strip().lower() in want if v is not None else ('' in want or 'none' in want)
             ok = inside if op == 'in' else not inside
         if not ok:
             return False

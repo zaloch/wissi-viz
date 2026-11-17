@@ -55,7 +55,7 @@ def save_settings(d: dict) -> dict:
     return cur
 
 
-def _post(cfg: dict, path: str, body: dict | None = None, timeout: float = 300) -> dict:
+def _post(cfg: dict, path: str, body: dict | None = None, timeout: float = 900) -> dict:
     url = cfg['base_url'].rstrip('/') + path
     headers = {'Content-Type': 'application/json'}
     if cfg.get('api_key'):
@@ -91,24 +91,41 @@ _THINK = re.compile(r'<think>.*?</think>\s*', re.S)
 _CALL = re.compile(r'<tool_call>\s*(\{.*?\})\s*</tool_call>', re.S)
 
 
-def text_calls(content: str) -> list[dict]:
-    """Tool calls a model wrote as text: ``<tool_call>{…}</tool_call>`` (Qwen), or a bare JSON object."""
-    found = [m.group(1) for m in _CALL.finditer(content or '')]
+_NAMED = re.compile(r'^([a-z_]+)\s*(\{.*\})$', re.S)
+
+
+def text_calls(content: str, names=None) -> list[dict]:
+    """Tool calls a model wrote as text: ``<tool_call>{…}</tool_call>`` (Qwen); a JSON object, or a list of them,
+    as {name, arguments} or {type: function, function: {name, arguments}}; or ``tool_name {…}``. ``names``: the
+    tools there are (others are ignored). A tool definition echoed back (parameters holding a schema) is no call."""
     s = (content or '').strip()
-    if not found and s.startswith('{') and s.endswith('}'):
-        found = [s]
-    out = []
-    for i, raw in enumerate(found):
+    items: list = []
+    for raw in [m.group(1) for m in _CALL.finditer(s)] or [s]:
+        named = _NAMED.match(raw)
         try:
-            d = json.loads(raw)
+            d = json.loads(named.group(2) if named else raw) if raw[:1] in '{[' or named else None
         except ValueError:
             continue
-        name = d.get('name') or d.get('function') or d.get('tool')
-        args = d.get('arguments') or d.get('parameters') or d.get('args') or {}
-        if isinstance(name, str):
-            out.append(
-                {'id': f'text{i}', 'type': 'function', 'function': {'name': name, 'arguments': json.dumps(args)}}
-            )
+        if named:
+            d = {'name': named.group(1), 'arguments': d}
+        items += d if isinstance(d, list) else [d]
+    out = []
+    for d in items:
+        if not isinstance(d, dict):
+            continue
+        if isinstance(d.get('function'), dict):
+            d = d['function']
+        name, args = d.get('name') or d.get('tool') or d.get('function'), d.get('arguments', d.get('args'))
+        p = d.get('parameters')
+        if args is None and isinstance(p, dict) and not ('type' in p and 'properties' in p):
+            args = p
+        if not isinstance(name, str) or (names is not None and name not in names):
+            continue
+        if args is None and 'description' in d:  # a definition, not a call
+            continue
+        args = args or {}
+        out.append({'id': f'text{len(out)}', 'type': 'function',
+                    'function': {'name': name, 'arguments': args if isinstance(args, str) else json.dumps(args)}})  # fmt: skip
     return out
 
 
@@ -132,12 +149,15 @@ def chat(
     ]
     steps: list[dict] = []
     tools = schemas()
+    names = {t['function']['name'] for t in tools}
+    if str(cfg['model']).lower().startswith('qwen3'):  # its thinking mode takes minutes per step on a CPU
+        msgs[0]['content'] += ' /no_think'
     for _ in range(int(cfg.get('max_steps') or 8)):
         r = _post(cfg, '/chat/completions', {'model': cfg['model'], 'messages': msgs, 'tools': tools,
                                              'tool_choice': 'auto', 'temperature': cfg.get('temperature', 0.2)})  # fmt: skip
         m = (r.get('choices') or [{}])[0].get('message') or {}
         content = _THINK.sub('', m.get('content') or '')
-        calls = m.get('tool_calls') or text_calls(content)
+        calls = m.get('tool_calls') or text_calls(content, names)
         if not calls:
             return {'reply': content.strip(), 'steps': steps, 'model': r.get('model') or cfg['model']}
         msgs.append({'role': 'assistant', 'content': content if m.get('tool_calls') else '', 'tool_calls': calls})

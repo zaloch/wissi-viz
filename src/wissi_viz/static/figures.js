@@ -121,6 +121,7 @@ const R = () => F.cur.recipe;
 function change(fn, { layout = true } = {}) {
   if (!F.cur) return;
   fn(F.cur.recipe);
+  F.ver = (F.ver || 0) + 1;   // a layout asked for before this change is stale
   F.dirty = true;
   clearTimeout(F.saveTimer);
   F.saveTimer = setTimeout(flushSave, 700);
@@ -142,7 +143,7 @@ function relayout(delay = 120) {
 async function doLayout() {
   if (!F.cur) return;
   const seq = ++F.seq;
-  const cur = F.cur;
+  const cur = F.cur, ver = F.ver;
   let d;
   try {
     d = await X.http(`${X.BASE}/app/figures/layout`, { recipe: cur.recipe, name: cur.name });
@@ -150,7 +151,7 @@ async function doLayout() {
     if (seq === F.seq) { $('fg-pages').replaceChildren(X.h('div', { class: 'panel-note warn' }, `Layout failed: ${e.message}`)); }
     return;
   }
-  if (seq !== F.seq || cur !== F.cur) return;   // a newer layout was asked for meanwhile
+  if (seq !== F.seq || cur !== F.cur || ver !== F.ver) return;   // a newer layout was (or will be) asked for
   F.data = d;
   if (d.opened && d.slides) X.onResult({ slides: d.slides });
   const r = cur.recipe;

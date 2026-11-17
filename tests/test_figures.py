@@ -7,6 +7,7 @@ import io
 import json
 import shutil
 import zipfile
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -50,6 +51,11 @@ def test_query_keeps_its_members_until_update():
     assert q([{'field': 'n', 'op': '>=', 'values': ['7']}]) == [1, 2, 3]
     assert q([{'field': 'Missing', 'op': 'missing'}]) == [1, 2, 3, 4, 5, 6, 7]
     assert q([{'field': 'Treatment', 'op': 'not in', 'values': ['siRNA']}]) == [1, 2, 3, 4]
+    # field names and values in any case, the tests' other names, one value without a list
+    assert q([{'field': 'treatment', 'op': 'equals', 'values': 'SIRNA'}]) == [5, 6, 7]
+    assert q([{'field': 'Treatment', 'op': '!=', 'values': ['sirna']}]) == q(
+        [{'field': 'Treatment', 'op': 'not in', 'values': ['siRNA']}]
+    )
 
 
 def test_order_labels_and_a_journal_page_by_rows():
@@ -382,7 +388,7 @@ def test_figures_api(slides, tmp_path):
     r = c.post(
         '/app/views-relink', json={'old': str(slides / 'B2.svs'), 'new': str(slides / 'moved' / 'B2.svs')}, headers=h
     )
-    assert r.json()['relinked'] == 1 and s.store.view(3)['slide'].endswith('moved/B2.svs')
+    assert r.json()['relinked'] == 1 and Path(s.store.view(3)['slide']) == slides / 'moved' / 'B2.svs'
     assert c.post('/app/views-relink', json={'old': 'x', 'new': str(slides / 'nope.svs')}, headers=h).status_code == 400
     s.shutdown()
 

@@ -41,8 +41,8 @@ wissi-viz-app                                 # Agent (header) → ask
 
 or the container: `docker compose -f deploy/agent/compose.yaml up -d` (Ollama, MIT; pulls `qwen3:4b`).
 *Model…* in the panel points at any OpenAI-compatible server (llama.cpp's `llama-server`, LM Studio, vLLM) and
-model. Candidates, all with permissive licences: Qwen3 4B (Apache-2.0, default), Phi-4-mini 3.8B (MIT), Granite 4
-Micro 3B (Apache-2.0); below about 4 B parameters tool calling gets unreliable (see the trial).
+model. Candidates, all with permissive licences: Qwen3 4B (Apache-2.0, default), Granite 4 Micro 3B (Apache-2.0,
+faster on a CPU); smaller models miss more (see the trial).
 
 ## Claude
 
@@ -74,4 +74,16 @@ keep it private, and use `--key` for opening files.
 `scripts/agent_trial.py --model qwen3:4b` builds a test session (two brightfield slides with cells, a fluorescence
 slide, saved views) and asks ten things a person might ask — count slides, list layers, count a class, show a slide,
 go to a region, hide a layer, filter saved views, make a figure, split channels, save a view — each checked by what
-the model did and answered. `.github/workflows/agent-trial.yml` runs it for several models on Ollama (CPU).
+the model did and answered. `.github/workflows/agent-trial.yml` runs it for several models on Ollama (CPU, a
+GitHub runner: 4 cores, no GPU).
+
+First run, before the tool fixes it led to (field names in any case, `equals` and other names for the tests,
+per-class counts in `list_layers`, a plainer `set_channels`, Qwen3 without its thinking mode):
+
+| Model | Licence | Tasks | Time (10 tasks, CPU) | Notes |
+|---|---|---|---|---|
+| Qwen3 4B | Apache-2.0 | 7/10 | 50 min | thinking mode: minutes per step |
+| Granite 4 Micro 3B | Apache-2.0 | 7/10 | 7 min | passed `show` for a split |
+| Qwen3 1.7B | Apache-2.0 | 5/10 | 14 min | hid instead of showing; wrong rectangles |
+| Granite 4 1B | Apache-2.0 | 5/10 | 2 min | |
+| Phi-4-mini 3.8B | MIT | 0/10 | 4 min | writes calls Ollama does not parse; echoes the tools |

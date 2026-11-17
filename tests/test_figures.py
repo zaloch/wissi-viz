@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
 import zipfile
 
 import numpy as np
@@ -377,7 +378,7 @@ def test_figures_api(slides, tmp_path):
     assert r.status_code == 200, r.text
     # relink: the views of a slide that moved follow it
     (slides / 'moved').mkdir()
-    (slides / 'B2.svs').rename(slides / 'moved' / 'B2.svs')
+    shutil.copy(slides / 'B2.svs', slides / 'moved' / 'B2.svs')  # a copy: Windows does not move a file that is open
     r = c.post(
         '/app/views-relink', json={'old': str(slides / 'B2.svs'), 'new': str(slides / 'moved' / 'B2.svs')}, headers=h
     )

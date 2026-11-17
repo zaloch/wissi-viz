@@ -7,6 +7,7 @@ import io
 import json
 import shutil
 import zipfile
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -382,7 +383,7 @@ def test_figures_api(slides, tmp_path):
     r = c.post(
         '/app/views-relink', json={'old': str(slides / 'B2.svs'), 'new': str(slides / 'moved' / 'B2.svs')}, headers=h
     )
-    assert r.json()['relinked'] == 1 and s.store.view(3)['slide'].endswith('moved/B2.svs')
+    assert r.json()['relinked'] == 1 and Path(s.store.view(3)['slide']) == slides / 'moved' / 'B2.svs'
     assert c.post('/app/views-relink', json={'old': 'x', 'new': str(slides / 'nope.svs')}, headers=h).status_code == 400
     s.shutdown()
 

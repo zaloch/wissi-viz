@@ -7,6 +7,7 @@ check here."""
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
@@ -734,6 +735,21 @@ def _fluorescence(w, data, s):
     w.check('#i-scenes a:has-text("Scene 2")', '() => document.getElementById("i-scope").value === "scene:1"')
     w.cover('#i-scenes a', '#disp-body .solo-b')  # every scene link / channel's A and S work like the ones checked
     w.audit('image tab (fluorescence)')
+    # the pane's channel chips (inside the viewer): one channel off in this pane, split into a pane per channel, merge
+    chip = f'(i) => ({G})().panes[0].el.querySelectorAll(".chans button")[i]'
+    pg.evaluate(f'() => ({chip})(1).click()')
+    pg.wait_for_function(f'() => !({ch})(1).visible && ({ch})(0).visible')
+    pg.evaluate(f'() => ({chip})(1).click()')
+    n_before = pg.evaluate(f'() => ({G})().panes.length')
+    pg.evaluate(f'() => ({G})().panes[0].el.querySelector(".chans .split").click()')
+    pg.wait_for_function(
+        f'() => ({G})().panes.length === 4 && ({G})().panes[1].channels?.every((c, i) => c.visible === (i === 1))'
+        f' && ({G})().panes[3].channels?.every((c) => c.visible)'
+    )
+    pg.evaluate(f'() => ({G})().panes[3].el.querySelector(".chans .split").click()')
+    pg.wait_for_function(
+        f'() => ({G})().panes.length === {n_before} && ({G})().panes[0].channels?.every((c) => c.visible)'
+    )
 
 
 def _slide_list(w, data, s):
@@ -907,4 +923,158 @@ def _saved_views(w, data, s):
         '.menu button:has-text("Delete view")',
         f'() => document.querySelectorAll("#slides li[draggable]").length === {n - 1}',
     )
+    _figures(w, data, s)
     w.check('#side-mode [data-mode=slides]', '() => document.getElementById("v-save").hidden')
+
+
+FIGS = '() => !document.getElementById("figs").hidden'
+WINS = '(k) => document.querySelectorAll("#fg-pages .fwin.k-" + k).length'
+
+
+def _figures(w, data, s):
+    """The figure composer: source, layout, template, channels, windows by hand, the chart, export."""
+    pg = w.pg
+    n = len(s.store.views())
+    w.check('#s-figure', f'() => !document.getElementById("figs").hidden && ({WINS})("view") === {n}')
+    w.audit('figures')
+    w.check('#fg-none', f'() => ({WINS})("view") === 0')
+    w.check('#fg-all', f'() => ({WINS})("view") === {n}')
+    w.check(
+        '#fg-fromlist',
+        '() => [...document.querySelectorAll(".toast b")].some((b) => b.textContent === "No views checked")',
+    )
+    w.check('#fg-mode button[data-v=field]', '() => document.getElementById("fg-rows")')
+    pg.select_option('#fg-rows', 'Region')
+    pg.select_option('#fg-order', 'Name')
+    w.check('#fg-desc', '() => document.getElementById("fg-desc")?.textContent === "↓"')
+    w.check('#fg-mode button[data-v=grid]', '() => !document.getElementById("fg-rows")')
+    w.check('#fg-chart', f'() => ({WINS})("chart") === 1')
+    w.check(
+        '#fg-bg button[data-v=black]',
+        '() => document.querySelector("#fg-pages .fpage").style.background === "rgb(0, 0, 0)"',
+    )
+    w.check(
+        '#fg-bg button[data-v=white]',
+        '() => document.querySelector("#fg-pages .fpage").style.background === "rgb(255, 255, 255)"',
+    )
+    w.check(
+        '#fg-bg button[data-v=auto]', '() => document.querySelector("#fg-bg [aria-pressed=true]")?.dataset.v === "auto"'
+    )
+    w.check('#fg-letters button[data-v=false]', '() => !document.querySelector("#fg-pages .flet")')
+    w.check('#fg-letters button[data-v=true]', '() => document.querySelector("#fg-pages .flet")')
+    w.check(
+        '#fg-insp .vchip:has-text("Region")', '() => document.getElementById("fg-labels").value.includes("{Region}")'
+    )
+    w.audit('figure settings')
+    # windows by hand: a text window, an empty one, a view's window changed, moved and reset
+    w.check('#fg-add-text', f'() => ({WINS})("text") === 1 && document.getElementById("fg-text")')
+    pg.fill('#fg-text', 'Note')
+    pg.dispatch_event('#fg-text', 'change')
+    pg.wait_for_function('() => /Note/.test(document.getElementById("fg-pages").textContent)')
+    w.audit('text window')
+    w.check('#fg-win-reset', f'() => ({WINS})("text") === 0')
+    w.check('#fg-add-empty', f'() => ({WINS})("empty") === 1')
+    w.check('#fg-win-close', '() => !document.getElementById("fg-shows")')
+    w.check('#fg-pages .fwin.k-view', '() => document.getElementById("fg-shows")')
+    w.audit('view window')
+    pg.keyboard.press('ArrowRight')
+    pg.wait_for_function('() => document.querySelector("#fg-pages .fwin.edited.k-view")')
+    w.check('#fg-win-reset', '() => !document.querySelector("#fg-pages .fwin.edited.k-view")')
+    w.check('#fg-win-close', '() => document.getElementById("fg-reset-all")')
+    w.check('#fg-reset-all', f'() => ({WINS})("empty") === 0')
+    w.check('#fg-pages .fwin.k-chart', '() => document.getElementById("fg-ckind")')
+    w.audit('chart window')
+    w.check(
+        '#fg-ckind button[data-v=bar]',
+        '() => document.querySelector("#fg-ckind [aria-pressed=true]")?.dataset.v === "bar"',
+    )
+    w.check('#fg-chart-remove', f'() => ({WINS})("chart") === 0')
+    # fluorescence views: split into channels, grey, without the merge, a channel off, inline chips on a window
+    w.check('#fg-chmode button[data-v=split]', '() => document.querySelector("#fg-pages .fcol")')
+    w.audit('channels split')
+    w.check('#fg-chgray', '() => document.getElementById("fg-chgray").getAttribute("aria-pressed") === "true"')
+    w.check(
+        '#fg-chmerge', '() => ![...document.querySelectorAll("#fg-pages .fcol")].some((c) => c.textContent === "Merge")'
+    )
+    k = pg.evaluate('() => document.querySelectorAll("#fg-pages .fcol").length')
+    w.check('#fg-chans .chchip', f'() => document.querySelectorAll("#fg-pages .fcol").length === {k - 1}')
+    pg.evaluate(
+        '() => [...document.querySelectorAll("#fg-pages .fwin.k-view")].find((e) => /fl/.test(e.querySelector("img")?.src || "") || e.querySelector("img[src*=channels]"))?.dispatchEvent(new PointerEvent("pointerdown", {bubbles: true, button: 0}))'
+    )
+    pg.wait_for_selector('#fg-pages .fchips .chchip')
+    w.check('#fg-pages .fchips .chchip', '() => document.querySelector("#fg-pages .fwin.edited")')
+    w.check('#fg-chmode button[data-v=merge]', '() => !document.querySelector("#fg-pages .fcol")')
+    w.cover('#fg-chans .chchip', '.chchip')
+    # a query: a rule, its values; a new matching view waits for Update
+    w.check('#fg-srckind button[data-v=query]', '() => document.getElementById("fg-addrule")')
+    w.check('#fg-addrule', '() => document.querySelector(".rule")')
+    w.audit('query')
+    w.check('.rule .vchip', '() => document.querySelector(".rule .vchip[aria-pressed=true]")')
+    w.check('.rule .rm', '() => !document.querySelector(".rule")')
+    sid = s.slides()[0]['id']
+    s.add_view(sid, [10, 10, 300, 300], 'Late view', meta={'Region': 'Core'})
+    w.check('#fg-bg button[data-v=black]', '() => document.getElementById("fg-update")')
+    w.check('#fg-update', f'() => !document.getElementById("fg-update") && ({WINS})("view") === {n + 1}')
+    # templates: slides, then a PowerPoint template and its layouts (learned from its slides too)
+    w.check(
+        '#fg-template button[data-v=ppt]',
+        '() => document.getElementById("fg-perpage") && document.querySelector("#fg-pages .ftitle")',
+    )
+    w.audit('presentation')
+    w.check('#fg-template button[data-v=pptx]', '() => document.getElementById("fg-tpl-add")')
+    tpl = _pptx_template(data)
+    with pg.expect_file_chooser() as fc:
+        w.check('#fg-tpl-add', None)
+    fc.value.set_files(str(tpl))
+    pg.wait_for_function('() => document.querySelectorAll("#fg-layouts .lay").length > 3')
+    w.audit('template')
+    w.check(
+        '#fg-layouts .lay:has-text("Two Content")',
+        '() => document.querySelector("#fg-layouts .lay[aria-pressed=true]")?.textContent.includes("Two Content")',
+    )
+    w.cover('#fg-layouts .lay')
+    w.check('#fg-template button[data-v=pub]', '() => document.getElementById("fg-page")')
+    w.cover('#fg-template button', '#fg-mode button', '#fg-bg button', '#fg-srckind button', '#fg-letters button', '#fg-ckind button',
+            '#fg-chmode button', '#fg-fmt button', '.vchip', '#fg-pages .fwin')  # fmt: skip
+    # export: a picture, then cancel
+    w.check('#fg-export-open', '() => !document.getElementById("fg-export").hidden')
+    w.audit('export')
+    w.check(
+        '#fg-fmt button[data-v=png]', '() => document.querySelector("#fg-fmt [aria-pressed=true]")?.dataset.v === "png"'
+    )
+    with pg.expect_download(timeout=120000) as dl:
+        w.check('#fg-export-go', None)
+    assert dl.value.suggested_filename.endswith('.zip')  # the picture, the recipe snapshot
+    w.check('#fg-export-open', '() => !document.getElementById("fg-export").hidden')
+    w.check('#fg-export-cancel', '() => document.getElementById("fg-export").hidden')
+    # adjust a view in the viewer, then back
+    w.check('#fg-pages .fwin.k-view', '() => document.getElementById("fg-adjust")')
+    w.check('#fg-adjust', '() => document.getElementById("figs").hidden')
+    w.check('.toast button:has-text("Update view")', FIGS)
+    # figures: new, delete; close and open again
+    k = len(s.store.figures())
+    w.check('#fg-new', f'() => document.querySelectorAll("#fg-figure option").length === {k + 1}')
+    pg.once('dialog', lambda d: d.accept())
+    w.check('#fg-delete', f'() => document.querySelectorAll("#fg-figure option").length === {k}')
+    w.check('#fg-close', '() => document.getElementById("figs").hidden')
+    w.check('#b-figs', FIGS)
+    w.check('#b-figs', '() => document.getElementById("figs").hidden')
+
+
+def _pptx_template(data):
+    import pptx
+    from PIL import Image
+    from pptx.util import Mm
+
+    p = data / 'lab talk.pptx'
+    prs = pptx.Presentation()
+    prs.slide_width, prs.slide_height = Mm(338.667), Mm(190.5)
+    buf = io.BytesIO()
+    Image.new('RGB', (40, 30), (200, 50, 50)).save(buf, 'PNG')
+    sl = prs.slides.add_slide(prs.slide_layouts[5])
+    for r in range(2):
+        for c in range(3):
+            buf.seek(0)
+            sl.shapes.add_picture(buf, Mm(20 + c * 100), Mm(50 + r * 65), Mm(90), Mm(60))
+    prs.save(p)
+    return p

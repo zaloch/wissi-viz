@@ -46,6 +46,7 @@ uv add wissi-viz                      # minimal: SVS/TIFF/OME-TIFF/NDPI + CZI vi
 uv tool install "wissi-viz[desktop]"  # the standalone desktop app (below)
 # extras: [analysis] scipy/shapely/scikit-image/pandas · [io] pyarrow/anndata · [slideio] VSI/ZVI/DICOM/SCN/AFI
 #         [nicegui] · [server] uvicorn · [remote] httpx · [desktop] pywebview · [bench] playwright/hypercorn/cryptography
+#         [figures] matplotlib/python-pptx (figure export: PNG, TIFF, PDF, SVG, PowerPoint)
 #         [lgpl] OpenSlide + libCZI (opt-in, LGPL)
 ```
 
@@ -60,6 +61,13 @@ wissi-viz desktop --install-shortcut       # Start menu + desktop (Windows), ~/A
 ```
 
 It runs the tile server in-process on 127.0.0.1 and shows it with pywebview: WebView2 on Windows, WKWebView on macOS, WebKitGTK or Qt on Linux (Linux needs GTK or Qt bindings installed separately; without them it opens a Chrome/Edge app window). Details: [docs/INTEGRATION.md §12](INTEGRATION.md#12-desktop-app-path-f).
+
+**Figures.** *Figures* in the app's header lays saved views out for a paper (85 / 180 mm), a talk (16:9 slides) or
+a PowerPoint template you add (its layouts, and arrangements learned from its slides): rows by any field, labels
+from fields, scale bars, a chart window, fluorescence split into channels plus the merge on a black page. The figure
+is a recipe of views, not pixels: change a view or its fields and the figure follows; a query's new matches wait
+for *Update*. Export PNG, TIFF, PDF, SVG or PPTX with the recipe snapshot and the chart's data
+([INTEGRATION.md §12](INTEGRATION.md#12-desktop-app-path-f)).
 
 > **Integrating into an app?** [docs/INTEGRATION.md](INTEGRATION.md) covers every option: the NiceGUI element, a raw `<wissi-viz>` tag, mounting on any ASGI app, a separate tile server behind React, Vue, Streamlit, Dash or Django, and an iframe. It also covers auth, Docker and proxies, and how to wire a vendor tile API. **Before go-live:**
 > - `scripts/wissi_probe.py` checks a connector (HALO Link, PathCore, any tile API) or a deployment in one command, under a hard API-call cap. It smoke-tests the API, sweeps concurrency, runs 1–16-pane viewer sessions, and writes recommended settings ([§10](INTEGRATION.md#10-probing-an-integration-one-command)).

@@ -11,27 +11,35 @@ Who may open what:
 
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 import logging
 import os
+import re
 import secrets
 import threading
+import zipfile
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import anyio
+import numpy as np
 from fastapi import HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse, Response
+from PIL import Image
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.requests import Request  # module level: FastAPI resolves the string annotations here
 
-from . import annio, slidemeta
+from . import annio, figures, slidemeta
 from ._compat import user_dir
 from ._version import __version__
 from .annotations import AnnotationLayer
 from .connectors import RemoteConnection, image_entries, open_connection
 from .objects import cached_object_layer
+from .regions import region_rgb
 from .registry import SLIDE_EXTS, SlideRegistry
 from .server import app_page, create_app
 from .store import Store
@@ -126,6 +134,8 @@ class Session:
         self.store = Store(user_dir('config') / 'wissi.db' if remember else ':memory:')
         self._auto_meta: dict[str, dict] = {}
         self._matched: tuple[tuple, list[dict]] | None = None
+        self._fig_objects: dict[tuple, tuple] = {}
+        self._template_info: dict[str, dict] = {}
         if remember:
             try:
                 for t in json.loads(self._meta_file.read_text(encoding='utf-8')):
@@ -489,6 +499,222 @@ class Session:
                 errors.append(f'{p.name}: {e}')
         return {**self.saved_views(), 'added': added, 'errors': errors[:50]}
 
+    # -- figures: recipes laid out (wissi_viz.figures), exported (figexport, pptxio), PowerPoint templates
+    def figure_views(self) -> list[dict]:
+        """Every saved view for a figure: its fields (the slide's, then the view's own, plus ``Slide``), and, when
+        its slide is open, ``sid``, ``mpp`` and ``fluorescence``."""
+        slides = {s['id']: s for s in self.slides()}
+        out = []
+        for v in self.saved_views()['views']:
+            sid = v.get('sid')
+            name = Path(str(v['slide'])).name if v.get('slide') else ''
+            meta = {**(slides[sid]['meta'] if sid in slides else {}), 'Slide': name, **(v.get('meta') or {})}
+            item = {**v, 'meta': meta, 'mpp': None, 'fluorescence': None}
+            if sid:
+                try:
+                    info = self.registry.get(sid)[1].info
+                    item['mpp'] = (info.mpp or (None,))[0]
+                    item['fluorescence'] = info.mode != 'rgb'
+                    if item['fluorescence']:
+                        item['channels'] = [{'name': c.name, 'color': c.color} for c in info.channels]
+                except Exception:  # noqa: BLE001  (an unreadable slide: no size, no scale bar)
+                    pass
+            out.append(item)
+        return out
+
+    def _objects(self, sid: str, layer: str):
+        """Centroids and classes of an open slide's layer (cached per layer version)."""
+        try:
+            L = self.registry.layer(sid, layer)
+        except KeyError:
+            return None
+        key = (sid, layer)
+        hit = self._fig_objects.get(key)
+        if hit is not None and hit[0] == L.version:
+            return hit[1]
+        F = annio.from_layer(L)
+        c = F.centroid()
+        obj = type('Objects', (), {})()
+        obj.x, obj.y, obj.classes = c[:, 0], c[:, 1], F.class_of()
+        self._fig_objects[key] = (L.version, obj)
+        return obj
+
+    def figure_layout(self, recipe: dict | None, name: str = '', *, open_slides: bool = True) -> dict:
+        """A figure's pages and what goes with them: the views it can use (``views``, ``fields``, ``values``), its
+        members and what an Update would change, the chart's data and the template. Slides of its views that are
+        not open are opened (when this session may open them)."""
+        r = figures.normalize(recipe)
+        views = self.figure_views()
+        sel = figures.select(r, views)
+        opened = False
+        closed = sorted({str(v['slide']) for v in sel['members'] if not v.get('sid') and v.get('slide')})
+        if closed and open_slides and self.can_open:
+            paths = [p for p in closed if Path(p).exists() and self.allowed(p)]
+            if paths:
+                opened = bool(self.open(paths)['opened'])
+                views = self.figure_views()
+                sel = figures.select(r, views)
+        tinfo = None
+        if r['template'] == 'pptx' and (r['pptx'] or {}).get('id'):
+            try:
+                tinfo = self.template_info(r['pptx']['id'])
+            except KeyError:
+                tinfo = None
+        L = figures.layout(r, sel['members'], name=name, template=tinfo)
+        series = None
+        if r['chart']:
+            vals = figures.measure_values(r['chart'], sel['members'], self._objects)
+            series = figures.chart_series(r, sel['members'], vals, dark=L['dark'])
+        fields = figures.fields_of(views)
+        values = {}
+        for f in fields:
+            seen: dict[str, None] = {}
+            for v in views:
+                x = figures.field_value(v, f)
+                if x is not None and x != '':
+                    seen[str(x)] = None
+                if len(seen) >= 200:
+                    break
+            values[f] = sorted(seen, key=figures._sort_key)
+        layers: dict[str, set] = {}
+        for sid in {v['sid'] for v in sel['members'] if v.get('sid')}:
+            for n, lay in self.registry.layers(sid).items():
+                layers.setdefault(n, set()).update(lay.classes)
+        return {**L, 'members': sel['ids'], 'pending': sel['pending'], 'missing': sel['missing'],
+                'closed': [str(v['slide']) for v in sel['members'] if not v.get('sid')],
+                'views': [{'id': v['id'], 'name': v['name'], 'sid': v.get('sid'), 'slide': v['slide'],
+                           'bounds': v['bounds'], 'meta': v['meta'], 'fluorescence': v['fluorescence'],
+                           'channels': v.get('channels')} for v in views],
+                'fields': fields, 'values': values, 'series': series, 'template': tinfo,
+                'layers': [{'name': n, 'classes': sorted(c)} for n, c in sorted(layers.items())],
+                'opened': opened, 'slides': self.slides() if opened else None}  # fmt: skip
+
+    def figure_export(
+        self, recipe: dict | None, name: str = 'Figure', fmt: str = 'png', dpi: int = 300, *,
+        snapshot: bool = False, data: bool = False,
+    ) -> tuple[bytes, str, str]:  # fmt: skip
+        """The figure as a file: (bytes, file name, media type). PNG / TIFF / SVG pages, one PDF, or one .pptx; a
+        zip when there are several pages, or with the recipe snapshot / the chart's data beside it."""
+        try:
+            from . import figexport
+        except ImportError as e:
+            raise ImportError('figure export needs the figures extra: pip install "wissi-viz[figures]"') from e
+        if fmt not in figexport.FORMATS:
+            raise ValueError(f'format: {", ".join(figexport.FORMATS)}')
+        dpi = max(72, min(int(dpi or 300), 1200))
+        r = figures.normalize(recipe)
+        views = self.figure_views()
+        sel = figures.select(r, views)
+        tinfo = None
+        if r['template'] == 'pptx' and (r['pptx'] or {}).get('id'):
+            tinfo = self.template_info(r['pptx']['id'])
+        L = figures.layout(r, sel['members'], name=name, template=tinfo)
+        series = None
+        if r['chart']:
+            vals = figures.measure_values(r['chart'], sel['members'], self._objects)
+            series = figures.chart_series(r, sel['members'], vals, dark=L['dark'])
+
+        def picture(w: dict, pw: int, ph: int):
+            sid = w.get('sid')
+            if not sid:
+                return np.full((ph, pw, 3), 0 if w.get('fluorescence') else 255, np.uint8)
+            e, _ = self.registry.get(sid)
+            return region_rgb(e.source, w['bounds'], (pw, ph), e.windows, w.get('channels'), bool(w.get('gray')))
+
+        stem = re.sub(r'[\\/:*?"<>|]+', '_', name or 'Figure').strip() or 'Figure'
+        if fmt == 'pptx':
+            from . import pptxio
+
+            def jpeg(w: dict, pw: int, ph: int) -> bytes:
+                buf = io.BytesIO()
+                Image.fromarray(picture(w, pw, ph)).save(buf, 'JPEG', quality=90)
+                return buf.getvalue()
+
+            ink = '#ffffff' if L['dark'] else '#111111'
+            chart = (lambda w, pw, ph: figexport.chart_png(series, pw, ph, ink=ink, font=L['font'],
+                                                           fonts=(tinfo or {}).get('fonts'))) if series else None  # fmt: skip
+            tpath = self._template_path(r['pptx']['id']) if tinfo else None
+            files = [pptxio.write_pptx(L, jpeg, chart, template=tpath, info=tinfo,
+                                       layout_name=(r['pptx'] or {}).get('layout'), dpi=min(dpi, 300))]  # fmt: skip
+        else:
+            files = figexport.render(L, picture, fmt, dpi, series, (tinfo or {}).get('fonts'))
+        snap = figexport.snapshot(name, r, sel['members']) if snapshot else None
+        return figexport.bundle(stem, fmt, files, snap=snap, series=series if data else None)
+
+    def _templates_dir(self) -> Path:
+        d = (user_dir('config') if self.remember else self.cache_dir / 'session-templates') / 'templates'
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def templates(self) -> list[dict]:
+        """The PowerPoint templates added: [{'id', 'name'}], newest first."""
+        try:
+            items = json.loads((self._templates_dir() / 'templates.json').read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return []
+        return [t for t in items if isinstance(t, dict) and (self._templates_dir() / f'{t.get("id")}.pptx').exists()]
+
+    def _template_path(self, tid: str) -> Path:
+        if not re.fullmatch(r'[0-9a-f]{8,40}', str(tid)):
+            raise KeyError(f'no template {tid}')
+        p = self._templates_dir() / f'{tid}.pptx'
+        if not p.exists():
+            raise KeyError(f'no template {tid}')
+        return p
+
+    def template_info(self, tid: str) -> dict:
+        """A template's description (:func:`wissi_viz.pptxio.read_template`), with its id."""
+        if tid in self._template_info:
+            return self._template_info[tid]
+        from . import pptxio
+
+        info = pptxio.read_template(self._template_path(tid))
+        name = next((t['name'] for t in self.templates() if t['id'] == tid), info['name'])
+        info = {**info, 'id': tid, 'name': name}
+        self._template_info[tid] = info
+        return info
+
+    def add_template_bytes(self, name: str, data: bytes) -> dict:
+        """Add a PowerPoint template (.pptx, or .potx: kept as a .pptx) from its bytes."""
+        try:
+            from . import pptxio  # noqa: F401  (python-pptx present)
+        except ImportError as e:
+            raise ImportError('PowerPoint templates need the figures extra: pip install "wissi-viz[figures]"') from e
+        name = Path(str(name or 'template.pptx')).name
+        if not name.lower().endswith(('.pptx', '.potx')):
+            raise ValueError('a PowerPoint template: .pptx or .potx')
+        if len(data) > 200 * 2**20:
+            raise ValueError('template larger than 200 MB')
+        data = _potx_as_pptx(data) if name.lower().endswith('.potx') else data
+        tid = hashlib.sha1(data).hexdigest()[:16]
+        d = self._templates_dir()
+        (d / f'{tid}.pptx').write_bytes(data)
+        try:
+            info = self.template_info(tid)
+        except Exception as e:
+            (d / f'{tid}.pptx').unlink(missing_ok=True)
+            self._template_info.pop(tid, None)
+            raise ValueError(f'{name}: not a PowerPoint file this can read ({e})') from e
+        items = [t for t in self.templates() if t['id'] != tid]
+        items.insert(0, {'id': tid, 'name': name})
+        (d / 'templates.json').write_text(json.dumps(items[:50], ensure_ascii=False), encoding='utf-8')
+        self._template_info.pop(tid, None)
+        info = self.template_info(tid)
+        return {'template': info, 'templates': self.templates()}
+
+    def add_templates(self, paths, *, trusted: bool = False) -> dict:
+        """Add PowerPoint templates by path (desktop file dialog, or a server's allowed folders)."""
+        out: dict = {'templates': self.templates(), 'errors': []}
+        for raw in paths or []:
+            p = Path(str(raw)).expanduser()
+            try:
+                if not (trusted or self.allowed(p)):
+                    raise PermissionError('outside the folders this server allows')
+                out = {**self.add_template_bytes(p.name, p.read_bytes()), 'errors': out['errors']}
+            except Exception as e:  # noqa: BLE001  (reported per file)
+                out['errors'].append(f'{p.name}: {e}')
+        return out
+
     # -- metadata tables
     def add_metadata(
         self, paths: Iterable[str | os.PathLike], key: str | None = None, *, trusted: bool = False
@@ -796,6 +1022,50 @@ def create_session_app(
 
         return await run(go)
 
+    @app.post('/app/figures/layout')
+    async def app_figures_layout(request: Request):
+        """A figure's pages {recipe, name}: windows in mm, the views it can use, what an Update would change."""
+        check(request)
+        b = await request.json()
+        return await run(lambda: session.figure_layout(b.get('recipe'), str(b.get('name') or '')))
+
+    @app.post('/app/figures/export')
+    async def app_figures_export(request: Request):
+        """The figure as a file {recipe, name, fmt: png | tiff | pdf | svg | pptx, dpi, snapshot, data}."""
+        check(request)
+        b = await request.json()
+
+        def go():
+            return session.figure_export(b.get('recipe'), str(b.get('name') or 'Figure'), str(b.get('fmt') or 'png'),
+                                         int(b.get('dpi') or 300), snapshot=bool(b.get('snapshot')),
+                                         data=bool(b.get('data')))  # fmt: skip
+
+        try:
+            data, fname, mt = await anyio.to_thread.run_sync(go)
+        except (ValueError, KeyError) as e:
+            raise HTTPException(400, str(e).strip("'")) from e
+        except ImportError as e:
+            raise HTTPException(501, str(e)) from e
+        return Response(data, media_type=mt, headers={'Content-Disposition': f'attachment; filename="{fname}"',
+                                                      'X-Filename': quote(fname)})  # fmt: skip
+
+    @app.get('/app/figures/templates')
+    async def app_figures_templates(request: Request):
+        check(request)
+        return await run(lambda: {'templates': session.templates()})
+
+    @app.post('/app/figures/templates')
+    async def app_figures_template_add(request: Request, name: str = 'template.pptx'):
+        """Add a PowerPoint template: the file's bytes as the body, ``?name=`` its file name."""
+        check(request, needs_key=mode == 'server')
+        data = await request.body()
+        try:
+            return await run(lambda: session.add_template_bytes(name, data))
+        except HTTPException as e:
+            if e.status_code == 502:  # python-pptx missing
+                raise HTTPException(501, e.detail) from e
+            raise
+
     @app.post('/app/close')
     async def app_close(request: Request):
         check(request)
@@ -853,3 +1123,16 @@ def _looks_like_table(p: Path) -> bool:
     except OSError:
         return False
     return head.startswith(b'[') or (b'"type"' not in head and b'"features"' not in head)
+
+
+def _potx_as_pptx(data: bytes) -> bytes:
+    """A PowerPoint template (.potx) as a presentation (.pptx): the same parts, the main part's type changed."""
+    src = zipfile.ZipFile(io.BytesIO(data))
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
+        for item in src.infolist():
+            b = src.read(item.filename)
+            if item.filename == '[Content_Types].xml':
+                b = b.replace(b'presentationml.template.main+xml', b'presentationml.presentation.main+xml')
+            z.writestr(item, b)
+    return out.getvalue()

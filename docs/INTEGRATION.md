@@ -661,6 +661,32 @@ uvx --from "wissi-viz[desktop]" wissi-viz-app   # try it without installing
     card whose **strictness** slider re-filters live, without measuring again. The model-free classic backend is
     rougher than SAM 2.1: install `wissi-viz[sam]` (or `[sam-onnx]`) for real outlines.
   - On the slide: click an object for its card (measurements and their percentile within the layer), hover for its class, right-click for a radial menu (hide / solo the layer under the cursor, SAM, measure, copy coordinates, fit). `?` shows every shortcut.
+  - **Fluorescence channels in place:** each fluorescence pane has channel chips (click: show / hide that channel in
+    this pane only; Alt-click: only it) and **Split**: the slide as a pane per channel plus the merge, synced, each
+    pane tagged with its channel; **Merge** goes back to the panes before. The Image tab's show / hide then applies to
+    the active pane only; contrast still applies to every pane of the slide.
+  - **Figures** (header button, or *Figure* under the Views list): saved views laid out for a paper or a talk, kept
+    as a recipe that follows the data (`wissi_viz.figures`, `POST /app/figures/layout`, `/app/figures/export`):
+    - *Source*: a fixed list of views, or a query (rules on any field: is / is not / ≥ / ≤ / set / empty). A query's
+      views are kept until **Update**: new matches are announced, never added silently.
+    - *Templates*: **Publication** (85 / 180 mm wide, or a 180 × 240 mm page), **Presentation** (16:9 / 4:3 slides
+      with a title; more views than fit go on to the next slide), **From PPTX** (a .pptx / .potx or a past talk: its
+      master, theme, the windows of its layouts' picture placeholders, and layouts learned from where its slides
+      placed pictures by hand).
+    - *Layout*: rows by a field (its values head the rows) or a grid; order by any field; columns, windows per
+      slide, window shape, gap, text size; labels from fields (`{Animal} · {Region}`), letters, scale bars of one
+      length in µm on every window. Every window can be moved, resized (snapping to edges and to other windows), set
+      to show another view, a chart, text or nothing; windows can be added. Arrows nudge, Delete empties.
+    - *Background*: Auto (black when every view is fluorescence, else white; a template keeps its own), White,
+      Black. *Channels* (fluorescence): Merge, or **Split** — a window per channel plus the merge, a row per view,
+      channel names over the columns, optionally grey; channels on / off for the figure, or per window with the
+      chips on the selected window.
+    - *Chart window*: box, bar or dots, one value per view (count or density of a layer's objects, optionally of one
+      class, inside the view; or a numeric field), grouped by a field.
+    - *Export* (needs `[figures]`: matplotlib, python-pptx): PNG, TIFF (LZW), PDF and SVG (text and charts stay
+      text and vectors), or PPTX (on the template's master; text editable). Beside the picture: the recipe snapshot
+      (`.recipe.json`: the recipe and every view's frame and fields at that moment) and the chart's data (`.csv`).
+    - *Adjust in viewer* shows a window's view; frame it and *Update view*: every figure using the view follows.
   - Every button of this page is clicked and checked in a real browser by `tests/test_buttons.py`; a visible button
     without a check there fails the test.
   - Cell tables are compiled once into the cache and memory-mapped on later opens, as on the server (§5).

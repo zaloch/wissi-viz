@@ -53,6 +53,7 @@
   map, scale bar, snapshot), and an inspector that follows the active pane (Layers, Image, Annotate, Analyze,
   Measure). Per-channel histograms for fluorescence, per scene for CZI. Click a cell for its measurements and where
   it ranks in its layer; right-click for actions under the cursor; `?` lists the keys.
+- **Figures that follow the data.** Lay saved views out for a paper, a talk or your lab's PowerPoint template: rows by any field, labels from fields, scale bars, a chart, fluorescence split into channels plus the merge. Export PNG, TIFF, PDF, SVG or PPTX with a recipe snapshot.
 - **Built for servers:** memory and disk tile caches with byte budgets, memory-mapped object layers, an integration probe and a load tester.
 - **Permissive licences only.** The default install is BSD / MIT / Apache-2.0 / ISC, and a test enforces it. LGPL readers are an opt-in extra; SAM 3 (SAM License) is never installed or hosted by this project: after you accept its licence, the app downloads it from Hugging Face.
 

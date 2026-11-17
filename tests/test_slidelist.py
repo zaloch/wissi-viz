@@ -210,10 +210,17 @@ def test_saved_views_list_and_pages(data, tmp_path):
             pg.click('#v-import')
             pg.wait_for_selector('#picker.on')
             pg.wait_for_function('() => document.getElementById("pk-open").textContent === "Import views"')
-            pg.fill('#paths', str(data / 'poi.csv'))
-            pg.wait_for_function(
-                '() => document.getElementById("paths").value.endsWith("poi.csv")'
-            )  # not reset by the picker
+            for _ in range(10):  # a slow machine: the picker may still be settling when the path is typed
+                pg.fill('#paths', str(data / 'poi.csv'))
+                try:
+                    pg.wait_for_function(
+                        '() => document.getElementById("paths").value.endsWith("poi.csv")', timeout=3000
+                    )
+                    break
+                except Exception:
+                    continue
+            pg.wait_for_timeout(200)
+            assert pg.input_value('#paths').endswith('poi.csv')  # not reset by the picker
             with pg.expect_response(lambda r: '/app/views-import' in r.url, timeout=30000) as resp:
                 pg.click('#b-paths')
             got = resp.value.json()

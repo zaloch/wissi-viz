@@ -25,6 +25,7 @@ CORE_EXTRAS = (
     'desktop',
     'sam',
     'sam-onnx',
+    'figures',
     'all',
 )
 

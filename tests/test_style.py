@@ -45,6 +45,8 @@ EXTRA_AT_TOP = {
     'layerops.py': {'shapely'},
     'evaluate.py': {'shapely'},
     'validation.py': {'shapely'},
+    'figexport.py': {'matplotlib'},
+    'pptxio.py': {'pptx', 'lxml'},
 }
 FEATURE_MODULES = {
     'metrics',
@@ -58,6 +60,8 @@ FEATURE_MODULES = {
     'layerops',
     'evaluate',
     'validation',
+    'figexport',
+    'pptxio',
 }
 CYCLES = {('annotations', 'annio'), ('annotations', 'objects')}
 

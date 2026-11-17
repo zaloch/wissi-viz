@@ -453,6 +453,81 @@
   #fps { cursor: pointer; }
   #fps.hot { color: var(--good); }
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: opacity 120ms !important; } }
+
+  /* ---- figures: the composer over the slide list, viewer and inspector (they stay alive underneath) */
+  #figs { grid-column: 1 / 4; grid-row: 2; z-index: 20; display: flex; flex-direction: column; min-height: 0; background: var(--bg); }
+  #figs[hidden] { display: none; }
+  #b-figs.on { background: var(--accent-deep); border-color: var(--accent); }
+  #fg-bar { flex: none; flex-wrap: wrap; padding: 7px 10px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  #fg-bar #fg-figure { max-width: 180px; }
+  #fg-status { display: inline-flex; align-items: center; gap: 8px; font: 12px Inter, system-ui, sans-serif; color: var(--soft); padding: 4px 8px; }
+  #fg-status.warn { background: var(--amber-deep); color: #ffd59a; }
+  .chip.warn { background: var(--amber-deep); color: #ffd59a; }
+  .btn.sm { padding: 2px 8px; font-size: 12px; border-radius: 6px; }
+  #fg-body { flex: 1; min-height: 0; display: flex; }
+  #fg-src { width: 260px; flex: none; overflow: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; background: var(--panel); border-right: 1px solid var(--line); }
+  #fg-insp { width: 300px; flex: none; overflow: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; background: var(--panel); border-left: 1px solid var(--line); }
+  #fg-mid { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  #fg-tools { flex: none; flex-wrap: wrap; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+  #fg-tools label { display: flex; align-items: center; gap: 6px; color: var(--dim); font-size: 12px; }
+  #fg-layouts { flex: none; display: flex; gap: 8px; align-items: flex-start; overflow-x: auto; padding: 8px 10px; border-bottom: 1px solid var(--line); background: var(--well); }
+  #fg-layouts .lay { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 5px; border-radius: 8px; border: 1px solid var(--line2); background: var(--raise); max-width: 110px; }
+  #fg-layouts .lay[aria-pressed=true] { border-color: var(--accent); background: var(--accent-deep); }
+  #fg-layouts .lay .n { font-size: 11px; color: var(--soft); text-align: center; line-height: 1.2; }
+  #fg-layouts .lay .from { font-size: 10px; color: var(--amber); }
+  #fg-layouts .mini { position: relative; display: block; border-radius: 2px; overflow: hidden; box-shadow: 0 0 0 1px var(--line2); }
+  #fg-layouts .mini span { position: absolute; }
+  #fg-layouts .mini .s { background: #9fb4d9; outline: 1px solid #fff; } #fg-layouts .mini .t { background: #c8cdd6; }
+  #fg-canvas { flex: 1; overflow: auto; padding: 24px; }
+  #fg-pages { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .fpage { position: relative; flex: none; box-shadow: 0 10px 40px rgba(0,0,0,.5); outline: 1px solid var(--line2); font-family: Arial, Helvetica, sans-serif; user-select: none; }
+  .fpno { font-size: 12px; margin-bottom: 14px; }
+  .fmaster { position: absolute; pointer-events: none; }
+  .ftitle { position: absolute; display: flex; align-items: center; font-weight: 700; overflow: hidden; white-space: nowrap; }
+  .fhead { position: absolute; display: flex; align-items: center; justify-content: center; font-weight: 700; }
+  .fhead span { transform: rotate(-90deg); white-space: nowrap; }
+  .fwin { position: absolute; cursor: move; outline: none; touch-action: none; }
+  .fwin img { width: 100%; height: 100%; display: block; pointer-events: none; }
+  .fwin.k-empty, .fwin.k-text { outline: 1px dashed #8b94a0; }
+  .fwin:hover { box-shadow: 0 0 0 2px rgba(94,208,255,.55); }
+  .fwin.sel { box-shadow: 0 0 0 2px #1f8fd6; z-index: 2; }
+  .fwin .flet { position: absolute; left: 3%; top: 2%; font-weight: 700; line-height: 1; pointer-events: none; }
+  .fwin .fsb { position: absolute; right: 2.5%; bottom: 2.5%; display: flex; flex-direction: column; align-items: center; gap: 1px; font-weight: 700; line-height: 1; pointer-events: none; }
+  .fwin .fsb i { display: block; }
+  .fwin .fmissing { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #8b94a0; font: 12px Inter, system-ui, sans-serif; }
+  .fwin .ftext { position: absolute; inset: 0; padding: 2px; overflow: hidden; white-space: pre-wrap; }
+  .fwin .fchart { position: absolute; inset: 0; font-family: Arial, Helvetica, sans-serif; }
+  .fwin .hdl { position: absolute; width: 10px; height: 10px; background: #fff; border: 2px solid #1f8fd6; }
+  .hdl.nw { left: -6px; top: -6px; cursor: nwse-resize; } .hdl.ne { right: -6px; top: -6px; cursor: nesw-resize; }
+  .hdl.sw { left: -6px; bottom: -6px; cursor: nesw-resize; } .hdl.se { right: -6px; bottom: -6px; cursor: nwse-resize; }
+  .flabel { position: absolute; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; line-height: 1.2; }
+  #fg-src .seg button, #fg-insp .seg button { flex: 1; }
+  .fv { display: flex; align-items: center; gap: 8px; padding: 4px; border-radius: 8px; cursor: pointer; }
+  .fv:hover { background: var(--raise); }
+  .fv.dimmed { opacity: .6; }
+  .fv .thumb { width: 44px; height: 33px; border-radius: 4px; object-fit: cover; background: #fff; flex: none; }
+  .fv .thumb.blank { background: var(--raise2); }
+  .fv .txt, #fg-insp .txt { flex: 1; min-width: 0; }
+  .fv .name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fv .sub { display: block; font-size: 11px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #fg-insp .thumb.big { width: 96px; height: 72px; border-radius: 6px; object-fit: cover; background: #fff; }
+  #fg-insp .f2.meta { font-size: 12px; }
+  .rule { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 9px; background: var(--well); }
+  .rule select { min-width: 0; flex: 1; }
+  .vals { display: flex; flex-wrap: wrap; gap: 4px; max-height: 120px; overflow: auto; }
+  .vchip { font-size: 12px; padding: 2px 7px; border-radius: 6px; border: 1px solid var(--line2); background: var(--raise); color: var(--soft); }
+  .vchip[aria-pressed=true] { background: var(--accent-deep); border-color: var(--accent-mid); color: #fff; }
+  #fg-export { position: absolute; right: 16px; top: 52px; z-index: 30; width: 380px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  #fg-export .seg { display: flex; } #fg-export .seg button { flex: 1; }
+  #figs { position: relative; }
+  .fcol { position: absolute; display: flex; align-items: flex-end; justify-content: center; font-weight: 700; white-space: nowrap; pointer-events: none; }
+  .chchips, .fchips { display: inline-flex; flex-wrap: wrap; gap: 3px; }
+  .fwin .fchips { position: absolute; right: 4px; top: 4px; z-index: 3; justify-content: flex-end; max-width: 90%; }
+  .chchip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px 1px 5px; border-radius: 5px; border: 1px solid var(--line2);
+            background: rgba(17,20,25,.85); color: #fff; font: 11px/1.5 Inter, system-ui, sans-serif; cursor: pointer; }
+  .chchip i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .chchip[aria-pressed=false] { opacity: .5; }
+  .chchip[aria-pressed=false] i { background: transparent !important; box-shadow: inset 0 0 0 1.5px currentColor; }
   @media (max-width: 900px) { #side { width: 180px; } #insp { width: 320px; } #crumb { display: none; } }
 </style>
 <script type="module" src="__API__/static/index.js"></script>
@@ -470,6 +545,8 @@
   <label>Sync <select id="sync"><option>none</option><option>all</option><option>pan</option><option>zoom</option></select></label>
   <button id="fit" class="btn" title="Fit every pane (F)">Fit</button>
   <span class="sep"></span>
+  <button id="b-figs" class="btn" aria-pressed="false" title="Figures: saved views laid out for a paper or a talk · Export PNG, TIFF, PDF, SVG, PPTX">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" style="vertical-align: -3px; margin-right: 4px"><rect x="3" y="4" width="8" height="7" rx="1"></rect><rect x="13" y="4" width="8" height="7" rx="1"></rect><rect x="3" y="13" width="8" height="7" rx="1"></rect><path d="M14 20v-4M17 20v-6M20 20v-3"></path></svg>Figures</button>
   <button id="b-connect" class="btn" title="Connect tile API (HALO Link, PathCore, OMERO, HTTP tile service)" hidden>Connect…</button>
   <button id="b-layer" class="btn icon" title="Add cell table or annotation file to active slide (Ctrl/⌘+L)" aria-label="Add cells or annotations" disabled>
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5z"></path><path d="M3 13l9 5 4-2.2M19 15v6M16 18h6"></path></svg></button>
@@ -500,7 +577,7 @@
   <div id="s-chips" role="toolbar" aria-label="Group and sort slides"></div>
   <div id="s-open" hidden><button id="s-openall" class="btn sm primary"></button><span id="s-pages" class="dim mono"></span>
     <label id="s-breaks-box" title="Each group starts a new page" hidden><input type="checkbox" id="s-breaks"> Page per group</label>
-    <span class="grow"></span><button id="s-clear" class="btn sm ghost" hidden>Clear</button></div>
+    <span class="grow"></span><button id="s-figure" class="btn sm" hidden>Figure</button><button id="s-clear" class="btn sm ghost" hidden>Clear</button></div>
   <div id="slides" role="list"></div>
   <div class="hint">Click: show in active pane · Double-click: add pane · ⌘/Shift-click: select · Drop files: open</div>
 </aside>
@@ -598,6 +675,8 @@
     </div>
   </div>
 </main>
+
+<section id="figs" hidden aria-label="Figures"></section>
 
 <aside id="insp" aria-label="Inspector">
   <div id="insp-grip" role="separator" aria-orientation="vertical" aria-label="Inspector width" tabindex="0" title="Drag: inspector width · Double-click: default"></div>

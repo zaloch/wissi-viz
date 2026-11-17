@@ -35,6 +35,7 @@ from . import annio, sam3, summary
 from ._version import __version__
 from .annotations import AnnotationLayer, _add_geometry, _class_from_props
 from .jobs import JobRunner
+from .regions import region_rgb
 from .registry import SlideRegistry
 from .sources.remote import RemoteError
 from .tiles import encode_rgb
@@ -216,9 +217,11 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
         return Response(data, media_type=mt, headers=hdrs(cache))
 
     @r.get('/slides/{sid}/thumbnail')
-    async def thumbnail(sid: str, size: int = 512, bounds: str | None = None):
+    async def thumbnail(sid: str, size: int = 512, bounds: str | None = None, channels: str | None = None,
+                        gray: bool = False):  # fmt: skip
         """A small picture of the slide, or of a rectangle of it (``bounds=x0,y0,x1,y1`` in level-0 px: a saved
-        view's preview)."""
+        view's preview; it may reach outside the slide). Fluorescence: ``channels=0,2`` blends only those, ``gray``
+        shows them in white."""
         e, pyr = entry(sid)
         size = max(16, min(size, 2048))
         rect = None
@@ -228,34 +231,25 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
             except ValueError:
                 raise HTTPException(400, 'bounds: x0,y0,x1,y1') from None
             W, H = e.source.info.width, e.source.info.height
-            x0, y0, x1, y1 = max(0.0, x0), max(0.0, y0), min(float(W), x1), min(float(H), y1)
-            if x1 - x0 < 1 or y1 - y0 < 1:
+            if min(float(W), x1) - max(0.0, x0) < 1 or min(float(H), y1) - max(0.0, y0) < 1:
                 raise HTTPException(400, 'bounds outside the slide')
             rect = (x0, y0, x1, y1)
-
-        def pick(ci=None):
-            """The whole slide's thumbnail, or the rectangle read at the coarsest level that still fills ``size``."""
-            src = e.source
-            if rect is None:
-                return src.thumbnail(size) if ci is None else src.thumbnail(size, ci)
-            x0, y0, x1, y1 = rect
-            lv = 0
-            for i, L in enumerate(src.info.levels):
-                if max(x1 - x0, y1 - y0) / L.downsample >= size:
-                    lv = i
-            ds = src.info.levels[lv].downsample
-            args = (lv, int(x0 / ds), int(y0 / ds), max(1, int((x1 - x0) / ds)), max(1, int((y1 - y0) / ds)))
-            return np.asarray(src.read_region(*args) if ci is None else src.read_region(*args, ci))
+        try:
+            chans = [int(c) for c in channels.split(',') if c.strip()] if channels else None
+        except ValueError:
+            raise HTTPException(400, 'channels: indices, e.g. 0,2') from None
 
         def make():
             src = e.source
-            if src.info.mode == 'rgb':
-                a = np.asarray(pick())[..., :3]
+            if rect is not None:
+                a = region_rgb(src, rect, size, e.windows, chans, gray)
+            elif src.info.mode == 'rgb':
+                a = np.asarray(src.thumbnail(size))[..., :3]
             else:
                 comp = None
                 wins = e.windows or src.channel_stats()
                 for ci, ch in enumerate(src.info.channels):
-                    t = np.asarray(pick(ci)).astype(np.float32)
+                    t = np.asarray(src.thumbnail(size, ci)).astype(np.float32)
                     lo, hi = wins[ci]
                     t = np.clip((t - lo) / max(hi - lo, 1), 0, 1)
                     col = np.array([int(ch.color[i : i + 2], 16) for i in (1, 3, 5)], np.float32)
@@ -263,7 +257,7 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
                 a = np.clip(comp, 0, 255).astype(np.uint8)
             im = Image.fromarray(a)
             im.thumbnail((size, size))
-            return encode_rgb(__import__('numpy').asarray(im), 'jpeg', 85)[0]
+            return encode_rgb(np.asarray(im), 'jpeg', 85)[0]
 
         data = await asyncio.to_thread(make)
         return Response(data, media_type='image/jpeg', headers=hdrs('public, max-age=3600'))

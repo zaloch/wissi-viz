@@ -3,6 +3,8 @@
 // Talks to the viewer element (<wissi-viz>, static/index.js), the tile API under `api`, and the app's own
 // token-protected endpoints (/app/*, see wissi_viz/session.py) or the desktop window's native bridge.
 
+import { initFigures } from './figures.js';
+
 const cfg = window.WISSI_APP || {};
 const API = cfg.api, BASE = cfg.base || '', TOKEN = cfg.token, MODE = cfg.mode;   // BASE: where the app is mounted
 const SERVER = MODE === 'server';
@@ -187,7 +189,9 @@ function apply() {
   active = Math.min(active, Math.max(0, panes.length - 1));
   // a page shorter than the others keeps the page's layout: the rest of its panes stay empty
   if (panes.length) grid.setSlides(deck && panes.length < deck.per ? [...panes, ...Array(deck.per - panes.length).fill(null)] : panes);
+  if (split && !(panes.length === split.n + 1 && panes.every((id) => id === split.sid))) { split = null; grid.setChannelSplit?.('all', false); }
   if (panes.length) (grid.panes || []).forEach((_, k) => grid.setPaneTag?.(k, (deck && panes[k] && deck.tags.get(deck.pages[deck.page]?.[k] ?? panes[k])) || null));
+  if (split) splitTags();
   if (panes.length > 1) grid.setActive(active);
   renderList();
   renderCrumb();
@@ -383,6 +387,8 @@ function renderOpenBar() {
   $('s-openall').title = `Pages of ${per} pane${per === 1 ? '' : 's'} (pane count: view bar) · ${pages} page${pages === 1 ? '' : 's'} · Only the shown page loads`;
   $('s-pages').textContent = `${pages} page${pages === 1 ? '' : 's'} × ${per}`;
   $('s-clear').hidden = !checked.size;
+  $('s-figure').hidden = sideMode !== 'views' || !listOrder.length;
+  $('s-figure').title = checked.size ? `New figure of the ${checked.size} checked views` : `New figure of all ${listOrder.length} views`;
   $('s-breaks-box').hidden = !lv.chips.some((c) => c.role === 'group');
   $('s-breaks').checked = lv.breaks;
   $('slides').classList.toggle('picking', checked.size > 0);
@@ -1086,6 +1092,57 @@ function getSummary(sid, L, tissue = false) {
 const histCache = new Map();    // `${sid}|${rect}` → Promise<histogram>
 let linkCh = false;
 const panesOf = (sid) => (grid.panes || []).filter((q) => q.slide?.info?.id === sid).map((q) => q.index);
+/** Which panes a channel's show / hide applies to: all panes of the slide, but only the active one when the slide is
+ *  split into a pane per channel (each of those keeps its own channels). */
+const visTargets = (sid) => (split && split.sid === sid ? [active] : panesOf(sid));
+
+// ---- split channels: a fluorescence slide as a pane per channel plus the merge (synced), and back
+let split = null;   // {sid, before: {panes, active, sync}}
+function splitChannels(k, on) {
+  const p = grid.panes?.[k];
+  const info = p?.slide?.info;
+  const sid = info?.id;
+  if (!info || info.mode !== 'channels' || !(info.channels?.length >= 2)) return;
+  const bounds = grid.getViews?.()[k]?.bounds;
+  if (on) {
+    if (deck) closeDeck();
+    const before = split?.before || { panes: [...panes], active, sync: $('sync').value };
+    const chans = info.channels.slice(0, MAX_PANES - 1);
+    split = { sid, before, n: chans.length };
+    panes = [...chans.map(() => sid), sid];
+    active = chans.length;
+    apply();
+    chans.forEach((_, i) => grid.setSlide(i, { slide: sid, channels: info.channels.map((__, c) => ({ visible: c === i })) }));
+    grid.setSlide(chans.length, { slide: sid, channels: info.channels.map((__, c) => ({ visible: c < 6 })) });
+    splitTags();
+    $('sync').value = 'all'; grid.setSync('all');
+    if (bounds) panes.forEach((_, i) => goToBoundsWhenReady(i, bounds));
+    toast({ title: `${info.name || 'Slide'}: ${chans.length} channels + merge`, sub: 'Chips on each pane: show / hide its channels · Merge: back to one pane', ms: 5000 });
+  } else {
+    const b = split?.before || { panes: [sid], active: 0, sync: $('sync').value };
+    const keepActive = split?.sid === sid;
+    split = null;
+    panes = b.panes.length ? b.panes : [sid];
+    active = Math.min(b.active, panes.length - 1);
+    apply();
+    grid.setChannelSplit?.('all', false);
+    (grid.panes || []).forEach((q, i) => { if (q.slide?.info?.id === sid) grid.setSlide(i, { slide: sid, channels: info.channels.map((__, c) => ({ visible: c < 6 })) }); });
+    $('sync').value = b.sync; grid.setSync(b.sync);
+    if (keepActive && bounds) panesOf(sid).forEach((i) => goToBoundsWhenReady(i, bounds));
+  }
+  scheduleInspector();
+}
+function splitTags() {
+  if (!split) return;
+  const info = (grid.panes || []).find((q) => q.slide?.info?.id === split.sid)?.slide?.info;
+  if (!info) return;
+  (grid.panes || []).forEach((q, i) => {
+    if (q.slide?.info?.id !== split.sid) return;
+    const c = info.channels[i];
+    grid.setPaneTag?.(i, i < split.n && c ? { text: c.name, color: c.color } : { text: 'Merge', color: null });
+  });
+  grid.setChannelSplit?.('all', true);
+}
 function histRect(p) {
   const info = p?.slide?.info;
   const v = $('i-scope').value;
@@ -1172,13 +1229,13 @@ function autoLevels(sid, hist) {   // brightfield: stretch the darkest 0.1 % …
 function channelCard(p, sid, i, c, hh) {
   const card = h('div', { class: `hist${c.visible ? '' : ' off'}`, dataset: { ch: String(i) } });
   const vis = h('input', { type: 'checkbox', checked: c.visible, 'aria-label': `Show ${c.name}` });
-  vis.onchange = () => { grid.setChannel(panesOf(sid), i, { visible: vis.checked }); renderImage(); };
+  vis.onchange = () => { grid.setChannel(visTargets(sid), i, { visible: vis.checked }); renderImage(); };
   const col = h('input', { type: 'color', value: toHex(c.color), 'aria-label': `${c.name} colour` });
   col.oninput = () => { grid.setChannel(panesOf(sid), i, { color: col.value }); draw(); };
   const soloB = h('button', { class: 'solo-b', title: 'Show only this channel · Click again: show all' }, 'S');
   soloB.onclick = () => {
     const only = p.channels.every((x, k) => x.visible === (k === i));
-    p.channels.forEach((_, k) => grid.setChannel(panesOf(sid), k, { visible: only || k === i }));
+    p.channels.forEach((_, k) => grid.setChannel(visTargets(sid), k, { visible: only || k === i }));
     renderImage();
   };
   const autoB = h('button', { class: 'solo-b', title: 'Auto contrast from the histogram (0.1–99.9 %)' }, 'A');
@@ -2040,6 +2097,8 @@ async function samStatus() {
   } catch (_) { $('a-sam-status').textContent = 'SAM: not available on this server'; }
 }
 grid.addEventListener('samstart', () => log('SAM: segmenting…'));
+grid.addEventListener('splitchannels', (e) => splitChannels(e.detail.pane, e.detail.split));
+grid.addEventListener('channeltoggle', () => scheduleInspector());
 grid.addEventListener('sam', (e) => {
   const d = e.detail;
   if (d.error) { log(`SAM: ${d.error}`, true); return; }
@@ -2603,6 +2662,7 @@ function wire() {
   setSideMode(sideMode);
   $('s-openall').onclick = () => openDeck(checked.size ? listOrder.filter((id) => checked.has(id)) : listOrder, { title: checked.size ? 'Selected' : 'All slides' });
   $('s-clear').onclick = () => { checked.clear(); renderList(); };
+  $('s-figure').onclick = () => figs.newFrom((checked.size ? listOrder.filter((id) => checked.has(id)) : listOrder).filter((id) => /^v\d+$/.test(id)).map((id) => Number(id.slice(1))));
   $('s-breaks').onchange = () => { lv.breaks = $('s-breaks').checked; saveLv(); renderOpenBar(); };
   $('s-meta').onclick = async () => metaResult(await call('pick_metadata'));
   for (const b of $('side-mode').children) b.onclick = () => setSideMode(b.dataset.mode);
@@ -2978,7 +3038,13 @@ setInterval(() => {
   }
 }, 500);
 
-window.wissiApp = { onResult, activeSlide, showSlides, setTool, setTab, toast };
+const checkedViewIds = () => sideMode === 'views' ? listOrder.filter((id) => checked.has(id) && /^v\d+$/.test(id)).map((id) => Number(id.slice(1))) : [];
+const figs = initFigures({
+  h, s, http, quiet, toast, saveBlob, enc, API, BASE, TOKEN, key: () => KEY, onResult, loadViews, checkedViewIds,
+  showView: (it) => showView(it),
+  activeBounds: () => grid.getViews?.()[active]?.bounds || null,
+});
+window.wissiApp = { onResult, activeSlide, showSlides, setTool, setTab, toast, figures: figs };
 
 async function start() {
   wire();

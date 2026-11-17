@@ -1054,6 +1054,16 @@ canvas.ov { pointer-events:none; }
 .row input[type=color] { width:22px; height:18px; padding:0; border:0; background:none; }
 .row input[type=range] { width:100%; }
 .sub { padding-left:18px; font-size:11px; opacity:.9; }
+.chans { position:absolute; left:6px; top:30px; display:flex; flex-wrap:wrap; gap:3px; max-width:calc(100% - 48px); z-index:2; cursor:default; }
+.chans:empty { display:none; }
+.chans button { display:flex; align-items:center; gap:4px; padding:1px 6px 1px 4px; border-radius:4px; border:1px solid rgba(255,255,255,.2);
+  background:rgba(0,0,0,.62); color:#fff; font:11px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; cursor:pointer; }
+.chans button:hover { border-color:rgba(255,255,255,.55); }
+.chans button i { width:8px; height:8px; border-radius:50%; flex:none; }
+.chans button[aria-pressed=false] { opacity:.5; }
+.chans button[aria-pressed=false] i { background:transparent !important; box-shadow:inset 0 0 0 1.5px currentColor; }
+.chans .split { font-weight:600; }
+:host([channel-chips=false]) .chans { display:none !important; }
 `;
 
 const SVG_GEAR = '⚙';
@@ -1289,8 +1299,50 @@ export class WsiGrid extends HTMLElement {
       if (opts.min != null) c.lo = +opts.min;
       if (opts.max != null) c.hi = +opts.max;
       if (opts.gamma != null) c.gamma = +opts.gamma;
+      if (opts.visible != null || opts.color) this._renderChans(p);
     }
     this.requestRender();
+  }
+
+  /** The channel chips on a fluorescence pane: click shows / hides a channel in that pane only, Alt-click shows it
+   *  alone (again: all); Split / Merge asks the page (event 'splitchannels') to lay the slide out one pane per
+   *  channel plus the merge, or back. */
+  _renderChans(p) {
+    const box = p.$chans;
+    if (!box) return;
+    box.replaceChildren();
+    if (!p.channels || p.channels.length < 2 || p.slide?.info?.mode !== 'channels') return;
+    const hex = (c) => '#' + c.map((v) => Math.round(v * 255).toString(16).padStart(2, '0')).join('');
+    p.channels.forEach((c, i) => {
+      const b = document.createElement('button');
+      b.setAttribute('aria-pressed', String(!!c.visible));
+      b.title = `${c.name || 'Channel ' + (i + 1)}: ${c.visible ? 'hide' : 'show'} in this pane · Alt-click: only this one`;
+      const dot = document.createElement('i');
+      dot.style.background = hex(c.color);
+      b.append(dot, document.createTextNode(c.name || `Ch ${i + 1}`));
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const solo = e.altKey || e.shiftKey;
+        const alone = p.channels.every((x, k) => x.visible === (k === i));
+        p.channels.forEach((x, k) => {
+          const v = solo ? (alone ? true : k === i) : (k === i ? !x.visible : x.visible);
+          if (v !== x.visible) this.setChannel(p.index, k, { visible: v });
+        });
+        this._emit('channeltoggle', { pane: p.index, slide: p.slide?.info?.id, visible: p.channels.map((x) => x.visible) });
+      });
+      box.append(b);
+    });
+    const sp = document.createElement('button');
+    sp.className = 'split';
+    sp.textContent = p.split ? 'Merge' : 'Split';
+    sp.title = p.split ? 'One pane: all channels merged' : 'A pane per channel, plus the merge (synced)';
+    sp.addEventListener('click', (e) => { e.stopPropagation(); this._emit('splitchannels', { pane: p.index, slide: p.slide?.info?.id, split: !p.split }); });
+    box.append(sp);
+  }
+
+  /** Mark a pane as part of a split (its chip bar offers Merge instead of Split). */
+  setChannelSplit(pane, on) {
+    for (const p of this._panes(pane)) { p.split = !!on; this._renderChans(p); }
   }
 
   /** Brightfield display: {brightness, contrast, gamma, invert}. */
@@ -1486,7 +1538,7 @@ export class WsiGrid extends HTMLElement {
     for (const p of this.panes) {
       const el = document.createElement('div');
       el.className = 'pane' + (p.index === this.active && this.panes.length > 1 ? ' active' : '') + (this.tool !== 'pan' ? ' tool' : '');
-      el.innerHTML = `<div class="label"></div><div class="scale" style="display:none"><span></span><i></i></div><div class="coords"></div><div class="legend"></div><div class="msg"></div>`
+      el.innerHTML = `<div class="label"></div><div class="scale" style="display:none"><span></span><i></i></div><div class="coords"></div><div class="legend"></div><div class="chans" role="toolbar" aria-label="Channels in this pane"></div><div class="msg"></div>`
         + (this.showControls ? `<button class="btn" title="Display settings">${SVG_GEAR}</button>` : '');
       p.el = el;
       p.$label = el.querySelector('.label');
@@ -1496,6 +1548,10 @@ export class WsiGrid extends HTMLElement {
       p.$coords = el.querySelector('.coords');
       p.$legend = el.querySelector('.legend');
       p.$msg = el.querySelector('.msg');
+      p.$chans = el.querySelector('.chans');
+      p.$chans.addEventListener('pointerdown', (e) => e.stopPropagation());
+      p.$chans.addEventListener('wheel', (e) => e.stopPropagation());
+      this._renderChans(p);
       const btn = el.querySelector('.btn');
       if (btn) {
         btn.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -1598,6 +1654,7 @@ export class WsiGrid extends HTMLElement {
     if (o.layers) for (const [k, v] of Object.entries(o.layers)) p.layerVis.set(k, !!v);
     if (o.adjust) Object.assign(p.adjust, o.adjust);
     p.pending = null;
+    this._renderChans(p);
     if (!p.view && p.rect.w > 0) {
       const z = this._fitScale(p);
       p.view = { cx: info.width / 2, cy: info.height / 2, scale: z };

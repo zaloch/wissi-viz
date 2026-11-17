@@ -520,6 +520,24 @@
   #fg-export { position: absolute; right: 16px; top: 52px; z-index: 30; width: 380px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
   #fg-export .seg { display: flex; } #fg-export .seg button { flex: 1; }
   #figs { position: relative; }
+  @media (max-width: 1640px) { #b-agent .lb, #b-figs .lb { display: none; } #b-agent svg, #b-figs svg { margin-right: 0 !important; } }
+  /* ---- the agent panel */
+  #agent { position: fixed; right: 12px; top: 56px; bottom: 36px; width: min(440px, calc(100vw - 24px)); z-index: 40; padding: 12px;
+           display: flex; flex-direction: column; gap: 8px; }
+  #agent[hidden] { display: none; }
+  #b-agent.on { background: var(--accent-deep); border-color: var(--accent); }
+  #ag-log { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 2px; }
+  .ag-msg { padding: 8px 10px; border-radius: 10px; line-height: 1.45; white-space: pre-wrap; }
+  .ag-user { align-self: flex-end; max-width: 85%; background: var(--accent-deep); border: 1px solid var(--accent-mid); }
+  .ag-bot { background: var(--raise); border: 1px solid var(--line2); }
+  .ag-err { border-color: var(--danger); color: #ffc9c9; }
+  .ag-wait { color: var(--dim); font-style: italic; }
+  .ag-step { font-size: 12px; margin-bottom: 4px; } .ag-step summary { cursor: pointer; color: var(--soft); }
+  .ag-step pre { max-height: 160px; overflow: auto; font: 11px var(--mono); background: var(--well); padding: 6px; border-radius: 6px; white-space: pre-wrap; }
+  .ag-step img { max-width: 100%; border-radius: 6px; margin-top: 4px; }
+  #ag-input { flex: 1; resize: vertical; min-height: 44px; }
+  .ag-box { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 9px; background: var(--well); }
+  .ag-box pre { margin: 0; font: 11px var(--mono); white-space: pre-wrap; background: var(--bg); padding: 6px; border-radius: 6px; }
   .fwin .finset { position: absolute; border: 1.5px solid; box-sizing: border-box; width: auto; height: auto; pointer-events: none; }
   .fwin .fframe { position: absolute; border: 1.5px dashed; box-sizing: border-box; cursor: move; z-index: 2; }
   .fwin .fkey { position: absolute; left: 2%; bottom: 2%; display: flex; flex-direction: column; gap: 1px; line-height: 1.15; pointer-events: none; font-family: Arial, Helvetica, sans-serif; }
@@ -549,8 +567,10 @@
   <label>Sync <select id="sync"><option>none</option><option>all</option><option>pan</option><option>zoom</option></select></label>
   <button id="fit" class="btn" title="Fit every pane (F)">Fit</button>
   <span class="sep"></span>
-  <button id="b-figs" class="btn" aria-pressed="false" title="Figures: saved views laid out for a paper or a talk · Export PNG, TIFF, PDF, SVG, PPTX">
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" style="vertical-align: -3px; margin-right: 4px"><rect x="3" y="4" width="8" height="7" rx="1"></rect><rect x="13" y="4" width="8" height="7" rx="1"></rect><rect x="3" y="13" width="8" height="7" rx="1"></rect><path d="M14 20v-4M17 20v-6M20 20v-3"></path></svg>Figures</button>
+  <button id="b-agent" class="btn" aria-label="Agent" title="Agent: ask about the slides or tell it what to do (a local model) · Claude / ChatGPT over MCP">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true" style="vertical-align: -3px; margin-right: 4px"><path d="M4 5h16v11H9l-5 4z"></path><path d="M9 10h.01M12 10h.01M15 10h.01"></path></svg><span class="lb">Agent</span></button>
+  <button id="b-figs" class="btn" aria-pressed="false" aria-label="Figures" title="Figures: saved views laid out for a paper or a talk · Export PNG, TIFF, PDF, SVG, PPTX">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" style="vertical-align: -3px; margin-right: 4px"><rect x="3" y="4" width="8" height="7" rx="1"></rect><rect x="13" y="4" width="8" height="7" rx="1"></rect><rect x="3" y="13" width="8" height="7" rx="1"></rect><path d="M14 20v-4M17 20v-6M20 20v-3"></path></svg><span class="lb">Figures</span></button>
   <button id="b-connect" class="btn" title="Connect tile API (HALO Link, PathCore, OMERO, HTTP tile service)" hidden>Connect…</button>
   <button id="b-layer" class="btn icon" title="Add cell table or annotation file to active slide (Ctrl/⌘+L)" aria-label="Add cells or annotations" disabled>
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5z"></path><path d="M3 13l9 5 4-2.2M19 15v6M16 18h6"></path></svg></button>
@@ -681,6 +701,7 @@
 </main>
 
 <section id="figs" hidden aria-label="Figures"></section>
+<section id="agent" class="hud" hidden aria-label="Agent"></section>
 
 <aside id="insp" aria-label="Inspector">
   <div id="insp-grip" role="separator" aria-orientation="vertical" aria-label="Inspector width" tabindex="0" title="Drag: inspector width · Double-click: default"></div>

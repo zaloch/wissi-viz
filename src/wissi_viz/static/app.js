@@ -4,6 +4,7 @@
 // token-protected endpoints (/app/*, see wissi_viz/session.py) or the desktop window's native bridge.
 
 import { initFigures } from './figures.js';
+import { initAgent } from './agent.js';
 
 const cfg = window.WISSI_APP || {};
 const API = cfg.api, BASE = cfg.base || '', TOKEN = cfg.token, MODE = cfg.mode;   // BASE: where the app is mounted
@@ -3044,7 +3045,43 @@ const figs = initFigures({
   showView: (it) => showView(it),
   activeBounds: () => grid.getViews?.()[active]?.bounds || null,
 });
-window.wissiApp = { onResult, activeSlide, showSlides, setTool, setTab, toast, figures: figs };
+const agent = initAgent({
+  h, http, toast, BASE, TOKEN, grid, onResult, loadViews,
+  active: () => active,
+  showSlides: (ids) => {
+    if (deck) closeDeck();
+    const ok = ids.filter((id) => slides.some((x) => x.id === id)).slice(0, MAX_PANES);
+    if (!ok.length) return;
+    panes = ok; active = 0; apply();
+  },
+  goTo: (sid, b, pane) => {
+    let k = Number.isInteger(pane) ? pane : panes.indexOf(sid);
+    if (k < 0) k = active;
+    if (k >= panes.length) { panes.push(sid); k = panes.length - 1; }
+    if (panes[k] !== sid) { panes[k] = sid; apply(); }
+    active = k;
+    if (panes.length > 1) grid.setActive(k);
+    goToBoundsWhenReady(k, b);
+  },
+  setLayer: (sid, layer, visible, cls) => {
+    const t = panesOf(sid);
+    if (cls) grid.setClassVisible(t, layer, cls, visible); else grid.setLayerVisible(t, layer, visible);
+    scheduleInspector();
+  },
+  setChannels: (sid, show, splitOn) => {
+    let k = panes.indexOf(sid);
+    if (k < 0) { panes[active] = sid; apply(); k = active; }
+    if (splitOn != null) splitChannels(k, !!splitOn);
+    if (show) {
+      const info = grid.panes?.[k]?.slide?.info;
+      (info?.channels || []).forEach((c, i) => grid.setChannel(splitOn ? [panes.length - 1] : panesOf(sid), i, { visible: show.includes(c.name) }));
+      scheduleInspector();
+    }
+  },
+  refreshLayers: (sid) => { grid.refreshAnnotations(sid); scheduleInspector(); },
+  openFigure: (id) => figs.openId(id),
+});
+window.wissiApp = { onResult, activeSlide, showSlides, setTool, setTab, toast, figures: figs, agent };
 
 async function start() {
   wire();

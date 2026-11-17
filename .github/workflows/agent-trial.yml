@@ -1,0 +1,45 @@
+# Trial of the bundled agent (lab): small open models on Ollama drive wissi-viz's tools through ten tasks
+# (scripts/agent_trial.py). One job per model; the summary of each is an annotation on the run.
+name: agent-trial
+on:
+  workflow_dispatch:
+  push:
+    branches: [lab/agent]
+    paths: [src/wissi_viz/agent/**, scripts/agent_trial.py, .github/workflows/agent-trial.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  model:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        model: ['qwen3:4b', 'qwen3:1.7b', 'phi4-mini', 'granite4:micro', 'granite4:1b']
+    env:
+      OLLAMA_CONTEXT_LENGTH: '16384'   # the tools' descriptions need more than the default context
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - name: Install
+        run: uv sync --locked --extra agent --extra figures --extra analysis
+      - name: Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          (ollama serve > "$RUNNER_TEMP/ollama.log" 2>&1 &)
+          for _ in $(seq 60); do curl -sf http://127.0.0.1:11434/api/tags >/dev/null && break; sleep 1; done
+          ollama pull '${{ matrix.model }}'
+          ollama --version
+      - name: Trial
+        run: |
+          name=$(echo '${{ matrix.model }}' | tr ':/' '--')
+          uv run --no-sync python scripts/agent_trial.py --model '${{ matrix.model }}' --out "trial-$name.json"
+          cat "trial-$name.md"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trial-${{ strategy.job-index }}
+          path: trial-*
+          if-no-files-found: ignore

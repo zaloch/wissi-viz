@@ -47,6 +47,7 @@ EXTRA_AT_TOP = {
     'validation.py': {'shapely'},
     'figexport.py': {'matplotlib'},
     'pptxio.py': {'pptx', 'lxml'},
+    'mcp_server.py': {'mcp', 'mcp_types'},
 }
 FEATURE_MODULES = {
     'metrics',
@@ -62,6 +63,7 @@ FEATURE_MODULES = {
     'validation',
     'figexport',
     'pptxio',
+    'mcp_server',
 }
 CYCLES = {('annotations', 'annio'), ('annotations', 'objects')}
 

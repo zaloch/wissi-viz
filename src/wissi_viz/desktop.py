@@ -38,6 +38,7 @@ from pathlib import Path
 from . import certs
 from ._compat import user_dir, utf8_stdio
 from ._version import __version__
+from .agent.running import announce, withdraw
 from .session import ANNOTATION_EXTS, PREFIX, TABLE_EXTS, Session, _kind, _slide_exts, add_connect_args, apply_connects
 
 __all__ = ['ANNOTATION_EXTS', 'PREFIX', 'TABLE_EXTS', 'Bridge', 'Session', '_kind', 'main', 'run_browser', 'run_native']
@@ -714,6 +715,7 @@ def main(argv: list[str] | None = None) -> None:
     apply_connects(session, a, log=lambda m: print(m, file=sys.stderr))
     server = _Server(session.app(), a.port)
     url = server.start()
+    announce(url, session.token)  # for `wissi-viz mcp` (Claude Desktop / Claude Code): tools act in this window
     try:
         native, why = (False, 'requested --browser') if a.browser else _has_native()
         if native:
@@ -726,6 +728,7 @@ def main(argv: list[str] | None = None) -> None:
             print(f'wissi-viz: {why}; using a browser window', file=sys.stderr)
         run_browser(url, server, '' if a.browser else why)
     finally:
+        withdraw()
         server.stop()
         session.shutdown()
 

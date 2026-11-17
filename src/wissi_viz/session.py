@@ -21,6 +21,7 @@ import secrets
 import threading
 import zipfile
 from collections.abc import Iterable, Sequence
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -28,7 +29,7 @@ from urllib.parse import quote
 import anyio
 import numpy as np
 from fastapi import HTTPException, Query
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from PIL import Image
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.requests import Request  # module level: FastAPI resolves the string annotations here
@@ -36,6 +37,9 @@ from starlette.requests import Request  # module level: FastAPI resolves the str
 from . import annio, figures, slidemeta
 from ._compat import user_dir
 from ._version import __version__
+from .agent import llm as agent_llm
+from .agent import tools as agent_tools
+from .agent.ui import UiBus
 from .annotations import AnnotationLayer
 from .connectors import RemoteConnection, image_entries, open_connection
 from .objects import cached_object_layer
@@ -136,6 +140,8 @@ class Session:
         self._matched: tuple[tuple, list[dict]] | None = None
         self._fig_objects: dict[tuple, tuple] = {}
         self._template_info: dict[str, dict] = {}
+        #: commands from the agent's tools to the open app pages, and what the pages report
+        self.ui = UiBus()
         if remember:
             try:
                 for t in json.loads(self._meta_file.read_text(encoding='utf-8')):
@@ -931,13 +937,15 @@ def create_session_app(
     key: str | None = None,
     local_only: bool | None = None,
     dependencies: list | None = None,
+    mcp: str | None = None,
 ):
     """The viewer server plus the app page (``/app``, and ``/`` in server mode) and the endpoints it uses.
 
     Every ``/app/*`` call carries the page's token (so other web pages cannot drive it). ``key``: a password the
     user types once before opening files or connecting (``wissi-viz serve --key``). ``local_only``: accept only
     127.0.0.1 / localhost as the Host (default: in desktop mode). ``dependencies``: e.g. your login check, on every
-    route. Works mounted under a path (``parent.mount('/viewer', app)``; see :func:`wissi_viz.nicegui.mount_app`)."""
+    route. Works mounted under a path (``parent.mount('/viewer', app)``; see :func:`wissi_viz.nicegui.mount_app`).
+    ``mcp``: a secret; serves the agent's tools over MCP (streamable HTTP) at ``/mcp/<secret>/`` (needs ``[agent]``)."""
     app = create_app(session.registry, prefix=prefix, cors=cors, index=False, dependencies=dependencies)
     if local_only if local_only is not None else mode == 'desktop':
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost', 'testserver'])
@@ -1142,6 +1150,85 @@ def create_session_app(
             if e.status_code == 502:  # python-pptx missing
                 raise HTTPException(501, e.detail) from e
             raise
+
+    # the agent: tools for language models (wissi_viz.agent), what they do shows in the open pages
+    host = agent_tools.Host(session, session.ui)
+
+    @app.get('/app/events')
+    async def app_events(request: Request, token: str = ''):
+        """Commands from the agent's tools to this page (Server-Sent Events; the token in the query)."""
+        if not secrets.compare_digest(token, session.token):
+            raise HTTPException(403, 'bad token')
+        return StreamingResponse(session.ui.stream(), media_type='text/event-stream',
+                                 headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})  # fmt: skip
+
+    @app.post('/app/agent/state')
+    async def app_agent_state(request: Request):
+        """What the page shows: {panes: [{slide, bounds, mpp}], active} (for the tool current_view)."""
+        check(request)
+        session.ui.report(await request.json())
+        return {'ok': True}
+
+    @app.get('/app/agent/tools')
+    async def app_agent_tools(request: Request):
+        check(request)
+        return {'tools': agent_tools.tool_list()}
+
+    @app.post('/app/agent/call')
+    async def app_agent_call(request: Request):
+        """Run one tool {tool, args} (the MCP bridge ``wissi-viz mcp`` calls this)."""
+        check(request, needs_key=True)
+        b = await request.json()
+        res = await anyio.to_thread.run_sync(lambda: agent_tools.call(host, str(b.get('tool')), b.get('args') or {}))
+        if isinstance(res, agent_tools.Picture):
+            res = {'image_png_b64': agent_tools.picture_b64(res), 'text': res.text}
+        return JSONResponse(json.loads(json.dumps(res, default=str)))
+
+    @app.get('/app/agent/status')
+    async def app_agent_status(request: Request):
+        check(request)
+        return await anyio.to_thread.run_sync(agent_llm.status)
+
+    @app.post('/app/agent/settings')
+    async def app_agent_settings(request: Request):
+        """The local model: {base_url, model, api_key, max_steps, temperature}."""
+        check(request, needs_key=True)
+        if mode == 'server' and not key:
+            raise HTTPException(403, 'set --key to change the model server of a shared server')
+        return {'settings': agent_llm._public(agent_llm.save_settings(await request.json()))}
+
+    @app.post('/app/agent/chat')
+    async def app_agent_chat(request: Request):
+        """One turn with the local model {messages: [{role, content}]}: {reply, steps}."""
+        check(request, needs_key=True)
+        b = await request.json()
+        try:
+            out = await anyio.to_thread.run_sync(lambda: agent_llm.chat(host, b.get('messages') or []))
+        except ConnectionError as e:
+            raise HTTPException(502, str(e)) from e
+        for st in out['steps']:
+            img = st.pop('image', None)
+            if img is not None:
+                st['image'] = 'data:image/png;base64,' + agent_tools.picture_b64(img)
+        return JSONResponse(json.loads(json.dumps(out, default=str)))
+
+    if mcp:
+        try:
+            from .agent import mcp_server
+        except ImportError as e:
+            raise ImportError('MCP needs the agent extra: pip install "wissi-viz[agent]"') from e
+        srv = mcp_server.build(lambda name, args: agent_tools.call(host, name, args))
+        sub = srv.streamable_http_app(streamable_http_path='/', host='0.0.0.0' if mode == 'server' else '127.0.0.1',
+                                      stateless_http=True, json_response=True)  # fmt: skip
+        app.mount(f'/mcp/{mcp}', sub)
+        inner = app.router.lifespan_context
+
+        @asynccontextmanager
+        async def lifespan(a):
+            async with srv.session_manager.run(), inner(a) as state:
+                yield state
+
+        app.router.lifespan_context = lifespan
 
     @app.post('/app/close')
     async def app_close(request: Request):

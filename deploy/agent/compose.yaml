@@ -1,0 +1,26 @@
+# The bundled agent's model server: Ollama (MIT) with a small open model, beside wissi-viz.
+#   docker compose -f deploy/agent/compose.yaml up -d
+# Then in the app: Agent › Model… › Server http://127.0.0.1:11434/v1 (the default). On a machine with an NVIDIA GPU,
+# uncomment the deploy block. Models (all permissive): qwen3:4b (Apache-2.0, default), phi4-mini (MIT),
+# granite4:micro (Apache-2.0); smaller ones (qwen3:1.7b, granite4:1b) call tools less reliably.
+services:
+  ollama:
+    image: ollama/ollama:latest
+    ports: ['127.0.0.1:11434:11434']
+    environment:
+      OLLAMA_CONTEXT_LENGTH: '16384'   # wissi-viz's tool descriptions need more than the default context
+      OLLAMA_KEEP_ALIVE: 30m
+    volumes: [ollama:/root/.ollama]
+    restart: unless-stopped
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices: [{driver: nvidia, count: all, capabilities: [gpu]}]
+  pull:
+    image: ollama/ollama:latest
+    depends_on: [ollama]
+    environment: {OLLAMA_HOST: 'ollama:11434'}
+    entrypoint: ['sh', '-c', 'sleep 3 && ollama pull ${WISSI_AGENT_MODEL:-qwen3:4b}']
+    restart: 'no'
+volumes:
+  ollama: {}

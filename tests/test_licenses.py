@@ -26,6 +26,7 @@ CORE_EXTRAS = (
     'sam',
     'sam-onnx',
     'figures',
+    'agent',
     'all',
 )
 

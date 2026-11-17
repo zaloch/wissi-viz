@@ -17,7 +17,7 @@ export function initFigures(ctx) {
   $('b-figs')?.addEventListener('click', () => (F.open ? closeFigures() : openFigures()));
   document.addEventListener('keydown', onKey, true);
   window.addEventListener('resize', () => { if (F.open && F.data) renderPages(); });
-  return { open: openFigures, close: closeFigures, newFrom: newFigureFrom, isOpen: () => F.open };
+  return { open: openFigures, close: closeFigures, newFrom: newFigureFrom, isOpen: () => F.open, openId: openFigureById };
 }
 
 // ------------------------------------------------------------------------------------------------- open / close
@@ -47,6 +47,13 @@ async function newFigureFrom(ids) {
   await newFigure(ids);
 }
 
+/** Open the composer on a figure (by id): one the agent just made, say. */
+async function openFigureById(id) {
+  if (!F.open) { F.open = true; $('figs').hidden = false; $('b-figs')?.classList.add('on'); skeleton(); }
+  await loadList();
+  F.cur = null;
+  await pick(Number(id));
+}
 async function loadList() {
   const r = await X.quiet(X.http(`${X.BASE}/app/figures`));
   F.list = r.figures || [];

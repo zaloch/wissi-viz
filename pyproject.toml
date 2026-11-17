@@ -45,6 +45,8 @@ remote = ["httpx>=0.27"]                                                        
 # the figure composer's exports: matplotlib (PSF-based, BSD-compatible) draws PNG / TIFF / PDF / SVG with real text;
 # python-pptx (MIT; lxml BSD-3, XlsxWriter BSD-2) reads PowerPoint templates and writes .pptx
 figures = ["matplotlib>=3.8", "python-pptx>=1.0"]
+# the agent's tools over MCP (Claude Desktop / Claude Code, ChatGPT, any MCP client): the MCP Python SDK (MIT)
+agent = ["mcp>=2.3"]
 bench = ["playwright>=1.40", "hypercorn>=0.16", "cryptography>=42", "uvicorn>=0.29"]  # Apache-2.0, MIT, Apache-2.0/BSD-3, BSD-3
 # the viewer in its own window: pywebview (BSD-3) → WebView2 via pythonnet (MIT) on Windows, WKWebView via pyobjc (MIT)
 # on macOS. Linux needs GTK or Qt bindings on top (LGPL/GPL, installed separately: see docs/INTEGRATION.md §12).

@@ -16,6 +16,7 @@ import argparse
 import ipaddress
 import json
 import os
+import secrets
 import sys
 import time
 from pathlib import Path
@@ -51,6 +52,13 @@ def main(argv: list[str] | None = None) -> None:
 
         seg_main(argv[1:])
         return
+    if argv[:1] == ['mcp']:  # wissi-viz's tools over MCP on stdio (Claude Desktop, Claude Code)
+        try:
+            from .agent.mcp_server import main as mcp_main
+        except ImportError as e:
+            sys.exit(f'wissi-viz mcp needs the agent extra: pip install "wissi-viz[agent]" ({e.name})')
+        mcp_main(argv[1:])
+        return
     if argv[:1] == ['desktop']:  # the viewer in its own window (pywebview), see wissi_viz/desktop.py
         desktop.main(argv[1:])
         return
@@ -81,6 +89,7 @@ def main(argv: list[str] | None = None) -> None:
         ('pack', 'the sample pack step by step: status, download, prepare, segment, analyze, open'),
         ('segment', 'segment the cells of a slide into GeoParquet (Cellpose-SAM, Classpose or classic)'),
         ('loadtest', 'multi-user load test against a running server'),
+        ('mcp', "wissi-viz's tools over MCP (stdio) for Claude Desktop / Claude Code: acts in the running app"),
     ):
         sub.add_parser(name, help=text, add_help=False)
     s = sub.add_parser('serve', help='serve slides to browsers (the app page at /)')
@@ -103,6 +112,14 @@ def main(argv: list[str] | None = None) -> None:
         help='password visitors type before opening or connecting (default: $WISSI_VIZ_KEY)',
     )
     add_connect_args(s)
+    s.add_argument(
+        '--mcp',
+        nargs='?',
+        const='new',
+        default=os.environ.get('WISSI_VIZ_MCP'),
+        metavar='SECRET',
+        help="serve the agent's tools over MCP at /mcp/<secret>/ (ChatGPT, Claude connectors; default: a new secret)",
+    )
     s.add_argument('--host', default='127.0.0.1')
     s.add_argument('--port', type=int, default=8010)
     s.add_argument('--prefix', default='/wissi-viz')
@@ -240,7 +257,11 @@ def main(argv: list[str] | None = None) -> None:
         + (['connect'] if a.allow_connect else [])
     )
     print(f'wissi-viz: {", ".join(what)} → http://{a.host}:{a.port}/')
-    app = create_session_app(session, mode='server', prefix=a.prefix, cors=a.cors or None, key=a.key)
+    mcp = secrets.token_urlsafe(18) if a.mcp == 'new' else a.mcp
+    app = create_session_app(session, mode='server', prefix=a.prefix, cors=a.cors or None, key=a.key, mcp=mcp)
+    if mcp:
+        print(f'wissi-viz: MCP (streamable HTTP) → http://{a.host}:{a.port}/mcp/{mcp}/  (the path is the password;'
+              ' reach it over HTTPS, e.g. a tunnel)')  # fmt: skip
     uvicorn.run(app, host=a.host, port=a.port, log_level='warning')
 
 

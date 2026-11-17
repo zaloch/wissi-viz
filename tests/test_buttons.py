@@ -206,6 +206,7 @@ def test_every_button_does_what_it_says(data, tmp_path, monkeypatch):
             _brightfield(w, data, s)
             _fluorescence(w, data, s)
             _slide_list(w, data, s)
+            _agent(w, data, s, monkeypatch, tmp_path)
             b.close()
     finally:
         srv.stop()
@@ -1081,6 +1082,42 @@ def _figures(w, data, s):
     w.check('#fg-close', '() => document.getElementById("figs").hidden')
     w.check('#b-figs', FIGS)
     w.check('#b-figs', '() => document.getElementById("figs").hidden')
+
+
+def _agent(w, data, s, monkeypatch, tmp_path):
+    """The agent panel: model settings, the Claude / ChatGPT notes, a turn with a scripted model, clear, close."""
+    from wissi_viz.agent import llm
+
+    pg = w.pg
+    monkeypatch.setattr(llm, 'settings_file', lambda: tmp_path / 'agent-llm.json')
+    turn = iter([
+        {'choices': [{'message': {'content': '', 'tool_calls': [{'id': '1', 'type': 'function',
+                                                                  'function': {'name': 'list_slides', 'arguments': '{}'}}]}}]},
+        {'choices': [{'message': {'content': 'No slides are open.'}}]},
+    ])  # fmt: skip
+
+    def fake(cfg, path, body=None, timeout=300):
+        return {'data': [{'id': 'qwen3:4b'}]} if path == '/models' else next(turn)
+
+    monkeypatch.setattr(llm, '_post', fake)
+    w.check('#b-agent', '() => !document.getElementById("agent").hidden && document.getElementById("ag-status")')
+    pg.wait_for_function('() => /qwen3/.test(document.getElementById("ag-status").textContent)')
+    w.audit('agent')
+    w.check('#ag-settings', '() => document.getElementById("ag-model")')
+    w.check('#ag-save', '() => !document.getElementById("ag-model")')
+    w.check('#ag-connect', '() => document.getElementById("ag-copy-claude")')
+    w.audit('agent: connect')
+    w.check(
+        '#ag-copy-claude', '() => [...document.querySelectorAll(".toast b")].some((b) => b.textContent === "Copied")'
+    )
+    w.check('#ag-copy-code', None)
+    w.check('#ag-connect', '() => !document.getElementById("ag-copy-claude")')
+    pg.fill('#ag-input', 'Which slides are open?')
+    w.check('#ag-send', '() => /No slides are open/.test(document.getElementById("ag-log").textContent)')
+    assert 'list_slides' in pg.inner_text('#ag-log')
+    w.audit('agent: a turn')
+    w.check('#ag-clear', '() => !document.querySelector("#ag-log .ag-msg")')
+    w.check('#ag-close', '() => document.getElementById("agent").hidden')
 
 
 def _pptx_template(data):

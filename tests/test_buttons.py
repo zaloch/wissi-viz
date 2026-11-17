@@ -13,6 +13,7 @@ import os
 import re
 import sys
 import time
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -977,6 +978,17 @@ def _figures(w, data, s):
     w.check('#fg-win-close', '() => !document.getElementById("fg-shows")')
     w.check('#fg-pages .fwin.k-view', '() => document.getElementById("fg-shows")')
     w.audit('view window')
+    w.check(
+        '#fg-inset-add',
+        '() => document.querySelector("#fg-pages .finset") && document.getElementById("fg-inset-remove")',
+    )
+    w.audit('inset')
+    w.check(
+        '#fg-inset-corner button[data-v=bl]',
+        '() => document.querySelector("#fg-inset-corner [aria-pressed=true]")?.dataset.v === "bl"',
+    )
+    w.check('#fg-inset-remove', '() => !document.querySelector("#fg-pages .finset")')
+    w.cover('#fg-inset-corner button')
     pg.keyboard.press('ArrowRight')
     pg.wait_for_function('() => document.querySelector("#fg-pages .fwin.edited.k-view")')
     w.check('#fg-win-reset', '() => !document.querySelector("#fg-pages .fwin.edited.k-view")')
@@ -1045,12 +1057,22 @@ def _figures(w, data, s):
     with pg.expect_download(timeout=120000) as dl:
         w.check('#fg-export-go', None)
     assert dl.value.suggested_filename.endswith('.zip')  # the picture, the recipe snapshot
+    snap = data / 'snapshot.recipe.json'
+    with zipfile.ZipFile(dl.value.path()) as z:
+        snap.write_bytes(z.read(next(n for n in z.namelist() if n.endswith('.recipe.json'))))
     w.check('#fg-export-open', '() => !document.getElementById("fg-export").hidden')
     w.check('#fg-export-cancel', '() => document.getElementById("fg-export").hidden')
     # adjust a view in the viewer, then back
     w.check('#fg-pages .fwin.k-view', '() => document.getElementById("fg-adjust")')
     w.check('#fg-adjust', '() => document.getElementById("figs").hidden')
     w.check('.toast button:has-text("Update view")', FIGS)
+    # a snapshot opens as a figure of the views as they were; Use current views makes it a list of today's views
+    with pg.expect_file_chooser() as fc:
+        w.check('#fg-snap-open', None)
+    fc.value.set_files(str(snap))
+    pg.wait_for_selector('#fg-unfreeze')
+    w.audit('snapshot')
+    w.check('#fg-unfreeze', '() => !document.getElementById("fg-unfreeze") && document.querySelector("#fg-srckind")')
     # figures: new, delete; close and open again
     k = len(s.store.figures())
     w.check('#fg-new', f'() => document.querySelectorAll("#fg-figure option").length === {k + 1}')

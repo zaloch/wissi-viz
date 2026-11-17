@@ -104,6 +104,26 @@ def _page_figure(page: dict, result: dict, picture, series, dpi: int, fonts: dic
                 img, extent=(0, 1, 0, 1), aspect='auto', interpolation='lanczos' if img.shape[1] > pw else 'antialiased'
             )
             ax.set_axis_off()
+            edge = '#ffffff' if w.get('fluorescence') else '#111111'
+            ins = w.get('inset')
+            if ins:  # the zoom: its own picture in a corner, and a dashed frame round the part it shows
+                ix, iy, iw, ih = ins['rect']
+                ipw, iph = max(8, round(iw / 25.4 * dpi)), max(8, round(ih / 25.4 * dpi))
+                sub = picture({**w, 'bounds': ins['bounds']}, min(ipw, 4000), min(iph, 4000))
+                ax2 = fig.add_axes((fx(ix), fy(iy + ih), iw / W, ih / H))
+                ax2.imshow(sub, extent=(0, 1, 0, 1), aspect='auto', interpolation='antialiased')
+                ax2.set_axis_off()
+                fig.patches.append(Rectangle((fx(ix), fy(iy + ih)), iw / W, ih / H, transform=fig.transFigure,
+                                             fill=False, edgecolor=edge, linewidth=0.8, zorder=6))  # fmt: skip
+                fx0, fy0, fw0, fh0 = ins['frame']
+                fig.patches.append(Rectangle((fx(fx0), fy(fy0 + fh0)), fw0 / W, fh0 / H, transform=fig.transFigure,
+                                             fill=False, edgecolor=edge, linewidth=0.7, linestyle='--', zorder=6))  # fmt: skip
+            for i, k in enumerate(w.get('legend') or []):  # the layers' classes
+                ky = y + wh - 1.2 - (len(w['legend']) - i) * font * PT * 1.25
+                fig.patches.append(Rectangle((fx(x + 1.2), fy(ky + font * PT * 0.8)), font * PT * 0.8 / W, font * PT * 0.8 / H,
+                                             transform=fig.transFigure, facecolor=k['color'], edgecolor='none', zorder=6))  # fmt: skip
+                fig.text(fx(x + 1.2 + font * PT * 1.2), fy(ky + font * PT * 0.85), k['name'], ha='left', va='bottom',
+                         fontsize=font * 0.8, color=edge, zorder=7)  # fmt: skip
             sb = w.get('scalebar')
             if sb:
                 m = 1.5 if ww < 60 else 3.0

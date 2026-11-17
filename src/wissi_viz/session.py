@@ -39,9 +39,9 @@ from ._version import __version__
 from .annotations import AnnotationLayer
 from .connectors import RemoteConnection, image_entries, open_connection
 from .objects import cached_object_layer
-from .regions import region_rgb
+from .regions import draw_layers, layer_key, region_rgb
 from .registry import SLIDE_EXTS, SlideRegistry
-from .server import app_page, create_app
+from .server import app_page, create_app, layer_features
 from .store import Store
 from .tiles import TileService
 
@@ -539,21 +539,42 @@ class Session:
         self._fig_objects[key] = (L.version, obj)
         return obj
 
-    def figure_layout(self, recipe: dict | None, name: str = '', *, open_slides: bool = True) -> dict:
-        """A figure's pages and what goes with them: the views it can use (``views``, ``fields``, ``values``), its
-        members and what an Update would change, the chart's data and the template. Slides of its views that are
-        not open are opened (when this session may open them)."""
+    def _enrich(self, items: list[dict]) -> list[dict]:
+        """Views from elsewhere (a snapshot) with what their open slides give: ``sid``, ``mpp``, ``fluorescence``."""
+        by = self._slide_of()
+        out = []
+        for v in items:
+            sid = by.get(str(v.get('slide') or '').strip().lower())
+            item = {**v, 'sid': sid, 'meta': dict(v.get('meta') or {}), 'mpp': v.get('mpp'), 'fluorescence': None}
+            if sid:
+                try:
+                    info = self.registry.get(sid)[1].info
+                    item['mpp'] = (info.mpp or (None,))[0] or item['mpp']
+                    item['fluorescence'] = info.mode != 'rgb'
+                    if item['fluorescence']:
+                        item['channels'] = [{'name': c.name, 'color': c.color} for c in info.channels]
+                except Exception:  # noqa: BLE001
+                    pass
+            out.append(item)
+        return out
+
+    def _figure(self, recipe: dict | None, name: str, open_slides: bool) -> tuple:
+        """(recipe, all views, selection, layout, chart series, template, whether slides were opened)."""
         r = figures.normalize(recipe)
-        views = self.figure_views()
-        sel = figures.select(r, views)
+        frozen = r['source']['kind'] == 'frozen'
+
+        def pick():
+            views = self.figure_views()
+            return views, figures.select(r, self._enrich(r['source']['views']) if frozen else views)
+
+        views, sel = pick()
         opened = False
         closed = sorted({str(v['slide']) for v in sel['members'] if not v.get('sid') and v.get('slide')})
         if closed and open_slides and self.can_open:
             paths = [p for p in closed if Path(p).exists() and self.allowed(p)]
             if paths:
                 opened = bool(self.open(paths)['opened'])
-                views = self.figure_views()
-                sel = figures.select(r, views)
+                views, sel = pick()
         tinfo = None
         if r['template'] == 'pptx' and (r['pptx'] or {}).get('id'):
             try:
@@ -561,10 +582,30 @@ class Session:
             except KeyError:
                 tinfo = None
         L = figures.layout(r, sel['members'], name=name, template=tinfo)
+        for p in L['pages']:  # the classes each window's layers show there: its key
+            for w in p['windows']:
+                if w['kind'] == 'view' and w.get('sid') and w.get('layers'):
+                    w['legend'] = layer_key(self._features(w['sid'], w['layers']), w['bounds'])
         series = None
         if r['chart']:
             vals = figures.measure_values(r['chart'], sel['members'], self._objects)
             series = figures.chart_series(r, sel['members'], vals, dark=L['dark'])
+        return r, views, sel, L, series, tinfo, opened
+
+    def _features(self, sid: str, names) -> list:
+        out = []
+        for n in names or []:
+            try:
+                out.append(layer_features(self.registry, sid, n))
+            except KeyError:  # not a layer of this slide
+                pass
+        return out
+
+    def figure_layout(self, recipe: dict | None, name: str = '', *, open_slides: bool = True) -> dict:
+        """A figure's pages and what goes with them: the views it can use (``views``, ``fields``, ``values``), its
+        members and what an Update would change, the chart's data and the template. Slides of its views that are
+        not open are opened (when this session may open them)."""
+        r, views, sel, L, series, tinfo, opened = self._figure(recipe, name, open_slides)
         fields = figures.fields_of(views)
         values = {}
         for f in fields:
@@ -580,11 +621,12 @@ class Session:
         for sid in {v['sid'] for v in sel['members'] if v.get('sid')}:
             for n, lay in self.registry.layers(sid).items():
                 layers.setdefault(n, set()).update(lay.classes)
+        closed = sorted({str(v['slide']) for v in sel['members'] if not v.get('sid')})
         return {**L, 'members': sel['ids'], 'pending': sel['pending'], 'missing': sel['missing'],
-                'closed': [str(v['slide']) for v in sel['members'] if not v.get('sid')],
+                'closed': closed, 'lost': [p for p in closed if not Path(p).exists()],
                 'views': [{'id': v['id'], 'name': v['name'], 'sid': v.get('sid'), 'slide': v['slide'],
                            'bounds': v['bounds'], 'meta': v['meta'], 'fluorescence': v['fluorescence'],
-                           'channels': v.get('channels')} for v in views],
+                           'channels': v.get('channels')} for v in (sel['members'] if r['source']['kind'] == 'frozen' else views)],
                 'fields': fields, 'values': values, 'series': series, 'template': tinfo,
                 'layers': [{'name': n, 'classes': sorted(c)} for n, c in sorted(layers.items())],
                 'opened': opened, 'slides': self.slides() if opened else None}  # fmt: skip
@@ -602,24 +644,17 @@ class Session:
         if fmt not in figexport.FORMATS:
             raise ValueError(f'format: {", ".join(figexport.FORMATS)}')
         dpi = max(72, min(int(dpi or 300), 1200))
-        r = figures.normalize(recipe)
-        views = self.figure_views()
-        sel = figures.select(r, views)
-        tinfo = None
-        if r['template'] == 'pptx' and (r['pptx'] or {}).get('id'):
-            tinfo = self.template_info(r['pptx']['id'])
-        L = figures.layout(r, sel['members'], name=name, template=tinfo)
-        series = None
-        if r['chart']:
-            vals = figures.measure_values(r['chart'], sel['members'], self._objects)
-            series = figures.chart_series(r, sel['members'], vals, dark=L['dark'])
+        r, _, sel, L, series, tinfo, _ = self._figure(recipe, name, True)
 
         def picture(w: dict, pw: int, ph: int):
             sid = w.get('sid')
             if not sid:
                 return np.full((ph, pw, 3), 0 if w.get('fluorescence') else 255, np.uint8)
             e, _ = self.registry.get(sid)
-            return region_rgb(e.source, w['bounds'], (pw, ph), e.windows, w.get('channels'), bool(w.get('gray')))
+            a = region_rgb(e.source, w['bounds'], (pw, ph), e.windows, w.get('channels'), bool(w.get('gray')))
+            if w.get('layers'):
+                a = draw_layers(a, w['bounds'], self._features(sid, w['layers']))
+            return a
 
         stem = re.sub(r'[\\/:*?"<>|]+', '_', name or 'Figure').strip() or 'Figure'
         if fmt == 'pptx':
@@ -640,6 +675,32 @@ class Session:
             files = figexport.render(L, picture, fmt, dpi, series, (tinfo or {}).get('fonts'))
         snap = figexport.snapshot(name, r, sel['members']) if snapshot else None
         return figexport.bundle(stem, fmt, files, snap=snap, series=series if data else None)
+
+    def figure_from_snapshot(self, data: bytes, name: str = '') -> dict:
+        """A new figure from an export's ``.recipe.json``: its recipe on the views as they were then (frames and
+        fields), so that it draws as exported. Returns {'figure', 'figures'}."""
+        try:
+            snap = json.loads(data.decode('utf-8'))
+        except (UnicodeDecodeError, ValueError) as e:
+            raise ValueError('not a figure snapshot (.recipe.json)') from e
+        if not isinstance(snap, dict) or snap.get('wissi_viz_figure') != 1 or not isinstance(snap.get('recipe'), dict):
+            raise ValueError('not a figure snapshot (.recipe.json)')
+        recipe = figures.normalize(snap['recipe'])
+        recipe['source'] = {'kind': 'frozen', 'ids': [], 'rules': [], 'views': snap.get('views') or []}
+        recipe['members'] = None
+        when = str(snap.get('exported') or '')[:10]
+        f = self.store.save_figure(name or f'{snap.get("name") or "Figure"} (as of {when})', recipe)
+        return {'figure': f, 'figures': self.store.figures()}
+
+    def relink_views(self, old: str, new: str, *, trusted: bool = False) -> dict:
+        """Every view of a slide that moved (``old`` path) now of ``new``: returns {'relinked': n, 'views'}."""
+        p = Path(str(new)).expanduser()
+        if not (trusted or self.allowed(p)):
+            raise PermissionError('outside the folders this server allows')
+        if not p.exists():
+            raise FileNotFoundError(f'not found: {p}')
+        n = self.store.relink(str(old), str(p))
+        return {**self.saved_views(), 'relinked': n}
 
     def _templates_dir(self) -> Path:
         d = (user_dir('config') if self.remember else self.cache_dir / 'session-templates') / 'templates'
@@ -1048,6 +1109,22 @@ def create_session_app(
             raise HTTPException(501, str(e)) from e
         return Response(data, media_type=mt, headers={'Content-Disposition': f'attachment; filename="{fname}"',
                                                       'X-Filename': quote(fname)})  # fmt: skip
+
+    @app.post('/app/figures/snapshot')
+    async def app_figures_snapshot(request: Request, name: str = ''):
+        """A new figure from an export's .recipe.json (the body): drawn on the views as they were then."""
+        check(request, needs_key=mode == 'server')
+        data = await request.body()
+        return await run(lambda: session.figure_from_snapshot(data, name))
+
+    @app.post('/app/views-relink')
+    async def app_views_relink(request: Request):
+        """Views of a slide that moved: {old: path, new: path}."""
+        check(request, needs_key=True)
+        if not session.can_open:
+            raise HTTPException(403, 'this server does not open files')
+        b = await request.json()
+        return await run(lambda: session.relink_views(str(b.get('old') or ''), str(b.get('new') or '')))
 
     @app.get('/app/figures/templates')
     async def app_figures_templates(request: Request):

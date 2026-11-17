@@ -146,6 +146,11 @@ class Store:
             cur = self._db.execute(f'delete from views where id in ({",".join("?" * len(ids))})', ids) if ids else None
         return cur.rowcount if cur else 0
 
+    def relink(self, old: str, new: str) -> int:
+        """Views of slide ``old`` (as stored) now of ``new``: how many."""
+        with self._lock, self._db:
+            return self._db.execute('update views set slide=?, updated=? where slide=?', (new, _now(), old)).rowcount
+
     def import_views(
         self,
         path: str | Path,

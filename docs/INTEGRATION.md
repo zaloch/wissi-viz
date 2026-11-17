@@ -686,6 +686,12 @@ uvx --from "wissi-viz[desktop]" wissi-viz-app   # try it without installing
     - *Export* (needs `[figures]`: matplotlib, python-pptx): PNG, TIFF (LZW), PDF and SVG (text and charts stay
       text and vectors), or PPTX (on the template's master; text editable). Beside the picture: the recipe snapshot
       (`.recipe.json`: the recipe and every view's frame and fields at that moment) and the chart's data (`.csv`).
+    - *Insets*: a zoom of part of a window in one of its corners (2–8×), a dashed frame on the window marking the
+      part (drag it). *Layers*: outlines of any layer on every window (or per window), with a key of the classes
+      each window shows.
+    - *Open snapshot…* makes a figure from an export's `.recipe.json`: the views as they were then, so it draws as
+      exported; *Use current views* turns it back into a figure that follows today's views.
+    - *Relink…*: views of a slide that moved (not found) follow it to its new path (`POST /app/views-relink`).
     - *Adjust in viewer* shows a window's view; frame it and *Update view*: every figure using the view follows.
   - Every button of this page is clicked and checked in a real browser by `tests/test_buttons.py`; a visible button
     without a check there fails the test.

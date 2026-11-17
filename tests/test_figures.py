@@ -348,6 +348,41 @@ def test_figures_api(slides, tmp_path):
     assert r.status_code == 200 and len(pptx.Presentation(io.BytesIO(r.content)).slides) == 1
     assert c.post('/app/figures/templates?name=x.pdf', content=b'%PDF', headers=h).status_code == 400
     assert c.post('/app/figures/layout', json={'recipe': rec}).status_code == 403  # the token
+    # a snapshot opens as a figure on the views as they were: later changes to the views do not move it
+    r = c.post('/app/figures/export', json={'recipe': rec, 'name': 'Fig 1', 'fmt': 'svg', 'snapshot': True}, headers=h)
+    snap = zipfile.ZipFile(io.BytesIO(r.content)).read('Fig 1.recipe.json')
+    c.post('/app/views/1', json={'bounds': [0, 0, 50, 50], 'meta': {'G': 'moved'}}, headers=h)
+    f = c.post('/app/figures/snapshot', content=snap, headers=h).json()['figure']
+    assert f['name'].startswith('Fig 1 (as of ') and f['recipe']['source']['kind'] == 'frozen'
+    j = c.post('/app/figures/layout', json={'recipe': f['recipe'], 'name': f['name']}, headers=h).json()
+    assert (
+        j['members'] == [1, 2, 3]
+        and j['pages'][0]['windows'][0]['bounds'][2] - j['pages'][0]['windows'][0]['bounds'][0] > 100
+    )
+    assert c.post('/app/figures/snapshot', content=b'{}', headers=h).status_code == 400
+    # a layer drawn in the windows, with its key; on the thumbnail too
+    from wissi_viz.annotations import AnnotationLayer
+
+    L = AnnotationLayer(name='cells', classes={'Tumour': '#ff0000'})
+    L.add_rect(320, 220, 40, 40, cls='Tumour')
+    s.registry.add_annotations(sids[0], L, name='cells')
+    j = c.post('/app/figures/layout', json={'recipe': {**rec, 'layers': ['cells']}}, headers=h).json()
+    assert j['pages'][0]['windows'][0]['legend'] == [{'name': 'Tumour', 'color': '#ff0000'}]
+    w0 = j['pages'][0]['windows'][0]
+    th = c.get(f'/wissi-viz/slides/{w0["sid"]}/thumbnail', params={'size': 64, 'bounds': ','.join(map(str, w0['bounds'])),
+                                                                  'layers': 'cells|nope'})  # fmt: skip
+    assert th.status_code == 200
+    r = c.post('/app/figures/export', json={'recipe': {**rec, 'layers': ['cells'], 'windows': {'0:0': {'inset': {}}}},
+                                            'fmt': 'pptx', 'dpi': 72}, headers=h)  # fmt: skip
+    assert r.status_code == 200, r.text
+    # relink: the views of a slide that moved follow it
+    (slides / 'moved').mkdir()
+    (slides / 'B2.svs').rename(slides / 'moved' / 'B2.svs')
+    r = c.post(
+        '/app/views-relink', json={'old': str(slides / 'B2.svs'), 'new': str(slides / 'moved' / 'B2.svs')}, headers=h
+    )
+    assert r.json()['relinked'] == 1 and s.store.view(3)['slide'].endswith('moved/B2.svs')
+    assert c.post('/app/views-relink', json={'old': 'x', 'new': str(slides / 'nope.svs')}, headers=h).status_code == 400
     s.shutdown()
 
 
@@ -361,3 +396,41 @@ def _as_potx(data: bytes) -> bytes:
                 b = b.replace(b'presentationml.presentation.main+xml', b'presentationml.template.main+xml')
             z.writestr(it, b)
     return out.getvalue()
+
+
+def test_insets_layers_and_frozen_views():
+    vs = _views()
+    rec = {'source': {'kind': 'views', 'ids': [1, 2]}, 'layers': ['cells'],
+           'windows': {'0:0': {'inset': {'src': [0.5, 0.5, 0.1, 0.1], 'corner': 'bl', 'size': 0.4}, 'layers': []}}}  # fmt: skip
+    ws = F.layout(rec, F.select(rec, vs)['members'])['pages'][0]['windows']
+    w = ws[0]
+    x, y, ww, wh = w['rect']
+    ins = w['inset']
+    assert ins['frame'] == pytest.approx([x + 0.5 * ww, y + 0.5 * wh, 0.1 * ww, 0.1 * wh])
+    assert ins['rect'][0] < x + ww / 2 and ins['rect'][1] > y + wh / 2  # bottom left
+    assert ins['rect'][2] == pytest.approx(0.4 * ww) and ins['bounds'] == pytest.approx([600, 450, 720, 540])
+    assert w['layers'] == [] and ws[1]['layers'] == ['cells'] and 'inset' not in ws[1]
+    # a snapshot's views: as given, in the recipe's order
+    frozen = {'source': {'kind': 'frozen', 'views': [{'id': 9, 'bounds': [0, 0, 10, 10]}]}}
+    assert F.normalize(frozen)['source']['kind'] == 'frozen'
+    assert F.select(frozen, [vs[1], vs[0]])['ids'] == [2, 1]
+
+
+def test_layer_outlines_and_key():
+    from wissi_viz import annio
+    from wissi_viz.annotations import AnnotationLayer
+    from wissi_viz.regions import draw_layers, layer_key
+
+    L = AnnotationLayer(name='cells', classes={'Tumour': '#ff0000', 'Immune': '#00ff00'})
+    L.add_rect(10, 10, 20, 20, cls='Tumour')
+    L.add_point(60, 60, cls='Immune')
+    L.add_rect(500, 500, 10, 10, cls='Tumour')  # outside
+    Fs = annio.from_layer(L)
+    img = np.full((100, 100, 3), 255, np.uint8)
+    out = draw_layers(img, (0, 0, 100, 100), [Fs])
+    assert tuple(out[10, 20]) == (255, 0, 0) and (out[55:66, 55:66] == (0, 255, 0)).all(-1).any()
+    assert layer_key([Fs], (0, 0, 100, 100)) == [
+        {'name': 'Tumour', 'color': '#ff0000'},
+        {'name': 'Immune', 'color': '#00ff00'},
+    ]
+    assert layer_key([Fs], (0, 0, 40, 40)) == [{'name': 'Tumour', 'color': '#ff0000'}]

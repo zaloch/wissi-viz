@@ -35,7 +35,7 @@ from . import annio, sam3, summary
 from ._version import __version__
 from .annotations import AnnotationLayer, _add_geometry, _class_from_props
 from .jobs import JobRunner
-from .regions import region_rgb
+from .regions import draw_layers, region_rgb
 from .registry import SlideRegistry
 from .sources.remote import RemoteError
 from .tiles import encode_rgb
@@ -218,10 +218,10 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
 
     @r.get('/slides/{sid}/thumbnail')
     async def thumbnail(sid: str, size: int = 512, bounds: str | None = None, channels: str | None = None,
-                        gray: bool = False):  # fmt: skip
+                        gray: bool = False, layers: str | None = None):  # fmt: skip
         """A small picture of the slide, or of a rectangle of it (``bounds=x0,y0,x1,y1`` in level-0 px: a saved
         view's preview; it may reach outside the slide). Fluorescence: ``channels=0,2`` blends only those, ``gray``
-        shows them in white."""
+        shows them in white. ``layers=a|b``: those layers' outlines drawn on the rectangle."""
         e, pyr = entry(sid)
         size = max(16, min(size, 2048))
         rect = None
@@ -243,6 +243,14 @@ def create_router(registry: SlideRegistry, cors: str | None = '*', allow_edit: b
             src = e.source
             if rect is not None:
                 a = region_rgb(src, rect, size, e.windows, chans, gray)
+                if layers:
+                    feats = []
+                    for n in (x for x in layers.split('|') if x):
+                        try:
+                            feats.append(layer_features(registry, sid, n))
+                        except KeyError:  # a layer of another slide, or removed since
+                            pass
+                    a = draw_layers(a, rect, feats)
             elif src.info.mode == 'rgb':
                 a = np.asarray(src.thumbnail(size))[..., :3]
             else:
@@ -919,6 +927,24 @@ def create_app(
         return FileResponse(ASSETS_DIR / f'icon.{kind}', headers={'Cache-Control': 'max-age=86400'})
 
     return app
+
+
+_FEATURES: OrderedDict = OrderedDict()
+
+
+def layer_features(registry, sid: str, name: str):
+    """A layer's features in flat form (:func:`wissi_viz.annio.from_layer`), cached per layer version."""
+    L = registry.layer(sid, name)
+    key = (sid, name)
+    hit = _FEATURES.get(key)
+    if hit is not None and hit[0] == L.version:
+        _FEATURES.move_to_end(key)
+        return hit[1]
+    F = annio.from_layer(L)
+    _FEATURES[key] = (L.version, F)
+    while len(_FEATURES) > 16:
+        _FEATURES.popitem(last=False)
+    return F
 
 
 def app_page(

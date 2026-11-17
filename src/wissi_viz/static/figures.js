@@ -78,6 +78,27 @@ async function newFigure(ids = null) {
   render();
   relayout(0);
 }
+async function openSnapshot(file) {
+  const headers = { 'X-Wissi-Token': X.TOKEN };
+  if (X.key()) headers['X-Wissi-Key'] = X.key();
+  const r = await fetch(`${X.BASE}/app/figures/snapshot`, { method: 'POST', headers, body: file });
+  let j = {};
+  try { j = await r.json(); } catch (e) { /* not JSON */ }
+  if (!r.ok) { X.toast({ kind: 'bad', title: 'Snapshot not opened', sub: j.detail || r.statusText }); return; }
+  F.list = j.figures;
+  X.toast({ title: `Opened: ${j.figure.name}`, sub: 'Views as exported · Use current views: Source (left)' });
+  await pick(j.figure.id);
+}
+async function relink(old) {
+  const nw = window.prompt(`Slide not found:\n${old}\n\nIts new path (its views follow):`, old);
+  if (!nw || nw === old) return;
+  try {
+    const r = await X.http(`${X.BASE}/app/views-relink`, { old, new: nw });
+    X.toast({ title: `${r.relinked} view${r.relinked === 1 ? '' : 's'} relinked`, sub: nw });
+    X.loadViews();
+    relayout(0);
+  } catch (e) { X.toast({ kind: 'bad', title: 'Not relinked', sub: e.message }); }
+}
 async function deleteFigure() {
   if (!F.cur) return;
   if (!window.confirm(`Delete “${F.cur.name}”? Its views stay.`)) return;
@@ -206,9 +227,13 @@ function renderBar() {
   } else status.textContent = `Up to date · ${d.members.length} view${d.members.length === 1 ? '' : 's'}`;
   const ex = h('button', { id: 'fg-export-open', class: 'btn primary', title: 'Export: PNG, TIFF, PDF, SVG or PowerPoint' }, 'Export…');
   ex.onclick = () => { F.exportOpen = !F.exportOpen; renderExport(); };
+  const snapIn = h('input', { type: 'file', accept: '.json', id: 'fg-snap-file', hidden: true });
+  snapIn.onchange = () => { if (snapIn.files[0]) openSnapshot(snapIn.files[0]); snapIn.value = ''; };
+  const snapB = h('button', { id: 'fg-snap-open', class: 'btn', title: 'Open a snapshot (.recipe.json, saved beside an export): the figure as it was exported' }, 'Open snapshot…');
+  snapB.onclick = () => snapIn.click();
   const close = h('button', { id: 'fg-close', class: 'btn icon ghost', title: 'Close figures · Back to the slides', 'aria-label': 'Close figures' }, '✕');
   close.onclick = closeFigures;
-  bar.replaceChildren(h('b', {}, 'Figure'), figSel, name, nb, del, h('span', { class: 'sep' }), tpl, h('span', { class: 'grow' }), status, ex, close);
+  bar.replaceChildren(h('b', {}, 'Figure'), figSel, name, nb, del, snapB, snapIn, h('span', { class: 'sep' }), tpl, h('span', { class: 'grow' }), status, ex, close);
 }
 
 // ---------------------------------------------------------------------------------------------------- source
@@ -234,7 +259,13 @@ function renderSrc() {
     img.onerror = () => { img.removeAttribute('src'); img.classList.add('blank'); };
     return img;
   };
-  if (src.kind !== 'query') {
+  if (src.kind === 'frozen') {
+    kids.splice(1, 1);   // no Views / Query switch: a snapshot's views are fixed
+    const cur = h('button', { id: 'fg-unfreeze', class: 'btn sm', title: 'Draw with the saved views as they are now (frames, fields) instead' }, 'Use current views');
+    cur.onclick = () => change((rr) => { rr.source = { kind: 'views', ids: (rr.source.views || []).map((v) => v.id) }; });
+    kids.push(h('div', { class: 'panel-note' }, `Snapshot: ${views.length} view${views.length === 1 ? '' : 's'} as exported · Frames and fields fixed`), h('div', { class: 'row' }, cur));
+    for (const v of views) kids.push(h('div', { class: 'fv', title: v.slide }, thumb(v), h('span', { class: 'txt' }, h('span', { class: 'name' }, v.name || `View ${v.id}`), h('span', { class: 'sub' }, v.meta?.Slide || ''))));
+  } else if (src.kind !== 'query') {
     const ids = new Set(src.ids || []);
     const fromList = h('button', { id: 'fg-fromlist', class: 'btn sm', title: 'Use the views checked in the Views list' }, 'Checked in list');
     fromList.onclick = () => {
@@ -283,7 +314,12 @@ function renderSrc() {
       kids.push(ul);
     }
   }
-  if (d?.closed?.length) kids.push(h('div', { class: 'panel-note warn' }, `${d.closed.length} view${d.closed.length === 1 ? '' : 's'} of slides not open here: blank in the figure`));
+  if (d?.closed?.length) kids.push(h('div', { class: 'panel-note warn' }, `${d.closed.length} slide${d.closed.length === 1 ? '' : 's'} not open here: blank in the figure`));
+  for (const p of d?.lost || []) {
+    const b = h('button', { class: 'btn sm fg-relink', title: `Not found: ${p}` }, `Relink ${p.split(/[\\/]/).pop()}…`);
+    b.onclick = () => relink(p);
+    kids.push(b);
+  }
   box.replaceChildren(...kids);
 }
 function ruleRow(q, i) {
@@ -521,7 +557,21 @@ function windowEl(w, p, d) {
   if (w.kind === 'view') {
     if (w.sid) {
       const px = Math.min(1600, Math.round(Math.max(ww, wh) * SC * (window.devicePixelRatio || 1)));
-      el.append(h('img', { alt: '', draggable: 'false', src: `${X.API}/slides/${X.enc(w.sid)}/thumbnail?size=${px}&bounds=${w.bounds.map((v) => Math.round(v)).join(',')}${w.channels ? `&channels=${w.channels.join(',')}` : ''}${w.gray ? '&gray=true' : ''}` }));
+      el.append(h('img', { alt: '', draggable: 'false', src: thumbUrl(w.sid, w.bounds, px, w) }));
+      if (w.inset) {
+        const [ix, iy, iw, ih] = w.inset.rect, [fx0, fy0, fw0, fh0] = w.inset.frame;
+        const edge = w.fluorescence ? '#fff' : '#111';
+        const ipx = Math.min(1200, Math.round(Math.max(iw, ih) * SC * (window.devicePixelRatio || 1)));
+        el.append(h('img', { class: 'finset', alt: '', draggable: 'false', src: thumbUrl(w.sid, w.inset.bounds, ipx, w),
+          style: `left: ${(ix - x) * SC}px; top: ${(iy - y) * SC}px; width: ${iw * SC}px; height: ${ih * SC}px; border-color: ${edge}` }));
+        const fr = h('span', { class: 'fframe', title: 'The part the inset shows · Drag: move it', style: `left: ${(fx0 - x) * SC}px; top: ${(fy0 - y) * SC}px; width: ${fw0 * SC}px; height: ${fh0 * SC}px; border-color: ${edge}` });
+        fr.addEventListener('pointerdown', (e) => dragFrame(e, w, fr));
+        el.append(fr);
+      }
+      if (w.legend?.length) {
+        el.append(h('span', { class: 'fkey', style: `font-size: ${fs * 0.8}px; color: ${w.fluorescence ? '#fff' : '#111'}` },
+          w.legend.map((k) => h('span', {}, h('i', { style: `background: ${k.color}` }), k.name))));
+      }
     } else el.append(h('span', { class: 'fmissing' }, 'Slide not open'));
     if (w.scalebar) {
       const sb = w.scalebar;
@@ -574,6 +624,13 @@ function windowChips(w, cls) {
     bar.append(b);
   });
   return bar;
+}
+function thumbUrl(sid, bounds, px, w) {
+  const q = [`size=${px}`, `bounds=${bounds.map((v) => Math.round(v)).join(',')}`];
+  if (w?.channels) q.push(`channels=${w.channels.join(',')}`);
+  if (w?.gray) q.push('gray=true');
+  if (w?.layers?.length) q.push(`layers=${encodeURIComponent(w.layers.join('|'))}`);
+  return `${X.API}/slides/${X.enc(sid)}/thumbnail?${q.join('&')}`;
 }
 function markSel() {
   if (F.data && allWindows().some((w) => w.key === F.sel && w.kind === 'view' && w.fluorescence)) { renderPages(); return; }
@@ -632,6 +689,27 @@ function startDrag(e, w, el) {
   };
   window.addEventListener('pointermove', onMove);
   window.addEventListener('pointerup', onUp);
+}
+function dragFrame(e, w, fr) {
+  if (e.button !== 0 || F.sel !== w.key) return;   // a click on an unselected window selects it
+  e.preventDefault(); e.stopPropagation();
+  const sx = e.clientX, sy = e.clientY, [x, y, ww, hh] = w.rect;
+  const src = [...w.inset.src];
+  let next = src;
+  const onMove = (ev) => {
+    const dx = (ev.clientX - sx) / SC / ww, dy = (ev.clientY - sy) / SC / hh;
+    next = [Math.min(1 - src[2], Math.max(0, src[0] + dx)), Math.min(1 - src[3], Math.max(0, src[1] + dy)), src[2], src[3]];
+    fr.style.left = `${next[0] * ww * SC}px`; fr.style.top = `${next[1] * hh * SC}px`;
+  };
+  const onUp = () => {
+    window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp);
+    if (next !== src) setInset(w, { src: next.map((v) => Math.round(v * 1000) / 1000) });
+  };
+  window.addEventListener('pointermove', onMove); window.addEventListener('pointerup', onUp);
+  void x; void y;
+}
+function setInset(w, cfg) {
+  override(w, (o) => { o.inset = cfg === null ? undefined : { ...(o.inset || (w.inset ? { src: w.inset.src, corner: w.inset.corner, size: w.inset.size } : {})), ...cfg }; if (cfg === null) delete o.inset; });
 }
 function override(w, fn) {
   change((r) => {
@@ -765,6 +843,14 @@ function renderInsp() {
         (v) => change((rr) => { rr.font = v ? Number(v) : null; }), { id: 'fg-font' }),
       'Gap', select('Gap', [['', 'Auto'], ...[0, 0.5, 1, 1.5, 2, 3, 4, 6, 8].map((v) => [v, `${v} mm`])], r.layout?.gap ?? '',
         (v) => change((rr) => { rr.layout = { ...(rr.layout || {}), gap: v === '' ? null : Number(v) }; }), { id: 'fg-gap' }));
+    if (d?.layers?.length) {
+      const cur = new Set(r.layers || []);
+      grid.append('Layers', h('span', { class: 'vals', id: 'fg-layers' }, d.layers.map((L) => {
+        const b = h('button', { class: 'vchip', 'aria-pressed': String(cur.has(L.name)), title: `${L.name}: outlines ${cur.has(L.name) ? 'off' : 'on'} in every window, with a key` }, L.name);
+        b.onclick = () => change((rr) => { const n = new Set(rr.layers || []); if (n.has(L.name)) n.delete(L.name); else n.add(L.name); rr.layers = [...n]; });
+        return b;
+      })));
+    }
     if (slide) {
       const ti = h('input', { id: 'fg-title', value: r.title || '', placeholder: F.cur.name, 'aria-label': 'Slide title' });
       ti.onchange = () => change((rr) => { rr.title = ti.value; });
@@ -812,6 +898,29 @@ function windowPanel(w) {
       kids.push(h('div', { class: 'row' }, img, h('div', { class: 'txt' }, h('b', {}, v.name || `View ${v.id}`), h('div', { class: 'dim', style: 'font-size: 12px' }, v.meta.Slide || ''))));
       kids.push(h('div', { class: 'f2 meta' }, Object.entries(v.meta).filter(([k]) => k !== 'Slide').slice(0, 12).flatMap(([k, val]) => [k, h('span', {}, String(val ?? ''))])));
       if (w.fluorescence) { const bar = windowChips(w, 'chchips'); if (bar) kids.push(h('div', { class: 'f2' }, 'Channels', bar)); }
+      if (d.layers?.length && w.sid) {
+        const cur = new Set(w.layers || []);
+        kids.push(h('div', { class: 'f2' }, 'Layers', h('span', { class: 'vals', id: 'fg-wlayers' }, d.layers.map((L) => {
+          const b = h('button', { class: 'vchip', 'aria-pressed': String(cur.has(L.name)), title: `${L.name}: outlines ${cur.has(L.name) ? 'off' : 'on'} in this window` }, L.name);
+          b.onclick = () => { const n = new Set(cur); if (n.has(L.name)) n.delete(L.name); else n.add(L.name); override(w, (o) => { o.layers = [...n]; }); };
+          return b;
+        }))));
+      }
+      if (!w.inset) {
+        const ib = h('button', { id: 'fg-inset-add', class: 'btn sm', title: 'A zoom of part of this window, in a corner: drag its dashed frame to choose the part' }, '+ Inset');
+        ib.onclick = () => setInset(w, { src: [0.4, 0.4, 0.2, 0.2], corner: 'tr', size: 0.4 });
+        kids.push(h('div', { class: 'row' }, ib));
+      } else {
+        const zoom = Math.round((w.inset.size / w.inset.src[2]) * 10) / 10;
+        const rm = h('button', { id: 'fg-inset-remove', class: 'btn sm ghost', title: 'Remove the inset' }, 'Remove');
+        rm.onclick = () => setInset(w, null);
+        kids.push(h('div', { class: 'f2' }, 'Inset', h('span', { class: 'row', style: 'flex-wrap: wrap; gap: 4px' },
+          seg('Inset corner', [['tl', '↖'], ['tr', '↗'], ['bl', '↙'], ['br', '↘']], w.inset.corner, (v) => setInset(w, { corner: v }), { id: 'fg-inset-corner' }),
+          select('Inset zoom', [2, 3, 4, 6, 8].map((z) => [z, `${z}×`]), [2, 3, 4, 6, 8].reduce((a, b) => (Math.abs(b - zoom) < Math.abs(a - zoom) ? b : a)),
+            (v) => { const z = Number(v), f = w.inset.size / z, c = [w.inset.src[0] + w.inset.src[2] / 2, w.inset.src[1] + w.inset.src[3] / 2];
+              setInset(w, { src: [Math.max(0, Math.min(1 - f, c[0] - f / 2)), Math.max(0, Math.min(1 - f, c[1] - f / 2)), f, f] }); }, { id: 'fg-inset-zoom' }),
+          rm)));
+      }
       const adj = h('button', { id: 'fg-adjust', class: 'btn', title: 'Show the view in the viewer: frame it, then Update the view (toast)' }, 'Adjust in viewer');
       adj.onclick = () => adjustInViewer(v);
       kids.push(h('div', { class: 'row' }, h('span', { class: 'chip' }, 'View locked'), h('span', { class: 'grow' }), adj));

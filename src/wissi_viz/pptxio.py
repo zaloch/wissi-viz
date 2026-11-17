@@ -23,7 +23,7 @@ from typing import Any
 from lxml import etree
 from pptx import Presentation
 from pptx.dml.color import RGBColor
-from pptx.enum.dml import MSO_FILL
+from pptx.enum.dml import MSO_FILL, MSO_LINE_DASH_STYLE
 from pptx.enum.shapes import MSO_SHAPE, MSO_SHAPE_TYPE, PP_PLACEHOLDER
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.opc.constants import RELATIONSHIP_TYPE as RT
@@ -319,6 +319,31 @@ def write_pptx(
             if w['kind'] == 'view':
                 data = picture(w, px(ww), px(wh))
                 slide.shapes.add_picture(io.BytesIO(data), _emu(x), _emu(y), _emu(ww), _emu(wh))
+                edge = '#ffffff' if w.get('fluorescence') else '#111111'
+                ins = w.get('inset')
+                if ins:
+                    ix, iy, iw, ih = ins['rect']
+                    sub = picture({**w, 'bounds': ins['bounds']}, px(iw), px(ih))
+                    pic = slide.shapes.add_picture(io.BytesIO(sub), _emu(ix), _emu(iy), _emu(iw), _emu(ih))
+                    pic.line.color.rgb = _rgb(edge)
+                    pic.line.width = Pt(0.75)
+                    fr = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, *(_emu(v) for v in ins['frame']))
+                    fr.fill.background()
+                    fr.line.color.rgb = _rgb(edge)
+                    fr.line.width = Pt(0.75)
+                    fr.line.dash_style = MSO_LINE_DASH_STYLE.DASH
+                    fr.shadow.inherit = False
+                for i, k in enumerate(w.get('legend') or []):
+                    lh = font * 0.3528 * 1.2
+                    ky = y + wh - 1.5 - (len(w['legend']) - i) * lh
+                    sw = slide.shapes.add_shape(
+                        MSO_SHAPE.RECTANGLE, _emu(x + 1.5), _emu(ky + lh * 0.2), _emu(lh * 0.6), _emu(lh * 0.6)
+                    )
+                    sw.fill.solid()
+                    sw.fill.fore_color.rgb = _rgb(k['color'])
+                    sw.line.fill.background()
+                    sw.shadow.inherit = False
+                    _text(slide, [x + 1.5 + lh, ky, ww / 2, lh], k['name'], font * 0.75, edge)
                 sb = w.get('scalebar')
                 if sb:
                     m = 2.0

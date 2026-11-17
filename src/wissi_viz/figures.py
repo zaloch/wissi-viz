@@ -45,7 +45,8 @@ DEFAULT: dict[str, Any] = {
     'template': 'pub',
     'page': 'double',  # pub: single | double | full · ppt: 16:9 | 4:3 · pptx: the template's size
     'title': '',  # slides: their title (default: the figure's name)
-    'source': {'kind': 'views', 'ids': [], 'rules': []},
+    #: 'views' (a fixed list), 'query' (rules), or 'frozen' (a snapshot's views: their frames and fields as exported)
+    'source': {'kind': 'views', 'ids': [], 'rules': [], 'views': []},
     'members': None,  # query: the views in the figure as of the last Update (None: every view that matches now)
     'layout': {
         'mode': 'grid',
@@ -57,6 +58,7 @@ DEFAULT: dict[str, Any] = {
         'gap': None,
     },  # fmt: skip
     'labels': '{Name}',
+    'layers': [],  # layers drawn on every view's window (outlines, with a key); per window: windows[key].layers
     'letters': True,
     'scalebar': 'auto',  # 'auto' | µm | None (none)
     'background': 'auto',  # auto (black when every view is fluorescence) | white | black
@@ -87,7 +89,8 @@ def normalize(recipe: dict | None) -> dict:
     if r['template'] != 'pptx' and r['page'] not in pages:
         r['page'] = pages[1] if r['template'] == 'pub' else pages[0]
     s = r['source']
-    s['kind'] = 'query' if s.get('kind') == 'query' else 'views'
+    s['kind'] = s.get('kind') if s.get('kind') in ('query', 'frozen') else 'views'
+    s['views'] = [v for v in (s.get('views') or []) if isinstance(v, dict) and _is_int(v.get('id')) and v.get('bounds')]
     s['ids'] = [int(i) for i in s.get('ids') or [] if _is_int(i)]
     s['rules'] = [q for q in (s.get('rules') or []) if isinstance(q, dict) and q.get('field')]
     if r['members'] is not None:
@@ -105,6 +108,7 @@ def normalize(recipe: dict | None) -> dict:
         r['background'] = 'auto'
     sb = r['scalebar']
     r['scalebar'] = sb if sb is None or sb == 'auto' or (isinstance(sb, (int, float)) and sb > 0) else 'auto'
+    r['layers'] = [str(x) for x in r['layers']] if isinstance(r['layers'], list) else []
     if not isinstance(r['labels'], str):
         r['labels'] = DEFAULT['labels']
     f = r['font']
@@ -207,6 +211,9 @@ def select(recipe: dict, views: list[dict]) -> dict:
     by = {int(v['id']): v for v in views}
     src = r['source']
     pending = {'add': [], 'remove': []}
+    if src['kind'] == 'frozen':  # the views as they were: the caller passes them (with their slides found)
+        members = order([dict(v) for v in views], r)
+        return {'members': members, 'ids': [int(v['id']) for v in members], 'pending': pending, 'missing': []}
     if src['kind'] == 'views':
         ids = src['ids']
     else:
@@ -559,6 +566,11 @@ def layout(
                     w['label'] = f'{lab} · {w["chlabel"]}' if w.get('chlabel') and lab else w.get('chlabel') or lab
                     w['label_rect'] = [x, y + wh_ + 0.3, ww_, lab_h]
                 w['fluorescence'] = bool(v.get('fluorescence'))
+                if 'layers' not in w:
+                    w['layers'] = list(r['layers'])
+                ins = inset(w, w.pop('inset_cfg', None))
+                if ins:
+                    w['inset'] = ins
                 view_ws.append((w, v))
         p.pop('_colrow', None)
         for c in p.get('cols', []):
@@ -583,6 +595,34 @@ def layout(
             'scalebar_um': sb_um, 'aspect': aspect}  # fmt: skip
 
 
+def inset(w: dict, cfg: dict | None) -> dict | None:
+    """A zoom of part of a window, placed in a corner of it: {'bounds' (level-0 px to read), 'rect' (mm, where it is
+    drawn), 'frame' (mm, the part it shows)}. ``cfg``: {'src': [fx, fy, fw, fh] (fractions of the window), 'corner':
+    tr | tl | br | bl, 'size': its width as a fraction of the window's}."""
+    if not isinstance(cfg, dict):
+        return None
+    try:
+        fx, fy, fw, fh = (min(1.0, max(0.0, float(v))) for v in cfg.get('src') or (0.35, 0.35, 0.3, 0.3))
+    except (TypeError, ValueError):
+        return None
+    fw, fh = max(0.02, min(fw, 1 - fx)), max(0.02, min(fh, 1 - fy))
+    size = min(0.8, max(0.15, float(cfg.get('size') or 0.4)))
+    x, y, ww, wh = w['rect']
+    frame = [x + fx * ww, y + fy * wh, fw * ww, fh * wh]
+    iw = size * ww
+    ih = min(wh * 0.8, iw * frame[3] / frame[2])
+    iw = ih * frame[2] / frame[3]
+    m = max(0.8, ww * 0.02)
+    corner = cfg.get('corner') if cfg.get('corner') in ('tr', 'tl', 'br', 'bl') else 'tr'
+    ix = x + ww - m - iw if 'r' in corner else x + m
+    iy = y + m if 't' in corner else y + wh - m - ih
+    b = w['bounds']
+    bw, bh = b[2] - b[0], b[3] - b[1]
+    src = [b[0] + fx * bw, b[1] + fy * bh, b[0] + (fx + fw) * bw, b[1] + (fy + fh) * bh]
+    return {'bounds': src, 'rect': [ix, iy, iw, ih], 'frame': frame, 'corner': corner, 'src': [fx, fy, fw, fh],
+            'size': size}  # fmt: skip
+
+
 def _um_text(um: float) -> str:
     if um >= 1000:
         return f'{um / 1000:g} mm'
@@ -595,6 +635,12 @@ def _apply(w: dict, o: dict) -> None:
         if rect[2] > 1 and rect[3] > 1:
             w['rect'] = [float(v) for v in rect]
             w['edited'] = True
+    if isinstance(o.get('inset'), dict):
+        w['inset_cfg'] = o['inset']
+        w['edited'] = True
+    if isinstance(o.get('layers'), list):
+        w['layers'] = [str(x) for x in o['layers']]
+        w['edited'] = True
     sh = o.get('shows')
     if isinstance(sh, dict) and sh.get('kind') in SHOWS:
         keep = w.get('view') if sh['kind'] == 'view' and 'view' not in sh else None  # channels of the same view
